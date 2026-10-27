@@ -11,7 +11,7 @@ const rules = [
 
 describe('hookify rules', () => {
   for (const name of rules) {
-    const path = join(root, '.claude', name);
+    const path = join(root, 'claude', name);
 
     it(`${name} exists`, () => {
       expect(existsSync(path)).toBe(true);
