@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Link the agent-loop files into a target repo's .claude directory without tracking them there.
+# Link the agent loop into a repo's .claude directory without tracking anything there.
 # Usage: ./install.sh /path/to/repo
 set -euo pipefail
 
@@ -24,10 +24,28 @@ for f in "$here"/claude/hookify.*.local.md; do
   link "$f" "$target/.claude/$(basename "$f")"
 done
 
-cat <<'EOF'
+if [ ! -e "$target/.claude/loop.local.json" ]; then
+  cp "$here/templates/loop.local.json" "$target/.claude/loop.local.json"
+  echo "wrote $target/.claude/loop.local.json from the template; fill it in"
+fi
 
-Add to the repo's .gitignore (the loop is not part of the product):
-.claude/workflows/
-.claude/agents/
-.claude/hookify.*.local.md
-EOF
+# Per-clone excludes: nothing the loop adds is ever tracked, and no .gitignore line is needed.
+# No trailing slashes: git sees the symlinks as files, and "dir/" patterns would not match them.
+exclude="$target/.git/info/exclude"
+if [ -d "$target/.git" ] || [ -f "$target/.git" ]; then
+  gitdir="$(git -C "$target" rev-parse --git-common-dir)"
+  case "$gitdir" in /*) ;; *) gitdir="$target/$gitdir" ;; esac
+  exclude="$gitdir/info/exclude"
+  mkdir -p "$(dirname "$exclude")"
+  touch "$exclude"
+  for line in '.claude/workflows' '.claude/agents' '.claude/hookify.*.local.md' '.claude/loop.local.json' 'CLAUDE.local.md'; do
+    grep -qxF "$line" "$exclude" || echo "$line" >> "$exclude"
+  done
+  echo "excluded the linked paths in $exclude"
+fi
+
+cat <<'MSG'
+
+Next: fill in .claude/loop.local.json, write the task spec it points at, then open Claude Code in the repo
+and ask for a wave. The session reads ~/dev/agent-loop/README.md first (see ~/.claude/CLAUDE.md).
+MSG

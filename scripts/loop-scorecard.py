@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Write a per-wave scorecard for the agent loop (Appendix C) from a Workflow output file.
 
-Usage: python3 -I scripts/loop-scorecard.py <wave> <date> <workflow-output.json>... > docs/reviews/<date>-wave-<wave>-loop.md
+Usage: python3 -I scripts/loop-scorecard.py <wave> <date> <workflow-output.json>... > docs/<project>/<date>-wave-<wave>-loop.md
 
 Several output files (a wave relaunched after escalations) are merged in order: agents accumulate, a task's
 later record replaces its earlier one, and escalations from every run are listed.

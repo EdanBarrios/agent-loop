@@ -1,0 +1,25 @@
+{
+  "name": "ProjectName",
+  "repo": "/absolute/path/to/repo",
+  "github": "owner/repo",
+  "worktrees": "/absolute/path/to/repo-worktrees",
+  "spec": "docs/spec/tasks.md",
+  "readFirst": ["CLAUDE.md", "docs/spec/tasks.md section \"Fixed decisions\""],
+  "install": "npm ci",
+  "check": "npm run check",
+  "forbiddenStrings": [],
+  "extraRules": ["No .skip or .only.", "No network or paid API in tests."],
+  "sideFiles": "",
+  "syncConflicts": "",
+  "checkMutates": [],
+  "criticChecks": [],
+  "workerNotes": "",
+  "notes": "",
+  "maxBuilders": 2,
+  "fixRounds": 3,
+  "models": {
+    "worker": { "model": "sonnet", "effort": "high" },
+    "critic": { "model": "fable", "effort": "high" },
+    "merger": { "model": "sonnet", "effort": "low" }
+  }
+}
