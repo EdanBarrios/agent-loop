@@ -38,7 +38,13 @@ const SPEC = P.spec
 const INSTALL = P.install || 'npm ci'
 const CHECK = P.check || 'npm run check'
 const TRAILER = P.trailer || 'Co-Authored-By: Claude <noreply@anthropic.com>'
-const MAX_BUILDERS = P.maxBuilders || 2
+const MAX_BUILDERS = P.maxBuilders || 2 // machine-wide check slots (memory bound)
+const MAX_CHAINS = P.maxChains || 6 // task chains in flight at once (worker, critic, merger)
+const SLOT = `SLOT_MAX=${MAX_BUILDERS} ${REPO}/.claude/slot.sh `
+const INSTALL_CMD = SLOT + INSTALL
+const CHECK_CMD = SLOT + CHECK
+const MAIN_CI = P.mainCi || '' // name of the CI workflow that runs the check on pushes to main; empty = merger runs the check locally
+const SYNC_POLICY = P.syncPolicy || 'always' // 'always': merge main into the branch before merging; 'conflict': only when GitHub reports a conflict
 const FIX_ROUNDS = P.fixRounds || 3
 const READ_FIRST = (P.readFirst && P.readFirst.length ? P.readFirst : ['CLAUDE.md']).join('; ')
 const FORBIDDEN = (P.forbiddenStrings || []).length ? ` No project-confidential strings (${P.forbiddenStrings.join(', ')}).` : ''
@@ -149,8 +155,8 @@ You own only: ${t.owns}. Do not edit anything else. If you need a change elsewhe
 Task notes: ${t.notes || 'none'}
 ${WORKER_NOTES}
 
-Worktree: cd ${REPO} && git fetch origin && git worktree add ${wtPath(t)} -b ${t.branch} origin/main. Then work ONLY inside ${wtPath(t)} (cd there; run ${INSTALL} there first). Never run git checkout in ${REPO}.
-Order: (1) write the acceptance test exactly as specified and commit it first, confirming it fails for the right reason before the implementation exists; (2) implement; (3) run ${CHECK} once in the worktree and keep the output; (4) commit in small steps; (5) ${SYNC_STEP} (6) git push -u origin ${t.branch} and open a PR with gh pr create titled "${t.id}: ${t.title}" whose body lists files changed, the exact test command and its output tail, a "Decisions" list for every default you took where the spec left a detail open, and open questions.
+Worktree: cd ${REPO} && git fetch origin && git worktree add ${wtPath(t)} -b ${t.branch} origin/main. Then work ONLY inside ${wtPath(t)} (cd there; run ${INSTALL_CMD} there first). Never run git checkout in ${REPO}.
+Order: (1) write the acceptance test exactly as specified and commit it first, confirming it fails for the right reason before the implementation exists; (2) implement; (3) run ${CHECK_CMD} once in the worktree and keep the output (the slot wrapper waits for a free check slot on this machine; that wait is expected); (4) commit in small steps; (5) ${SYNC_STEP} (6) git push -u origin ${t.branch} and open a PR with gh pr create titled "${t.id}: ${t.title}" whose body lists files changed, the exact test command and its output tail, a "Decisions" list for every default you took where the spec left a detail open, and open questions.
 Where the spec leaves a detail open, take the conventional default and list it under Decisions. Stop (status: blocked) only if two readings of the spec would lead to materially different work; then list the question and still open the PR as a draft with what you have.
 Return the structured result with worktree set to ${wtPath(t)}. Leave the branch pushed and the worktree in place; do not merge.`
 }
@@ -165,7 +171,7 @@ Your PR: #${prev.prNumber} ${prev.prUrl || ''} on branch ${prev.branch}. Your wo
 The critic returned FIX with these numbered items; fix every one and nothing else:
 ${items}
 Critic notes: ${critic.notes}
-Run ${CHECK} once after the fixes, commit in small steps. ${SYNC_STEP} Add a PR comment (gh pr comment) listing each fix item and the check output tail. Do not merge. Return the structured result with the same prNumber, branch and worktree.`
+Run ${CHECK_CMD} once after the fixes, commit in small steps. ${SYNC_STEP} Add a PR comment (gh pr comment) listing each fix item and the check output tail. Do not merge. Return the structured result with the same prNumber, branch and worktree.`
 }
 
 function criticChecklist() {
@@ -194,15 +200,25 @@ Verdict: MERGE if every applicable item passes and CI is green. FIX lists number
 
 function mergerPrompt(t, w, critic) {
   const restore = CHECK_MUTATES.length ? ` If check rewrote ${CHECK_MUTATES.join(' or ')} on main, run git checkout -- ${CHECK_MUTATES.join(' ')}.` : ''
+  const conflicts = SYNC_CONFLICTS.replace('set status blocked', 'return outcome "failed" with the file list')
+  const syncBranch = `cd into the worktree, git pull --ff-only, then git merge main (no rebase; force pushes are denied). ${conflicts} Commit the merge with the message "Sync branch with upstream before merge" plus the trailer line (do not name the default branch in the commit command; the hook blocks it), push with a plain git push, then wait for CI: gh pr checks ${w.prNumber} --watch --fail-fast (up to 15 minutes).`
+  const syncSteps =
+    SYNC_POLICY === 'conflict'
+      ? `1. cd ${REPO} && git pull --ff-only (the checkout is on main). Run gh pr view ${w.prNumber} --json mergeable -q .mergeable. If it prints MERGEABLE, skip to step 3: the branch need not contain the latest main, the check on main after the merge is the test of the combination.
+2. If it prints CONFLICTING (or UNKNOWN after three tries 10 s apart): ${syncBranch}`
+      : `1. cd ${REPO} && git pull --ff-only (the checkout is on main). Check whether main has moved past the branch: git merge-base --is-ancestor main ${w.branch}. If it has NOT moved, skip to step 3.
+2. If main moved: ${syncBranch}`
+  const verifySteps = MAIN_CI
+    ? `5. cd ${REPO} && git pull --ff-only; record the merge sha (git rev-parse HEAD). Do not run ${CHECK} locally. Wait for the "${MAIN_CI}" workflow run on main for that sha: gh run list --branch main --workflow ${MAIN_CI} --commit <mergeSha> --json databaseId,status,conclusion (retry every 20 s until the run appears, up to 3 minutes), then gh run watch <databaseId> --exit-status (up to 15 minutes). checkOnMainExitCode is 0 when the conclusion is success, else 1 with the last 40 lines of gh run view <databaseId> --log-failed as checkOnMainTail.`
+    : `5. cd ${REPO} && git pull --ff-only; record the merge sha (git rev-parse HEAD). Run ${INSTALL_CMD} && ${CHECK_CMD} once in ${REPO}; record the exit code and the last 40 lines.${restore}`
   return `You are the merger for the ${NAME} repository. ${COMMON_RULES}
 Merge PR #${w.prNumber} (${w.prUrl || ''}, branch ${w.branch}, worktree ${w.worktree || wtPath(t)}) for task ${t.id}: ${t.title}. The critic returned MERGE at PR head ${critic.prHeadSha || '(see gh)'}. You hold the merge lock: no other merge is running.
 Steps:
-1. cd ${REPO} && git pull --ff-only (the checkout is on main). Check whether main has moved past the branch: git merge-base --is-ancestor main ${w.branch}. If it has NOT moved, skip to step 3.
-2. If main moved: cd into the worktree, git pull --ff-only, then git merge main (no rebase; force pushes are denied). ${SYNC_CONFLICTS.replace('set status blocked', 'return outcome "failed" with the file list')} Commit the merge with the message "Sync branch with upstream before merge" plus the trailer line (do not name the default branch in the commit command; the hook blocks it), push with a plain git push, then wait for CI: gh pr checks ${w.prNumber} --watch --fail-fast (up to 15 minutes).
+${syncSteps}
 3. Confirm CI is green: gh pr checks ${w.prNumber}. If not green, outcome "failed" with details; do not merge.
 4. gh pr merge ${w.prNumber} --merge --delete-branch. If GitHub refuses, outcome "failed" with the exact message. (Exit code 1 only because the local branch is checked out in a worktree is fine; confirm with gh pr view --json state.)
-5. cd ${REPO} && git pull --ff-only; record the merge sha (git rev-parse HEAD). Run ${INSTALL} && ${CHECK} once in ${REPO}; record the exit code and the last 40 lines.${restore}
-6. If check is red on main: git worktree add ${WT}/revert-${t.id} -b revert/${t.id} main, git revert -m 1 <mergeSha> there, push, open a PR titled "Revert ${t.id}: ${t.title} (check red on main)" with the failing output in the body, merge it the same way, pull main, and return outcome "reverted" with revertPrUrl and the failure tail. Never push to main directly.
+${verifySteps}
+6. If the check on main is red: git worktree add ${WT}/revert-${t.id} -b revert/${t.id} main, git revert -m 1 <mergeSha> there, push, open a PR titled "Revert ${t.id}: ${t.title} (check red on main)" with the failing output in the body, merge it the same way, pull main, and return outcome "reverted" with revertPrUrl and the failure tail. Never push to main directly.
 7. Otherwise return outcome "merged" with mergeSha, mainSha and checkOnMainExitCode 0.
 Finally remove the task worktree: cd ${REPO} && git worktree remove --force ${w.worktree || wtPath(t)} && git worktree prune && git branch -D ${w.branch} (ignore errors). Leave ${REPO} on main. Do not edit source files.`
 }
@@ -334,7 +350,8 @@ async function runTask(t, ph) {
   return r
 }
 
-// Scheduler: MAX_BUILDERS building chains at a time, dependency-aware, priority order as listed in args.tasks.
+// Scheduler: MAX_CHAINS task chains at a time, dependency-aware, priority order as listed in args.tasks (put the
+// longest tasks first). Memory is bounded separately: install and check run through .claude/slot.sh with MAX_BUILDERS slots.
 phase('Build')
 const state = {}
 for (const t of TASKS) state[t.id] = 'pending'
@@ -344,7 +361,7 @@ while (true) {
   const pending = TASKS.filter((t) => state[t.id] === 'pending')
   if (!pending.length && !running.size) break
   for (const t of pending) {
-    if (running.size >= MAX_BUILDERS) break
+    if (running.size >= MAX_CHAINS) break
     if ((t.deps || []).some((d) => state[d] === 'parked')) {
       state[t.id] = 'parked'
       results[t.id] = { task: t.id, title: t.title, pr: null, rounds: [], merge: null, reopened: false, merged: false }
@@ -353,7 +370,7 @@ while (true) {
     }
     if (!(t.deps || []).every((d) => state[d] === 'merged')) continue
     state[t.id] = 'running'
-    log(`starting ${t.id} ${t.title} (${running.size + 1}/${MAX_BUILDERS} slots)`)
+    log(`starting ${t.id} ${t.title} (${running.size + 1}/${MAX_CHAINS} chains; ${MAX_BUILDERS} check slots machine-wide)`)
     const p = runTask(t, PH).then(
       (r) => {
         state[t.id] = r.merged ? 'merged' : 'parked'

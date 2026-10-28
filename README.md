@@ -49,7 +49,13 @@ Several result files for one wave (a relaunch after an escalation) merge into on
 
 - Roles: worker Sonnet/high, critic Fable/high, merger Sonnet/low. Change one role one notch at a
   time, one role per wave, and only after a scorecard shows why. `project.models` overrides.
-- At most two workers at once on an 8 GB machine (`project.maxBuilders`).
+- Up to `project.maxChains` tasks are in flight at once (default 6). Memory is bounded separately: the
+  install and check commands run through `.claude/slot.sh`, a machine-wide counting semaphore with
+  `project.maxBuilders` slots (default 2 on an 8 GB machine; one check peaks near 1.7 GB). Every
+  session on the machine shares those slots, so two projects cannot stack checks on each other.
+  Agents that are thinking or waiting on CI hold no slot.
+- List a wave's tasks longest first; the scheduler takes list order as priority, and longest-first
+  minimises the wave's finish time.
 - Never commit to main. Never force push. Never push to main. The hookify rules enforce this for
   every agent, and they also apply to the session's own shell commands: a `git commit` or `git push`
   command line must not contain the word `main` (use `-F msgfile` for messages that need it).
@@ -75,7 +81,9 @@ Several result files for one wave (a relaunch after an escalation) merge into on
 | `checkMutates` | files the check rewrites on main that the merger restores |
 | `criticChecks` | project invariants appended to the critic checklist |
 | `workerNotes`, `notes` | text added to worker prompts, or to every prompt |
-| `maxBuilders`, `fixRounds`, `models`, `trailer` | loop knobs; defaults 2, 3, the roles above, `Co-Authored-By: Claude <noreply@anthropic.com>` |
+| `maxBuilders`, `maxChains`, `fixRounds`, `models`, `trailer` | loop knobs; defaults 2 check slots, 6 chains, 3 fix rounds, the roles above, `Co-Authored-By: Claude <noreply@anthropic.com>` |
+| `mainCi` | name of the CI workflow that runs the check on pushes to main; when set, the merger waits for that run instead of running the check on this machine |
+| `syncPolicy` | `always` (merge main into the branch before every merge) or `conflict` (only when GitHub reports a conflict; needs branch protection without the up-to-date rule and `mainCi`) |
 
 ## What is here
 
@@ -85,6 +93,7 @@ Several result files for one wave (a relaunch after an escalation) merge into on
   outside a wave (a single task, a single review).
 - `claude/hookify.*.local.md`: hookify rules that block force pushes, secrets in file writes, and
   commits or pushes that name the default branch.
+- `scripts/slot.sh`: the machine-wide check semaphore, linked into each repo as `.claude/slot.sh`.
 - `scripts/loop-scorecard.py`: per-wave scorecard (rounds, fix items by cause, tokens and minutes
   per role, and the decision rule for moving a role's model or effort).
 - `tests/hookify.test.ts`: checks that the three rules exist and are well formed.
@@ -98,7 +107,7 @@ Several result files for one wave (a relaunch after an escalation) merge into on
 ~/dev/agent-loop/install.sh /path/to/repo
 ```
 
-Symlinks the workflow, the agents and the hookify rules into `.claude/`, copies the config
+Symlinks the workflow, the agents, the slot wrapper and the hookify rules into `.claude/`, copies the config
 template if there is none, and lists all of them plus `CLAUDE.local.md` in the repo's
 `.git/info/exclude`, so nothing the loop adds can be committed and no `.gitignore` line is needed.
 Claude Code and the hookify plugin read these from disk, so the loop runs exactly as if the files
