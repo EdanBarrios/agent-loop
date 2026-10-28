@@ -156,7 +156,7 @@ Task notes: ${t.notes || 'none'}
 ${WORKER_NOTES}
 
 Worktree: cd ${REPO} && git fetch origin && git worktree add ${wtPath(t)} -b ${t.branch} origin/main. Then work ONLY inside ${wtPath(t)} (cd there; run ${INSTALL_CMD} there first). Never run git checkout in ${REPO}.
-Order: (1) write the acceptance test exactly as specified and commit it first, confirming it fails for the right reason before the implementation exists; (2) implement; (3) run ${CHECK_CMD} once in the worktree and keep the output (the slot wrapper waits for a free check slot on this machine; that wait is expected); (4) commit in small steps; (5) ${SYNC_STEP} (6) git push -u origin ${t.branch} and open a PR with gh pr create titled "${t.id}: ${t.title}" whose body lists files changed, the exact test command and its output tail, a "Decisions" list for every default you took where the spec left a detail open, and open questions.
+Order: (1) write the acceptance test exactly as specified and commit it first, confirming it fails for the right reason before the implementation exists; (2) implement; (3) run ${CHECK_CMD} once in the worktree and keep the output (the slot wrapper waits for a free check slot on this machine, so the command can take up to 15 minutes: run it with the Bash tool's maximum timeout, and if the tool moves it to the background, wait for its completion notification and read its output file; never run a second copy); (4) commit in small steps; (5) ${SYNC_STEP} (6) git push -u origin ${t.branch} and open a PR with gh pr create titled "${t.id}: ${t.title}" whose body lists files changed, the exact test command and its output tail, a "Decisions" list for every default you took where the spec left a detail open, and open questions.
 Where the spec leaves a detail open, take the conventional default and list it under Decisions. Stop (status: blocked) only if two readings of the spec would lead to materially different work; then list the question and still open the PR as a draft with what you have.
 Return the structured result with worktree set to ${wtPath(t)}. Leave the branch pushed and the worktree in place; do not merge.`
 }
@@ -171,7 +171,7 @@ Your PR: #${prev.prNumber} ${prev.prUrl || ''} on branch ${prev.branch}. Your wo
 The critic returned FIX with these numbered items; fix every one and nothing else:
 ${items}
 Critic notes: ${critic.notes}
-Run ${CHECK_CMD} once after the fixes, commit in small steps. ${SYNC_STEP} Add a PR comment (gh pr comment) listing each fix item and the check output tail. Do not merge. Return the structured result with the same prNumber, branch and worktree.`
+Run ${CHECK_CMD} once after the fixes (up to 15 minutes including the slot wait; maximum Bash timeout, and if the tool moves it to the background wait for its notification), commit in small steps. ${SYNC_STEP} Add a PR comment (gh pr comment) listing each fix item and the check output tail. Do not merge. Return the structured result with the same prNumber, branch and worktree.`
 }
 
 function criticChecklist() {
