@@ -20,6 +20,7 @@
   "mainCi": "",
   "syncPolicy": "always",
   "fixRounds": 3,
+  "finishRounds": 2,
   "models": {
     "worker": { "model": "sonnet", "effort": "high" },
     "critic": { "model": "fable", "effort": "high" },

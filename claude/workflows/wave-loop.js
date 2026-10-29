@@ -46,6 +46,9 @@ const CHECK_CMD = SLOT + CHECK
 const MAIN_CI = P.mainCi || '' // name of the CI workflow that runs the check on pushes to main; empty = merger runs the check locally
 const SYNC_POLICY = P.syncPolicy || 'always' // 'always': merge main into the branch before merging; 'conflict': only when GitHub reports a conflict
 const FIX_ROUNDS = P.fixRounds || 3
+// Rounds that send a worker back to finish a check it returned before (see finishIfUnfinished).
+const FINISH_ROUNDS = P.finishRounds || 2
+const CHECK_WAIT = `If you return before it has finished, set checkExitCode to -1 and say so: the workflow sends a worker back to finish it. Never report a slow or unfinished check as status blocked.`
 const READ_FIRST = (P.readFirst && P.readFirst.length ? P.readFirst : ['CLAUDE.md']).join('; ')
 const FORBIDDEN = (P.forbiddenStrings || []).length ? ` No project-confidential strings (${P.forbiddenStrings.join(', ')}).` : ''
 const EXTRA_RULES = (P.extraRules || []).length ? ' ' + P.extraRules.join(' ') : ''
@@ -156,7 +159,7 @@ Task notes: ${t.notes || 'none'}
 ${WORKER_NOTES}
 
 Worktree: cd ${REPO} && git fetch origin && git worktree add ${wtPath(t)} -b ${t.branch} origin/main. Then work ONLY inside ${wtPath(t)} (cd there; run ${INSTALL_CMD} there first). Never run git checkout in ${REPO}.
-Order: (1) write the acceptance test exactly as specified and commit it first, confirming it fails for the right reason before the implementation exists; (2) implement; (3) run ${CHECK_CMD} once in the worktree and keep the output (the slot wrapper waits for a free check slot on this machine, so the command can take up to 15 minutes: run it with the Bash tool's maximum timeout, and if the tool moves it to the background, wait for its completion notification and read its output file; never run a second copy); (4) commit in small steps; (5) ${SYNC_STEP} (6) git push -u origin ${t.branch} and open a PR with gh pr create titled "${t.id}: ${t.title}" whose body lists files changed, the exact test command and its output tail, a "Decisions" list for every default you took where the spec left a detail open, and open questions.
+Order: (1) write the acceptance test exactly as specified and commit it first, confirming it fails for the right reason before the implementation exists; (2) implement; (3) run ${CHECK_CMD} once in the worktree and keep the output (the slot wrapper waits for a free check slot on this machine, so the command can take up to 15 minutes: run it with the Bash tool's maximum timeout, and if the tool moves it to the background, wait for its completion notification and read its output file; never run a second copy; ${CHECK_WAIT}); (4) commit in small steps; (5) ${SYNC_STEP} (6) git push -u origin ${t.branch} and open a PR with gh pr create titled "${t.id}: ${t.title}" whose body lists files changed, the exact test command and its output tail, a "Decisions" list for every default you took where the spec left a detail open, and open questions.
 Where the spec leaves a detail open, take the conventional default and list it under Decisions. Stop (status: blocked) only if two readings of the spec would lead to materially different work; then list the question and still open the PR as a draft with what you have.
 Return the structured result with worktree set to ${wtPath(t)}. Leave the branch pushed and the worktree in place; do not merge.`
 }
@@ -171,7 +174,39 @@ Your PR: #${prev.prNumber} ${prev.prUrl || ''} on branch ${prev.branch}. Your wo
 The critic returned FIX with these numbered items; fix every one and nothing else:
 ${items}
 Critic notes: ${critic.notes}
-Run ${CHECK_CMD} once after the fixes (up to 15 minutes including the slot wait; maximum Bash timeout, and if the tool moves it to the background wait for its notification), commit in small steps. ${SYNC_STEP} Add a PR comment (gh pr comment) listing each fix item and the check output tail. Do not merge. Return the structured result with the same prNumber, branch and worktree.`
+Run ${CHECK_CMD} once after the fixes (up to 15 minutes including the slot wait; maximum Bash timeout, and if the tool moves it to the background wait for its notification; ${CHECK_WAIT}), commit in small steps. ${SYNC_STEP} Add a PR comment (gh pr comment) listing each fix item and the check output tail. Do not merge. Return the structured result with the same prNumber, branch and worktree.`
+}
+
+// A worker that returns before its check has finished (checkExitCode -1) is sent back to finish it, at most
+// FINISH_ROUNDS times, instead of being escalated. Wave 5 of Pilot (28 Oct 2026) lost a whole relaunch to this:
+// nine tasks queued on two check slots and a sleeping laptop made two workers give up and report "blocked".
+function checkUnfinished(w) {
+  return !!w && typeof w.checkExitCode === 'number' && w.checkExitCode < 0
+}
+
+function finishPrompt(t, prev, attempt) {
+  const pr = prev.prNumber
+    ? `Your PR: #${prev.prNumber} ${prev.prUrl || ''}; if it is a draft, mark it ready with gh pr ready ${prev.prNumber} once the check passes.`
+    : 'No PR exists yet; step (4) opens it.'
+  return `You are a worker on the ${NAME} repository finishing task ${t.id}: ${t.title} (finish attempt ${attempt} of ${FINISH_ROUNDS}). ${COMMON_RULES}
+Task text: ${t.text}
+You own only: ${t.owns}. Task notes: ${t.notes || 'none'}
+${WORKER_NOTES}
+The previous worker on this task returned before ${CHECK} had finished, so nothing has been reviewed. Branch ${prev.branch || t.branch}, worktree ${prev.worktree || wtPath(t)}; cd there (if the worktree is missing: cd ${REPO} && git fetch origin && git worktree add ${wtPath(t)} ${t.branch}). ${pr}
+Its open questions were: ${(prev.questions || []).join('; ') || 'none'}. Answer each by taking the conventional default and listing it under Decisions, unless two readings of the spec would lead to materially different work.
+Steps: (1) make sure every change is committed; (2) run ${CHECK_CMD} once and wait for it to finish: with the slot wait it can take 15 minutes; use the Bash tool's maximum timeout, and if the tool moves it to the background, wait for its completion notification and read its output; you may not return while it runs; (3) if it fails, fix the cause inside the files you own and run it again, at most twice; (4) ${SYNC_STEP} Push, and if no PR exists open it with gh pr create titled "${t.id}: ${t.title}", its body listing files changed, the check command and output tail, Decisions and open questions.
+Return the structured result with the real exit code of the last check. Set status blocked only for a genuine ambiguity in the spec, never for a slow or unfinished check.`
+}
+
+async function finishIfUnfinished(t, w, ph, tag) {
+  for (let attempt = 1; attempt <= FINISH_ROUNDS && checkUnfinished(w); attempt++) {
+    log(`${t.id}: worker returned before ${CHECK} finished (${tag}); finish attempt ${attempt}`)
+    const next = await agent(finishPrompt(t, w, attempt), { label: `worker:${t.id} finish${attempt}`, phase: ph.build, schema: WORKER_SCHEMA, ...MODELS.worker })
+    if (!next) return w
+    w = { ...next, prNumber: next.prNumber || w.prNumber, prUrl: next.prUrl || w.prUrl, branch: next.branch || w.branch, worktree: next.worktree || w.worktree }
+  }
+  if (checkUnfinished(w)) w = { ...w, status: 'blocked' }
+  return w
 }
 
 function criticChecklist() {
@@ -269,7 +304,8 @@ async function reviewLoop(t, initialWorker, ph) {
       escalate(t.id, 'another fix round would be needed', critic.fixItems.map((i) => `${i.n}. ${i.what}`).join('; '))
       return { w, critic }
     }
-    const next = await agent(fixPrompt(t, w, critic, round), { label: `worker:${t.id} fix${round}`, phase: ph.build, schema: WORKER_SCHEMA, ...MODELS.worker })
+    let next = await agent(fixPrompt(t, w, critic, round), { label: `worker:${t.id} fix${round}`, phase: ph.build, schema: WORKER_SCHEMA, ...MODELS.worker })
+    if (next) next = await finishIfUnfinished(t, { ...next, prNumber: next.prNumber || w.prNumber, prUrl: next.prUrl || w.prUrl, branch: next.branch || w.branch, worktree: next.worktree || w.worktree }, ph, `fix${round}`)
     if (!next) {
       escalate(t.id, 'worker agent returned nothing on a fix round', 'Relaunch the wave.')
       return { w, critic }
@@ -299,9 +335,10 @@ async function runTask(t, ph) {
     escalate(t.id, 'worker agent returned nothing', 'Relaunch the wave.')
     return r
   }
+  worker = await finishIfUnfinished(t, worker, ph, t.resume ? 'resume' : 'build')
   r.pr = { number: worker.prNumber, url: worker.prUrl, branch: worker.branch, decisions: worker.decisions, questions: worker.questions, checkExitCode: worker.checkExitCode }
   if (worker.status === 'blocked' || !worker.prNumber) {
-    escalate(t.id, 'worker blocked (ambiguity)', worker.questions.join('; ') || 'no PR opened')
+    escalate(t.id, checkUnfinished(worker) ? `${CHECK} unfinished after ${FINISH_ROUNDS} finish rounds` : 'worker blocked (ambiguity)', worker.questions.join('; ') || 'no PR opened')
     return r
   }
   log(`${t.id}: PR #${worker.prNumber} opened on ${worker.branch}; local check exit ${worker.checkExitCode}`)
@@ -328,7 +365,8 @@ async function runTask(t, ph) {
     notes: `Main went red after merging PR #${w.prNumber}; it was reverted (${r.merge.revertPrUrl || ''}). Reproduce with ${INSTALL_CMD} && ${CHECK_CMD} and fix the cause. The original PR is merged and reverted on main; open a NEW PR from a new branch ${t.branch}-2 that re-applies your work on top of current main (git fetch; git worktree add ${wtPath(t)}-2 -b ${t.branch}-2 origin/main; git merge ${t.branch}), titled "${t.id}: ${t.title} (reopen)".`,
     fixItems: [{ n: 1, what: `${CHECK} failed on main after merge: ${(r.merge.checkOnMainTail || '').slice(-1500)}`, provedBy: `${CHECK} on main`, cause: 'defect' }],
   }
-  const again = await agent(fixPrompt(t, w, fix, 'reopen'), { label: `worker:${t.id} reopen`, phase: ph.build, schema: WORKER_SCHEMA, ...MODELS.worker })
+  let again = await agent(fixPrompt(t, w, fix, 'reopen'), { label: `worker:${t.id} reopen`, phase: ph.build, schema: WORKER_SCHEMA, ...MODELS.worker })
+  if (again) again = await finishIfUnfinished(t, { ...again, prNumber: again.prNumber || w.prNumber, prUrl: again.prUrl || w.prUrl, branch: again.branch || w.branch, worktree: again.worktree || w.worktree }, ph, 'reopen')
   if (!again || again.status === 'blocked') {
     escalate(t.id, 'worker blocked after revert', again ? again.questions.join('; ') : 'no result')
     return r

@@ -18,7 +18,9 @@ operating manual. Read it fully before running a wave.
    in its own git worktree and opens a PR; a critic that did not write the code reviews the PR
    against a fixed checklist and returns MERGE, FIX or STOP; a merger syncs, waits for CI, merges,
    and runs the check on main. FIX returns to the worker, at most three rounds. A red main is
-   reverted once and the task reopened once. Anything else parks the task with an escalation.
+   reverted once and the task reopened once. A worker that returns before its check has finished
+   (`checkExitCode` -1) is sent back to finish it, at most two times, instead of escalating.
+   Anything else parks the task with an escalation.
 4. The wave gate: every task merged or parked, check green on main, the wave's replay passes,
    no open escalations. The session reports the gate and the escalations; the human decides.
 5. The session writes the wave scorecard and reads it before changing any role's model or effort.
@@ -81,7 +83,7 @@ Several result files for one wave (a relaunch after an escalation) merge into on
 | `checkMutates` | files the check rewrites on main that the merger restores |
 | `criticChecks` | project invariants appended to the critic checklist |
 | `workerNotes`, `notes` | text added to worker prompts, or to every prompt |
-| `maxBuilders`, `maxChains`, `fixRounds`, `models`, `trailer` | loop knobs; defaults 2 check slots, 6 chains, 3 fix rounds, the roles above, `Co-Authored-By: Claude <noreply@anthropic.com>` |
+| `maxBuilders`, `maxChains`, `fixRounds`, `finishRounds`, `models`, `trailer` | loop knobs; defaults 2 check slots, 6 chains, 3 fix rounds, 2 finish rounds, the roles above, `Co-Authored-By: Claude <noreply@anthropic.com>` |
 | `mainCi` | name of the CI workflow that runs the check on pushes to main; when set, the merger waits for that run instead of running the check on this machine |
 | `syncPolicy` | `always` (merge main into the branch before every merge) or `conflict` (only when GitHub reports a conflict; needs branch protection without the up-to-date rule and `mainCi`) |
 
