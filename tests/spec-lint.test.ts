@@ -3,9 +3,10 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { main } from '../scripts/spec-lint.js';
 
-// Task 1.4 acceptance: `node scripts/spec-lint.js <spec.md>`. Every case runs the real CLI on a
-// spec file, so exit codes and messages are what a human or the loop sees.
+// Task 1.4 acceptance: `node scripts/spec-lint.js <spec.md>`. Cases run the CLI body in-process on a
+// spec file (a node spawn costs seconds on a loaded machine); the `real CLI` block spawns it for real.
 const root = join(import.meta.dirname, '..');
 const script = join(root, 'scripts', 'spec-lint.js');
 const realSpec = join(root, 'docs', 'agent-loop-v2', '2026-10-30-agent-loop-v2-tasks.md');
@@ -18,8 +19,9 @@ function lint(spec: string | null) {
     path = join(dir, `spec-${n++}.md`);
     writeFileSync(path, spec);
   }
-  const r = spawnSync('node', [script, path], { encoding: 'utf8' });
-  return { code: r.status, out: `${r.stdout}${r.stderr}` };
+  let out = '';
+  const code = main(['node', script, path], { out: (s) => (out += s), err: (s) => (out += s) });
+  return { code, out };
 }
 
 const SECTIONS: Record<string, string> = {
@@ -223,13 +225,33 @@ describe('spec-lint quoted mentions', () => {
 
 describe('spec-lint usage', () => {
   it('exits 2 with a usage message when no file is given', () => {
+    let out = '';
+    expect(main(['node', script], { err: (s) => (out += s) })).toBe(2);
+    expect(out).toMatch(/usage/i);
+  });
+
+  it('exits 2 when the file cannot be read', () => {
+    expect(main(['node', script, join(dir, 'missing.md')], { err: () => {} })).toBe(2);
+  });
+});
+
+describe('spec-lint real CLI', () => {
+  it('exits 0 on this spec and 1 on a broken one, with the message on stderr', () => {
+    const ok = spawnSync('node', [script, realSpec], { encoding: 'utf8' });
+    expect(ok.status, ok.stderr).toBe(0);
+    expect(ok.stdout).toContain('spec-lint: OK');
+
+    const bad = join(dir, 'bad.md');
+    writeFileSync(bad, spec({ omit: 'Budget', tasks: '- **9.9 Bare.** nothing.' }));
+    const r = spawnSync('node', [script, bad], { encoding: 'utf8' });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('Budget');
+    expect(r.stderr).toContain('9.9');
+  });
+
+  it('exits 2 with usage when called without a file', () => {
     const r = spawnSync('node', [script], { encoding: 'utf8' });
     expect(r.status).toBe(2);
     expect(r.stderr).toMatch(/usage/i);
   });
-
-  it('exits 2 when the file cannot be read', () => {
-    const r = spawnSync('node', [script, join(dir, 'missing.md')], { encoding: 'utf8' });
-    expect(r.status).toBe(2);
-  });
-});
+}, 30000);

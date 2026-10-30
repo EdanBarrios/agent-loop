@@ -142,29 +142,37 @@ export function lintSpec(text) {
   return { ok: errors.length === 0, errors, review, taskCount: tasks.length };
 }
 
-function main(argv) {
+/**
+ * CLI body with injected output, so tests can run it in-process.
+ * @param {string[]} argv process.argv-shaped: [node, script, file]
+ * @param {{ out?: (s: string) => void, err?: (s: string) => void }} [io]
+ * @returns {number} the exit code
+ */
+export function main(argv, io = {}) {
+  const out = io.out ?? ((s) => process.stdout.write(s));
+  const err = io.err ?? ((s) => process.stderr.write(s));
   const file = argv[2];
   if (!file || argv.length > 3) {
-    process.stderr.write('usage: node scripts/spec-lint.js <spec.md>\n');
+    err('usage: node scripts/spec-lint.js <spec.md>\n');
     return 2;
   }
   let text;
   try {
     text = readFileSync(file, 'utf8');
   } catch (e) {
-    process.stderr.write(`spec-lint: cannot read ${file}: ${e.message}\n`);
+    err(`spec-lint: cannot read ${file}: ${e.message}\n`);
     return 2;
   }
   const r = lintSpec(text);
   for (const x of r.review) {
-    process.stdout.write(`needs human review: task ${x.id} (Reads or writes: ${x.value})\n`);
+    out(`needs human review: task ${x.id} (Reads or writes: ${x.value})\n`);
   }
   if (!r.ok) {
-    for (const e of r.errors) process.stderr.write(`spec-lint: ${e}\n`);
-    process.stderr.write(`spec-lint: FAIL (${r.errors.length} problem${r.errors.length === 1 ? '' : 's'})\n`);
+    for (const e of r.errors) err(`spec-lint: ${e}\n`);
+    err(`spec-lint: FAIL (${r.errors.length} problem${r.errors.length === 1 ? '' : 's'})\n`);
     return 1;
   }
-  process.stdout.write(`spec-lint: OK (${r.taskCount} tasks)\n`);
+  out(`spec-lint: OK (${r.taskCount} tasks)\n`);
   return 0;
 }
 
