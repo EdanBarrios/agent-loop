@@ -22,7 +22,7 @@ try {
   process.exit(2);
 }
 
-const open = wave === null ? openBefore(gates, '￿') : openBefore(gates, wave);
+const open = openBefore(gates, wave ?? undefined);
 if (open.length === 0) {
   console.log(wave === null ? 'No open gate items.' : `No open gate items before wave ${wave}.`);
   process.exit(0);
