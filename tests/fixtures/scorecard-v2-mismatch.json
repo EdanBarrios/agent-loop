@@ -1,0 +1,86 @@
+{
+ "result": {
+  "project": "demo",
+  "wave": "1",
+  "gate": "PASS",
+  "models": {
+   "worker": {
+    "model": "claude-sonnet-5-5",
+    "effort": "high"
+   },
+   "critic": {
+    "model": "claude-fable-5-1",
+    "effort": "high"
+   },
+   "merger": {
+    "model": "claude-haiku-5-5",
+    "effort": "low"
+   }
+  },
+  "state": {
+   "1.1": "merged"
+  },
+  "tasks": {
+   "1.1": {
+    "task": "1.1",
+    "title": "Task 1.1",
+    "pr": {
+     "number": 1,
+     "url": "https://example.invalid/demo/pull/1",
+     "branch": "feat/1.1"
+    },
+    "rounds": [
+     {
+      "round": 1,
+      "verdict": "MERGE",
+      "ci": "green",
+      "fixItems": [],
+      "notes": "n"
+     }
+    ],
+    "merge": {
+     "outcome": "merged",
+     "mergeSha": "0123456789abcdef0123456789abcdef01234567"
+    },
+    "reopened": false,
+    "merged": true
+   }
+  },
+  "escalations": []
+ },
+ "workflowProgress": [
+  {
+   "type": "workflow_agent",
+   "index": 1,
+   "label": "worker:1.1",
+   "agentId": "agent1",
+   "state": "done",
+   "tokens": 90000,
+   "toolCalls": 10,
+   "durationMs": 1200000,
+   "model": "claude-sonnet-5-5"
+  },
+  {
+   "type": "workflow_agent",
+   "index": 2,
+   "label": "critic:1.1 r1",
+   "agentId": "agent2",
+   "state": "done",
+   "tokens": 50000,
+   "toolCalls": 10,
+   "durationMs": 300000,
+   "model": "claude-opus-5-5"
+  },
+  {
+   "type": "workflow_agent",
+   "index": 3,
+   "label": "merger:1.1",
+   "agentId": "agent3",
+   "state": "done",
+   "tokens": 20000,
+   "toolCalls": 10,
+   "durationMs": 120000,
+   "model": "claude-haiku-5-5"
+  }
+ ]
+}

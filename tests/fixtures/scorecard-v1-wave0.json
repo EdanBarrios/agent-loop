@@ -1,0 +1,101 @@
+{
+ "summary": "One wave of spec tasks",
+ "agentCount": 3,
+ "logs": [],
+ "result": {
+  "project": "demo",
+  "wave": "0",
+  "gate": "PASS",
+  "models": {
+   "worker": {
+    "model": "sonnet",
+    "effort": "high"
+   },
+   "critic": {
+    "model": "fable",
+    "effort": "high"
+   },
+   "merger": {
+    "model": "sonnet",
+    "effort": "low"
+   }
+  },
+  "state": {
+   "0.1": "merged"
+  },
+  "tasks": {
+   "0.1": {
+    "task": "0.1",
+    "title": "Check, CI, config",
+    "pr": {
+     "number": 1,
+     "url": "https://example.invalid/demo/pull/1",
+     "branch": "feat/demo-task"
+    },
+    "rounds": [
+     {
+      "round": 1,
+      "verdict": "MERGE",
+      "ci": "green",
+      "fixItems": [],
+      "notes": "Meets the task."
+     }
+    ],
+    "merge": {
+     "outcome": "merged",
+     "details": "Merged.",
+     "mergeSha": "0123456789abcdef0123456789abcdef01234567",
+     "checkOnMainExitCode": 0
+    },
+    "reopened": false,
+    "merged": true
+   }
+  },
+  "escalations": []
+ },
+ "workflowProgress": [
+  {
+   "type": "workflow_phase",
+   "index": 1,
+   "title": "Build"
+  },
+  {
+   "type": "workflow_agent",
+   "index": 1,
+   "label": "worker:0.1",
+   "phaseTitle": "Build",
+   "agentId": "agent1",
+   "model": "claude-sonnet-5-5",
+   "state": "done",
+   "tokens": 84247,
+   "toolCalls": 63,
+   "durationMs": 1737116
+  },
+  {
+   "type": "workflow_agent",
+   "index": 2,
+   "label": "critic:0.1 r1",
+   "phaseTitle": "Review",
+   "agentId": "agent2",
+   "model": "claude-fable-5-1",
+   "state": "done",
+   "tokens": 61050,
+   "toolCalls": 13,
+   "durationMs": 363646
+  },
+  {
+   "type": "workflow_agent",
+   "index": 3,
+   "label": "merger:0.1",
+   "phaseTitle": "Merge",
+   "agentId": "agent3",
+   "model": "claude-sonnet-5-5",
+   "state": "done",
+   "tokens": 36678,
+   "toolCalls": 7,
+   "durationMs": 96330
+  }
+ ],
+ "totalTokens": 181975,
+ "totalToolCalls": 83
+}
