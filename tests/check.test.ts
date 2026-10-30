@@ -15,10 +15,11 @@ function runStep(script: string, cwd: string) {
 
 describe('npm run check', () => {
   it('chains the syntax step, the python step and vitest', () => {
-    const check = pkg.scripts.check;
-    expect(check).toContain('node --check');
-    expect(check).toContain('py_compile');
-    expect(check).toContain('vitest run');
+    expect(pkg.scripts.check).toContain('npm run check:syntax');
+    expect(pkg.scripts.check).toContain('npm run check:py');
+    expect(pkg.scripts.check).toContain('vitest run');
+    expect(pkg.scripts['check:syntax']).toContain('node --check');
+    expect(pkg.scripts['check:py']).toContain('python3 -I -m py_compile scripts/*.py');
   });
 
   it('syntax step passes on the real claude/ tree', () => {
@@ -41,6 +42,13 @@ describe('npm run check', () => {
     mkdirSync(join(dir, 'claude', 'lib'), { recursive: true });
     writeFileSync(join(dir, 'claude', 'lib', 'bad.js'), 'export const x = ;\n');
     expect(runStep(pkg.scripts['check:syntax'], dir).status).not.toBe(0);
+  });
+
+  it('syntax step accepts a valid ES module in claude/lib', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'check-'));
+    mkdirSync(join(dir, 'claude', 'lib'), { recursive: true });
+    writeFileSync(join(dir, 'claude', 'lib', 'ok.js'), "import { join } from 'node:path';\nexport const x = join('a', 'b');\n");
+    expect(runStep(pkg.scripts['check:syntax'], dir).status).toBe(0);
   });
 
   it('python step compiles scripts/*.py', () => {

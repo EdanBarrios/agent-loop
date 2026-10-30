@@ -1,0 +1,13 @@
+{
+  "name": "agent-loop",
+  "private": true,
+  "scripts": {
+    "check:syntax": "find claude -type f \\( -name '*.js' -o -name '*.mjs' -o -name '*.cjs' \\) -print0 | xargs -0 -r -n1 sh -c 'node --check --input-type=module - < \"$0\" 2>/dev/null || { echo \"(async function(){\"; sed \"s/^export //\" \"$0\"; echo \"})\"; } | node --check --input-type=commonjs - || { echo \"syntax error in $0\" >&2; exit 1; }'",
+    "check:py": "python3 -I -m py_compile scripts/*.py",
+    "check": "npm run check:syntax && npm run check:py && vitest run"
+  },
+  "devDependencies": {
+    "vite": "8.3.5",
+    "vitest": "5.0.5"
+  }
+}
