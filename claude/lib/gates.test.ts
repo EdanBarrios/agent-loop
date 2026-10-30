@@ -107,7 +107,8 @@ describe('openBefore', () => {
   });
 });
 
-describe('scripts/gates.js', () => {
+// Each case starts a node process; give them room on a loaded machine.
+describe('scripts/gates.js', { timeout: 60_000 }, () => {
   function run(list: unknown, ...args: string[]) {
     const dir = mkdtempSync(join(tmpdir(), 'gates-'));
     const file = join(dir, 'gates.json');
@@ -149,9 +150,15 @@ describe('scripts/gates.js', () => {
     expect(r.stderr).toContain('Z9');
   });
 
-  it('exits 2 on a missing file and on missing arguments', () => {
+  it('exits 2 on a missing file', () => {
     expect(spawnSync('node', [cli, '/nonexistent/gates.json'], { encoding: 'utf8' }).status).toBe(2);
+  });
+
+  it('exits 2 on missing arguments', () => {
     expect(spawnSync('node', [cli], { encoding: 'utf8' }).status).toBe(2);
+  });
+
+  it('exits 2 when --before has no wave', () => {
     expect(run(list, '--before').status).toBe(2);
   });
 });
