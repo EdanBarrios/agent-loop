@@ -200,6 +200,27 @@ describe('spec-lint Reads or writes', () => {
   });
 });
 
+describe('spec-lint quoted mentions', () => {
+  it('does not read a quoted example list as a value', () => {
+    const tasks =
+      '- **3.5 Lint.** Owns `scripts/l.js`. Checks a `Reads or writes:` line; `Reads or writes: writes-db|paid-call|sends` is flagged. Test: a case.';
+    const r = lint(spec({ tasks }));
+    expect(r.code, r.out).toBe(0);
+    expect(r.out).not.toMatch(/needs human review/i);
+  });
+
+  it('accepts "Test (" as the test marker', () => {
+    const tasks = '- **3.6 Flow.** Owns `a.js`. Test (stubbed agent): a case.';
+    const r = lint(spec({ tasks }));
+    expect(r.code, r.out).toBe(0);
+  });
+
+  it('lists nothing for review on this spec', () => {
+    const r = lint(null);
+    expect(r.out).not.toMatch(/needs human review/i);
+  });
+});
+
 describe('spec-lint usage', () => {
   it('exits 2 with a usage message when no file is given', () => {
     const r = spawnSync('node', [script], { encoding: 'utf8' });
