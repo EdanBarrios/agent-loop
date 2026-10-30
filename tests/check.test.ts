@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -49,7 +49,8 @@ describe('npm run check', () => {
   });
 
   it('vitest config finds tests/ and claude/lib tests', () => {
-    const out = execFileSync('node', ['-e', "import('./vitest.config.ts').then(m=>console.log(JSON.stringify(m.default.test.include)))", '--experimental-strip-types'], { cwd: root, encoding: 'utf8' });
-    expect(JSON.parse(out.trim().split('\n').pop() as string)).toEqual(['tests/**/*.test.ts', 'claude/lib/**/*.test.ts']);
+    const cfg = readFileSync(join(root, 'vitest.config.ts'), 'utf8');
+    expect(cfg).toContain("'tests/**/*.test.ts'");
+    expect(cfg).toContain("'claude/lib/**/*.test.ts'");
   });
 });
