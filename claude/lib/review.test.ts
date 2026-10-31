@@ -5,6 +5,8 @@ import { afterAll, describe, expect, it } from 'vitest';
 // @ts-expect-error plain JavaScript module with JSDoc
 import { loadGates } from './gates.js';
 // @ts-expect-error plain JavaScript module with JSDoc
+import * as reviewModule from './review.js';
+// @ts-expect-error plain JavaScript module with JSDoc
 import { runSpecReview, scanTasks, combine } from './review.js';
 
 // Everything is stubbed: the agent() calls, the clock (date is passed in) and the writer (a temp dir).
@@ -347,5 +349,44 @@ describe('combine', () => {
     const before = JSON.stringify({ recs, verdicts });
     combine({ recs, verdicts, spikes: [], project });
     expect(JSON.stringify({ recs, verdicts })).toBe(before);
+  });
+});
+
+describe('the spec-review workflow script', () => {
+  // The script is wired to the runtime globals only; run it with stubs. A dynamic import does not work inside a
+  // function built at test time, so the import expression is replaced by the module this test already loaded.
+  const here = import.meta.dirname;
+  const source = readFileSync(join(here, '..', 'workflows', 'spec-review.js'), 'utf8')
+    .replace(/^export const meta/m, 'const meta')
+    .replace("import('../lib/review.js')", 'Promise.resolve(reviewModule)');
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+
+  it('runs the review through agent() and has the writer agent write the file', async () => {
+    const calls: Call[] = [];
+    const answers: Record<string, any> = {
+      'reviewer r1': reviewerOut([rec('D1')]),
+      adversary: agree('D1'),
+      writer: { path: 'x', bytes: 1 },
+    };
+    const agent = async (prompt: string, opts: Any) => {
+      calls.push({ label: opts.label, prompt, opts });
+      return answers[opts.label] ?? null;
+    };
+    const out = await new AsyncFunction('reviewModule', 'agent', 'parallel', 'pipeline', 'phase', 'log', 'args', source)(
+      reviewModule, agent, async () => [], async () => [], () => {}, () => {},
+      { project, specPath: 'docs/spec/tasks.md', wave: 3, date: '2026-10-30' },
+    );
+    expect(out.accepted.map((r: Any) => r.id)).toEqual(['D1']);
+    expect(calls.map((c) => c.label)).toEqual(['reviewer r1', 'adversary', 'writer']);
+    const writer = calls[2];
+    expect(writer.prompt).toContain('~/dev/agent-loop/docs/pilot/2026-10-30-wave-3-review.json');
+    expect(writer.opts).toMatchObject({ model: 'haiku', effort: 'low' });
+    expect(out.reviewPath).toBe('~/dev/agent-loop/docs/pilot/2026-10-30-wave-3-review.json');
+  });
+
+  it('refuses to run without a project name or a wave', async () => {
+    const go = (a: Any) => new AsyncFunction('reviewModule', 'agent', 'parallel', 'pipeline', 'phase', 'log', 'args', source)(reviewModule, async () => null, null, null, () => {}, () => {}, a);
+    await expect(go({ project: {}, wave: '1' })).rejects.toThrow(/project.name/);
+    await expect(go({ project, specPath: 's.md' })).rejects.toThrow(/wave/);
   });
 });
