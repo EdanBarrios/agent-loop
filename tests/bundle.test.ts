@@ -319,7 +319,9 @@ describe('the real workflows', () => {
     const text = readFileSync(join(root, 'claude', 'workflows', 'spec-review.js'), 'utf8');
     expect(text).not.toMatch(/^\s*import\b/m);
     expect(text).not.toMatch(/await import/);
-    expect(text).not.toMatch(/\bimport\s*\(/);
+    // code lines only: JSDoc type references in comments are not module imports
+    const code = text.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+    expect(code).not.toMatch(/\bimport\s*\(|\bimport\.meta\b|\brequire\s*\(/);
     expect(text).toContain('// @bundle-start envelope');
     expect(text).toContain('// @bundle-start review');
     expect(text).toContain('// @bundle-end review');

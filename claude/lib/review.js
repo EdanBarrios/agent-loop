@@ -5,6 +5,7 @@
 // (only when there were facts) -> adversarial reviewer -> combine with the decision envelope. A `block`
 // verdict adds exactly one more reviewer pass, never two. Nothing in the project is edited.
 
+// Bundled into claude/workflows/spec-review.js after gates.js and envelope.js: keep top-level names unique across the three.
 import { classify } from './envelope.js';
 import { compareWaves } from './gates.js';
 
@@ -27,7 +28,7 @@ export const DEFAULT_MODELS = Object.freeze({
 export const DEFAULT_OUT_DIR = '~/dev/agent-loop/docs';
 
 const REC_FIELDS = ['id', 'kind', 'text', 'evidence', 'reverseCost', 'wouldBeWrongIf', 'reversible', 'costCents', 'touches', 'category', 'task', 'dependsOn', 'edits'];
-const LEAD_RANK = { days: 0, hours: 1, minutes: 2 };
+const LEAD_ORDER = { days: 0, hours: 1, minutes: 2 };
 
 const REC_SCHEMA = {
   type: 'object',
@@ -193,7 +194,7 @@ export function mergeGates(reviewerGates, scanned, wave, tasks) {
     const task = typeof g.task === 'string' ? g.task : '';
     const kind = typeof g.kind === 'string' ? g.kind : '';
     if (task && kind) replaced.add(`G-${task}-${kind}`);
-    const lead = g.leadTime in LEAD_RANK ? g.leadTime : inferLead(`${g.what} ${g.why ?? ''}`);
+    const lead = g.leadTime in LEAD_ORDER ? g.leadTime : inferLead(`${g.what} ${g.why ?? ''}`);
     fromReviewer.push({
       id: typeof g.id === 'string' && g.id ? g.id : `G-${task || 'wave' + wave}-${kind || 'r' + (i + 1)}`,
       what: g.what,
@@ -211,7 +212,7 @@ export function mergeGates(reviewerGates, scanned, wave, tasks) {
     seen.add(g.id);
     return true;
   });
-  return all.sort((a, b) => LEAD_RANK[a.leadTime] - LEAD_RANK[b.leadTime] || compareWaves(a.before, b.before) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  return all.sort((a, b) => LEAD_ORDER[a.leadTime] - LEAD_ORDER[b.leadTime] || compareWaves(a.before, b.before) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -315,7 +316,7 @@ function normaliseFact(f, i) {
 }
 
 /** @param {string} s */
-const isBlank = (s) => typeof s !== 'string' || s.trim() === '';
+const isBlankText = (s) => typeof s !== 'string' || s.trim() === '';
 
 /**
  * Run one spike. A failure, a null result or an answer with no recorded source is an open fact; never retried.
@@ -331,8 +332,8 @@ async function runSpike(ctx, f, agent, model) {
     return { ...open, error: `spike failed: ${err instanceof Error ? err.message : String(err)}` };
   }
   if (!r) return { ...open, error: 'spike returned nothing' };
-  if (isBlank(r.source)) return { ...open, answer: String(r.answer ?? ''), error: 'no source recorded, so the answer cannot be checked' };
-  if (isBlank(r.answer)) return { ...open, source: r.source, retrieved: String(r.retrieved ?? ''), error: 'empty answer' };
+  if (isBlankText(r.source)) return { ...open, answer: String(r.answer ?? ''), error: 'no source recorded, so the answer cannot be checked' };
+  if (isBlankText(r.answer)) return { ...open, source: r.source, retrieved: String(r.retrieved ?? ''), error: 'empty answer' };
   return { id: f.id, fact: f.fact, status: 'answered', answer: r.answer, source: r.source, retrieved: String(r.retrieved ?? ''), error: '' };
 }
 
