@@ -74,10 +74,10 @@ describe('wave 1 integration', () => {
     expect(openBefore(gates, '0')).toEqual([]);
     expect(openBefore(gates, '1')).toEqual([]);
     // The open item is real and is found once its wave is reached, so the empty results above are not vacuous.
-    const open = openBefore(gates, '3');
+    const open = openBefore(gates, '4');
     expect(open.length).toBeGreaterThan(0);
-    expect(open.every((g: { before: string }) => g.before === '3')).toBe(true);
-    expect(openBefore(gates, '2')).toEqual([]);
+    expect(open.every((g: { before: string }) => g.before === '4')).toBe(true);
+    expect(openBefore(gates, '3')).toEqual([]);
 
     // 2. Three sample recommendations, one per outcome.
     const project = { envelope: { maxCostCents: 0, humanOnly: [] as string[] } };
