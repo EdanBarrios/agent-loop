@@ -23,6 +23,7 @@ export const REQUIRED_SECTIONS = [
 
 export const READS_OR_WRITES = ['reads', 'writes-db', 'writes-files', 'paid-call', 'sends'];
 export const NEEDS_REVIEW = ['writes-db', 'paid-call', 'sends'];
+export const LANES = ['fast', 'normal'];
 
 // A task is a command spec when its text says it adds a command, a script or a CLI (the spec's
 // "Command specs" rule). Passing mentions ("exec(command)", "a command that prints") do not count.
@@ -30,6 +31,8 @@ const ADDS_COMMAND = /\b(?:adds?|adding|introduces?|new)\s+(?:(?:an?|the)\s+)?(?
 const TASK_BULLET = /^- \*\*(\d+\.[0-9A-Za-z]+)\s+(.*?)\*\*/;
 // The value must follow the label directly and end at a delimiter; a quoted mention such as
 // "a `Reads or writes:` line" or "`Reads or writes: writes-db|paid-call|sends`" is not a value.
+// `Lane:` is case-sensitive and starts at a word boundary, so prose such as "the fast lane: skips" is not a label.
+const LANE_LINE = /\bLane:\s*`?([A-Za-z][A-Za-z-]*)(?=[`\s.,;)]|$)/;
 const READS_OR_WRITES_LINE = /Reads or writes:\s*`?([A-Za-z][A-Za-z-]*)(?=[`\s.,;)]|$)/i;
 
 /** Lines outside fenced code blocks, as { text, index }. */
@@ -135,6 +138,10 @@ export function lintSpec(text) {
       errors.push(`task ${t.id}: "Reads or writes:" value "${m[1]}" is not one of ${READS_OR_WRITES.join(', ')}`);
     } else if (value === null && ADDS_COMMAND.test(t.text)) {
       errors.push(`task ${t.id}: adds a command or script but has no "Reads or writes:" line (${READS_OR_WRITES.join(', ')})`);
+    }
+    const lane = LANE_LINE.exec(t.text);
+    if (lane && !LANES.includes(lane[1])) {
+      errors.push(`task ${t.id}: "Lane:" value "${lane[1]}" is not one of ${LANES.join(', ')}`);
     }
     if (value !== null && NEEDS_REVIEW.includes(value)) review.push({ id: t.id, value });
   }
