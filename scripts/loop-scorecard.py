@@ -7,6 +7,16 @@ Pass the path the scorecard is redirected to as --out, e.g. docs/<project>/<date
 only reads it: the scorecards found beside it (earlier file names, *-wave-*-loop.md) give the median that the
 token flag is measured against. Without --out the token flag is skipped.
 
+Timings mode (reads only, prints to stdout; a separate mode that takes no wave or date):
+
+    python3 -I scripts/loop-scorecard.py --timings <workflow-output.json>...
+
+prints minutes per phase per task and for the wave. Build, review and fix rounds come from the agent records
+(`startedAt`, `durationMs`; an agent ends at `startedAt + durationMs`); local check, slot wait, CI wait, merge and
+main check come from `result.timings[taskId]` (`localCheckMs`, `slotWaitMs`, `ciWaitMs`, `mergeMs`,
+`mainCheckMs`). A phase with no source prints n/a. Idle time is the wall time (first agent start to last agent
+end) minus the time with at least one agent running; it is n/a unless every agent record has `startedAt`.
+
 Several output files (a wave relaunched after escalations) are merged in order: agents accumulate, a task's
 later record replaces its earlier one, and escalations from every run are listed.
 
@@ -146,7 +156,7 @@ def load(path):
 def merge_results(paths):
     """Merge several output files of one wave: agents accumulate, a task's later record replaces its earlier
     one (rounds accumulate), escalations and reality gaps from every run are kept, decisions are keyed by id."""
-    result = {"gate": "?", "models": {}, "tasks": {}, "escalations": [], "decisions": [], "reality": None}
+    result = {"gate": "?", "models": {}, "tasks": {}, "escalations": [], "decisions": [], "reality": None, "timings": {}}
     agents = []
     decisions = {}
     anon = 0
@@ -162,6 +172,9 @@ def merge_results(paths):
                 t = dict(t, rounds=prev["rounds"] + t.get("rounds", []))
             result["tasks"][tid] = t
         result["escalations"].extend(r.get("escalations", []))
+        for tid, tm in (r.get("timings") or {}).items():
+            if isinstance(tm, dict):
+                result["timings"][tid] = dict(result["timings"].get(tid, {}), **tm)
         for d in r.get("decisions") or []:
             key = d.get("id")
             if key is None:
@@ -368,11 +381,123 @@ def main(wave, date, paths, out_path=None):
     print("\n".join(out))
 
 
+TIMING_COLUMNS = (
+    ("Build", "build"),
+    ("Local check", "localCheckMs"),
+    ("Slot wait", "slotWaitMs"),
+    ("Review", "review"),
+    ("CI wait", "ciWaitMs"),
+    ("Merge", "mergeMs"),
+    ("Main check", "mainCheckMs"),
+    ("Fix rounds", "fix"),
+)
+AGENT_PHASES = ("build", "review", "fix")
+
+
+def task_of(label):
+    """Task id from an agent label (`worker:1.2 fix1` -> `1.2`); None for labels without one (`reality:check`)."""
+    role, sep, rest = (label or "").partition(":")
+    if not sep or role.strip().lower() not in STANDARD_ROLES:
+        return None
+    return rest.strip().split(" ")[0] or None
+
+
+def agent_phase(label):
+    """Phase of an agent record: worker -> build, worker fix/resume/reopen -> fix, critic -> review, merger -> merge."""
+    role = role_of(label)
+    suffix = (label or "").partition(":")[2].strip().partition(" ")[2].strip().lower()
+    if role == "worker":
+        return "fix" if re.match(r"(fix|resume|reopen)", suffix) else "build"
+    return {"critic": "review", "merger": "merge"}.get(role)
+
+
+def fmt_min(ms):
+    return "n/a" if ms is None else f"{ms / 60000:.1f}"
+
+
+def busy_ms(intervals):
+    """Length of the union of (start, end) intervals."""
+    total = 0
+    current_end = None
+    for start, end in sorted(intervals):
+        if current_end is None or start > current_end:
+            total += end - start
+            current_end = end
+        elif end > current_end:
+            total += end - current_end
+            current_end = end
+    return total
+
+
+def timings_report(paths):
+    result, agents = merge_results(paths)
+    given = result["timings"]
+
+    # Per task: milliseconds by phase, or None when no source exists.
+    ids = []
+    for tid in list(result["tasks"]) + [task_of(a.get("label")) for a in agents] + list(given):
+        if tid and tid not in ids:
+            ids.append(tid)
+    has_agents = set()
+    phases = {tid: {} for tid in ids}
+    for a in agents:
+        tid = task_of(a.get("label"))
+        phase = agent_phase(a.get("label"))
+        if not tid or not phase:
+            continue
+        has_agents.add(tid)
+        phases[tid][phase] = phases[tid].get(phase, 0) + (a.get("durationMs") or 0)
+    for tid in ids:
+        # The merge script's elapsed time is the source for merge; a merger agent is the fallback (merger: 'agent').
+        if "mergeMs" in given.get(tid, {}):
+            phases[tid]["mergeMs"] = given[tid]["mergeMs"]
+        elif "merge" in phases[tid]:
+            phases[tid]["mergeMs"] = phases[tid]["merge"]
+        for key in ("localCheckMs", "slotWaitMs", "ciWaitMs", "mainCheckMs"):
+            if isinstance(given.get(tid, {}).get(key), (int, float)):
+                phases[tid][key] = given[tid][key]
+        for key in AGENT_PHASES:
+            if tid in has_agents:
+                phases[tid].setdefault(key, 0)
+
+    out = ["# Timings", ""]
+    out.append(
+        "Minutes per phase. Build, review and fix rounds come from the agent records (build and fix rounds include the "
+        "worker's local check and slot wait); local check, slot wait, CI wait, merge and main check come from "
+        "result.timings. n/a means no source."
+    )
+    out.append("")
+    out.append("| Task | " + " | ".join(c[0] for c in TIMING_COLUMNS) + " |")
+    out.append("| --- |" + " --- |" * len(TIMING_COLUMNS))
+    for tid in ids:
+        out.append(f"| {cell(tid)} | " + " | ".join(fmt_min(phases[tid].get(c[1])) for c in TIMING_COLUMNS) + " |")
+    wave = []
+    for _, key in TIMING_COLUMNS:
+        values = [phases[tid][key] for tid in ids if key in phases[tid]]
+        wave.append(fmt_min(sum(values) if values else None))
+    out.append("| wave | " + " | ".join(wave) + " |")
+    out.append("")
+
+    wall = idle = None
+    if agents and all(isinstance(a.get("startedAt"), (int, float)) for a in agents):
+        spans = [(a["startedAt"], a["startedAt"] + (a.get("durationMs") or 0)) for a in agents]
+        wall = max(e for _, e in spans) - min(s for s, _ in spans)
+        idle = wall - busy_ms(spans)
+    ci = [phases[tid]["ciWaitMs"] for tid in ids if "ciWaitMs" in phases[tid]]
+    share = f"{sum(ci) / wall * 100:.1f}%" if ci and wall else "n/a"
+    out.append(f"- Wall time: {fmt_min(wall)}" + ("" if wall is None else " min"))
+    out.append(f"- Idle time (no agent running): {fmt_min(idle)}" + ("" if idle is None else " min"))
+    out.append(f"- CI wait share of wall time: {share}")
+    print("\n".join(out))
+
+
 def parse_args(argv):
     out_path = None
     rest = []
     it = iter(argv)
     for a in it:
+        if a == "--timings":
+            continue
         if a == "--out":
             out_path = next(it, None)
             if not out_path:
@@ -386,6 +511,11 @@ def parse_args(argv):
 
 if __name__ == "__main__":
     args, out_path = parse_args(sys.argv[1:])
+    if "--timings" in sys.argv[1:]:
+        if not args:
+            sys.exit(__doc__)
+        timings_report(args)
+        sys.exit(0)
     if len(args) < 3:
         sys.exit(__doc__)
     main(args[0], args[1], args[2:], out_path)
