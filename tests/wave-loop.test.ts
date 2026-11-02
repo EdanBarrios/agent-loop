@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest';
 
 // Runs the wave-loop workflow script with stubbed agents. Each stub answers by agent label, so a test
 // scripts one task's worker, critic and merger and asserts which agents ran and how the task ended.
+// Task 2.1: these tests use the merger agent (project.merger = 'agent'); the CI relay stays on and answers green by default.
+// The script-mode paths (relays, preflight, fast lane) are in tests/wave-loop-relay.test.ts.
 const source = readFileSync(join(import.meta.dirname, '..', 'claude', 'workflows', 'wave-loop.js'), 'utf8').replace(
   /^export const meta/m,
   'const meta',
@@ -16,6 +18,9 @@ async function runWave(answers: Record<string, Result>) {
   const calls: string[] = [];
   const agent = async (_prompt: string, opts: { label: string }) => {
     calls.push(opts.label);
+    // Agents take time: yield a macrotask so the CI relay and the critic settle in start order.
+    await new Promise((r) => setTimeout(r, 0));
+    if (opts.label.startsWith('ci:') && !(opts.label in answers)) return greenCi;
     return answers[opts.label] ?? null;
   };
   const parallel = (fns: Array<() => Promise<unknown>>) => Promise.all(fns.map((f) => f()));
@@ -28,7 +33,7 @@ async function runWave(answers: Record<string, Result>) {
       }),
     );
   const args = {
-    project: { name: 'Sim', repo: '/tmp/sim', github: 'o/r', worktrees: '/tmp/sim-wt', spec: 's.md', maxBuilders: 2, maxChains: 2, mainCi: 'check', syncPolicy: 'conflict' },
+    project: { name: 'Sim', repo: '/tmp/sim', github: 'o/r', worktrees: '/tmp/sim-wt', spec: 's.md', maxBuilders: 2, maxChains: 2, mainCi: 'check', syncPolicy: 'conflict', merger: 'agent' },
     wave: '9',
     tasks: [{ id: '9.1', title: 'T', branch: 'feat/9.1', deps: [], text: 'x', owns: 'y', notes: '' }],
     tail: null,
@@ -47,7 +52,8 @@ async function runWave(answers: Record<string, Result>) {
 const base = { branch: 'feat/9.1', worktree: '/tmp/sim-wt/9.1', filesChanged: ['a'], checkCommand: 'c', decisions: [], questions: [] };
 const opened = { ...base, status: 'opened', checkExitCode: 0, prNumber: 7, prUrl: 'u' };
 const unfinished = { ...base, status: 'blocked', checkExitCode: -1, questions: ['check still running'] };
-const merge = { verdict: 'MERGE', ciState: 'green', prHeadSha: 'abc', checklist: [], fixItems: [], notes: '' };
+const greenCi = { status: 'ran', exitCode: 0, stdout: `${JSON.stringify({ state: 'green', failing: [], logTail: '', polls: 1, elapsedMs: 1000 })}\n` };
+const merge = { verdict: 'MERGE', prHeadSha: 'abc', checklist: [], fixItems: [], notes: '' };
 const fix = { ...merge, verdict: 'FIX', fixItems: [{ n: 1, what: 'x', provedBy: 'y', cause: 'defect' }] };
 const merged = { outcome: 'merged', details: 'ok', mergeSha: 'm', mainSha: 'm', checkOnMainExitCode: 0 };
 
@@ -59,7 +65,7 @@ describe('wave-loop: a worker that returns before its check finishes', () => {
       'critic:9.1 r1': merge,
       'merger:9.1': merged,
     });
-    expect(calls).toEqual(['worker:9.1', 'worker:9.1 finish1', 'critic:9.1 r1', 'merger:9.1']);
+    expect(calls).toEqual(['worker:9.1', 'worker:9.1 finish1', 'ci:9.1 r1', 'critic:9.1 r1', 'merger:9.1']);
     expect(out.gate).toBe('PASS');
     expect(escalations).toEqual([]);
   });
@@ -92,7 +98,7 @@ describe('wave-loop: a worker that returns before its check finishes', () => {
       'critic:9.1 r2': merge,
       'merger:9.1': merged,
     });
-    expect(calls).toEqual(['worker:9.1', 'critic:9.1 r1', 'worker:9.1 fix1', 'worker:9.1 finish1', 'critic:9.1 r2', 'merger:9.1']);
+    expect(calls).toEqual(['worker:9.1', 'ci:9.1 r1', 'critic:9.1 r1', 'worker:9.1 fix1', 'worker:9.1 finish1', 'ci:9.1 r2', 'critic:9.1 r2', 'merger:9.1']);
     expect(out.gate).toBe('PASS');
   });
 });

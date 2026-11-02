@@ -23,6 +23,7 @@ const project = {
   maxChains: 2,
   mainCi: 'check',
   syncPolicy: 'conflict',
+  merger: 'agent', // task 2.1: the v2 merger agent; the wave also starts a CI relay beside the critic, answered green below
   realityCheck: { command: 'node scripts/reality.js', readOnly: true, timeoutSec: 30 },
 };
 
@@ -51,7 +52,7 @@ function agentAnswer(label: string, gaps: Any[]): Any | null {
   const id = /^\w+:(\d+\.\d+)/.exec(label)?.[1] ?? '';
   const base = { branch: `feat/${id}`, worktree: `/tmp/sim-wt/${id}`, filesChanged: ['a'], checkCommand: 'c', decisions: [], questions: [] };
   if (label.startsWith('worker:')) return { ...base, status: 'opened', checkExitCode: 0, prNumber: 7, prUrl: 'u' };
-  if (label.startsWith('critic:')) return { verdict: 'MERGE', ciState: 'green', prHeadSha: 'abc', checklist: [], fixItems: [], notes: '' };
+  if (label.startsWith('critic:')) return { verdict: 'MERGE', prHeadSha: 'abc', checklist: [], fixItems: [], notes: '' };
   if (label.startsWith('merger:')) return { outcome: 'merged', details: 'ok', mergeSha: 'm', mainSha: 'm', checkOnMainExitCode: 0 };
   if (label === 'reality:check') return { stdout: JSON.stringify({ gaps }), code: 0 };
   return null;
@@ -67,6 +68,7 @@ async function launch(opts: { project?: Any; waves: string[]; gates: Any[]; gaps
     workflowCalls.push({ name, args });
     const started: string[] = (agentsByWave[args.wave] = []);
     const agent = async (_prompt: string, o: { label: string }) => {
+      if (o.label.startsWith('ci:')) return { status: 'ran', exitCode: 0, stdout: `${JSON.stringify({ state: 'green', failing: [], logTail: '', polls: 1, elapsedMs: 1000 })}\n` };
       started.push(o.label);
       return agentAnswer(o.label, gaps);
     };

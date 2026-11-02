@@ -10,6 +10,11 @@ const source = readFileSync(join(import.meta.dirname, '..', 'claude', 'workflows
 );
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 
+// Task 2.1: wave-loop starts a CI relay beside the critic. These tests are about gates, reality, decisions and models, so
+// the stub answers every ci: relay green without recording it, and the project uses the v2 merger agent (merger: 'agent').
+// The relay and script paths are covered in tests/wave-loop-relay.test.ts.
+const greenCi = { status: 'ran', exitCode: 0, stdout: `${JSON.stringify({ state: 'green', failing: [], logTail: '', polls: 1, elapsedMs: 1000 })}\n` };
+
 type Result = Record<string, unknown>;
 type Answer = Result | null | ((opts: Opts) => Result | null);
 type Opts = { label: string; model?: string; effort?: string };
@@ -31,6 +36,7 @@ async function runWave(answers: Record<string, Answer>, extra: { project?: Resul
   const optsSeen: Opts[] = [];
   const prompts: Record<string, string> = {};
   const agent = async (prompt: string, opts: Opts) => {
+    if (opts.label.startsWith('ci:')) return greenCi;
     calls.push(opts.label);
     optsSeen.push(opts);
     prompts[opts.label] = prompt;
@@ -48,7 +54,7 @@ async function runWave(answers: Record<string, Answer>, extra: { project?: Resul
     );
   const wave = extra.wave ?? '2';
   const args: Result = {
-    project: { name: 'Sim', repo: '/tmp/sim', github: 'o/r', worktrees: '/tmp/sim-wt', spec: 's.md', maxBuilders: 2, maxChains: 2, mainCi: 'check', syncPolicy: 'conflict', ...(extra.project || {}) },
+    project: { name: 'Sim', repo: '/tmp/sim', github: 'o/r', worktrees: '/tmp/sim-wt', spec: 's.md', maxBuilders: 2, maxChains: 2, mainCi: 'check', syncPolicy: 'conflict', merger: 'agent', ...(extra.project || {}) },
     wave,
     tasks: [{ id: `${wave}.1`, title: 'T', branch: `feat/${wave}.1`, deps: [], text: 'x', owns: 'y', notes: '' }],
     tail: null,
@@ -67,7 +73,7 @@ async function runWave(answers: Record<string, Answer>, extra: { project?: Resul
 
 const base = { branch: 'feat/2.1', worktree: '/tmp/sim-wt/2.1', filesChanged: ['a'], checkCommand: 'c', decisions: [], questions: [] };
 const opened = { ...base, status: 'opened', checkExitCode: 0, prNumber: 7, prUrl: 'u' };
-const merge = { verdict: 'MERGE', ciState: 'green', prHeadSha: 'abc', checklist: [], fixItems: [], notes: '' };
+const merge = { verdict: 'MERGE', prHeadSha: 'abc', checklist: [], fixItems: [], notes: '' };
 const fix = { ...merge, verdict: 'FIX', fixItems: [{ n: 1, what: 'x', provedBy: 'y', cause: 'defect' }] };
 const merged = { outcome: 'merged', details: 'ok', mergeSha: 'm', mainSha: 'm', checkOnMainExitCode: 0 };
 const green = { 'worker:2.1': opened, 'critic:2.1 r1': merge, 'merger:2.1': merged };
@@ -175,7 +181,7 @@ describe('wave-loop without gates or reality', () => {
   it('gives the v1 result plus empty reality and decisions', async () => {
     const { out, calls } = await runWave(green);
     expect(calls).toEqual(greenCalls);
-    expect(Object.keys(out).sort()).toEqual(['decisions', 'escalations', 'gate', 'models', 'project', 'reality', 'state', 'tasks', 'wave']);
+    expect(Object.keys(out).sort()).toEqual(['decisions', 'escalations', 'gate', 'models', 'project', 'reality', 'state', 'tasks', 'timings', 'wave']);
     expect(out.gate).toBe('PASS');
     expect(out.reality).toBeNull();
     expect(out.decisions).toEqual([]);
