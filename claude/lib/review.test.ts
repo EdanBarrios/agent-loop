@@ -390,3 +390,67 @@ describe('the spec-review workflow script', () => {
     await expect(go({ project, specPath: 's.md' })).rejects.toThrow(/wave/);
   });
 });
+
+describe('small-wave review skip (3.1)', () => {
+  const fast = (id: string, text = 'Pure parser with a table test.'): Any => ({ id, wave: '3', lane: 'fast', text });
+  const small = [fast('3.1'), fast('3.2'), fast('3.3')];
+  const everything = {
+    'reviewer r1': reviewerOut([rec('D1')]),
+    adversary: agree('D1'),
+  };
+
+  it('skips every reviewer for a 3-task all-fast wave with no scan hit', async () => {
+    const s = stub(everything);
+    const out = await run(s, { tasks: small });
+    expect(s.calls).toEqual([]);
+    expect(out.skipped).toBe(true);
+    expect(out.skipReason).toMatch(/3 tasks.*fast/i);
+    expect(out.accepted).toEqual([]);
+    expect(out.asked).toEqual([]);
+    expect(out.spikes).toEqual([]);
+    expect(out.gates).toEqual([]);
+    expect(out.needsSecondRound).toBe(false);
+  });
+
+  it('still writes the review file for a skipped wave, marked skipped', async () => {
+    const s = stub(everything);
+    const out = await run(s, { tasks: small, wave: '31' });
+    const file = JSON.parse(readFileSync(out.reviewPath, 'utf8'));
+    expect(file.skipped).toBe(true);
+    expect(file.wave).toBe('31');
+  });
+
+  it('runs the full review when one task mentions a secret', async () => {
+    const s = stub(everything);
+    const tasks = [fast('3.1'), fast('3.2', 'Call the vendor with the Apollo API key from the environment.'), fast('3.3')];
+    const out = await run(s, { tasks });
+    expect(s.calls.map((c) => c.label)).toEqual(['reviewer r1', 'adversary']);
+    expect(out.skipped).toBe(false);
+    expect(out.gates.some((g: Any) => g.id === 'G-3.2-secret')).toBe(true);
+  });
+
+  it('runs the full review for a 4-task wave, even when all are fast', async () => {
+    const s = stub(everything);
+    const out = await run(s, { tasks: [...small, fast('3.4')] });
+    expect(s.calls.map((c) => c.label)).toEqual(['reviewer r1', 'adversary']);
+    expect(out.skipped).toBe(false);
+  });
+
+  it('runs the full review when any task is not marked fast, or the task list is empty', async () => {
+    const mixed = [fast('3.1'), { id: '3.2', wave: '3', lane: 'normal', text: 'Pure parser.' }];
+    const noLane = [fast('3.1'), { id: '3.2', wave: '3', text: 'Pure parser.' }];
+    for (const tasks of [mixed, noLane, []]) {
+      const s = stub(everything);
+      const out = await run(s, { tasks });
+      expect(s.calls.map((c) => c.label)).toEqual(['reviewer r1', 'adversary']);
+      expect(out.skipped).toBe(false);
+    }
+  });
+
+  it('exports the rule as smallWaveSkip(tasks)', () => {
+    const { smallWaveSkip } = reviewModule as Any;
+    expect(smallWaveSkip(small).skip).toBe(true);
+    expect(smallWaveSkip([...small, fast('3.4')]).skip).toBe(false);
+    expect(smallWaveSkip([fast('3.1', 'Rotate the secret.')]).skip).toBe(false);
+  });
+});
