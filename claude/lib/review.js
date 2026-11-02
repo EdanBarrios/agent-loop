@@ -216,6 +216,30 @@ export function mergeGates(reviewerGates, scanned, wave, tasks) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Small-wave skip
+
+/** A wave of at most this many tasks, all `lane: 'fast'`, may skip the reviewers (fixed decision "Spec review skip"). */
+export const SKIP_MAX_TASKS = 3;
+
+/**
+ * The skip rule: 1 to SKIP_MAX_TASKS tasks, every one marked `lane: 'fast'` by the session, and the
+ * human-only scan (scanTasks) finds nothing. Any scan hit, any other lane, an empty list or a bigger wave
+ * means the full review.
+ * @param {Array<{ id: string, wave?: string, lane?: string, text: string }>} tasks
+ * @returns {{ skip: boolean, reason: string }}
+ */
+export function smallWaveSkip(tasks) {
+  const list = Array.isArray(tasks) ? tasks : [];
+  if (list.length === 0) return { skip: false, reason: 'no tasks given: full review' };
+  if (list.length > SKIP_MAX_TASKS) return { skip: false, reason: `${list.length} tasks (more than ${SKIP_MAX_TASKS}): full review` };
+  const notFast = list.filter((t) => t?.lane !== 'fast').map((t) => t?.id);
+  if (notFast.length) return { skip: false, reason: `task ${notFast.join(', ')} is not Lane: fast: full review` };
+  const hits = scanTasks(list);
+  if (hits.length) return { skip: false, reason: `human-only scan hit (${hits.map((g) => g.id).join(', ')}): full review` };
+  return { skip: true, reason: `${list.length} tasks, all Lane: fast, no human-only scan hit: reviewers skipped` };
+}
+
+// ---------------------------------------------------------------------------------------------
 // Combining
 
 /**
@@ -338,6 +362,28 @@ async function runSpike(ctx, f, agent, model) {
 }
 
 /**
+ * The review file. No date, no file (scripts have no clock); a writer failure does not lose the result.
+ * Sets `out.reviewPath` when the file was written.
+ * @param {{ project: { name: string }, wave: string|number, date?: string, write?: (path: string, text: string) => Promise<void>, outDir?: string }} input
+ * @param {{ wave: string, reviewPath: string|null }} out
+ * @param {(msg: string) => void} log
+ */
+async function writeReview(input, out, log) {
+  if (input.date && input.write) {
+    const dir = `${input.outDir ?? DEFAULT_OUT_DIR}/${String(input.project.name).toLowerCase()}`;
+    const path = `${dir}/${input.date}-wave-${out.wave}-review.json`;
+    try {
+      await input.write(path, JSON.stringify({ ...out, reviewPath: path }, null, 2) + '\n');
+      out.reviewPath = path;
+    } catch (err) {
+      log(`could not write ${path}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  } else {
+    log('no date or writer given: the review file was not written');
+  }
+}
+
+/**
  * The whole review. Returns the output object and, when `date` is given, writes it as JSON through `write`.
  * @param {{
  *   project: { name: string, models?: Record<string, {model: string, effort: string}>, envelope?: object, [k: string]: any },
@@ -358,6 +404,27 @@ export async function runSpecReview(input) {
   const tasks = input.tasks ?? [];
   const models = { ...DEFAULT_MODELS, ...(project.models ?? {}) };
   const ctx = { project, specPath, wave, tasks };
+
+  // (0): small all-fast waves with a clean scan skip the reviewers; the scan result is the gate list (empty).
+  const skip = smallWaveSkip(tasks);
+  log(`spec-review: ${skip.reason}`);
+  if (skip.skip) {
+    const out = {
+      project: project.name,
+      wave,
+      accepted: [],
+      asked: [],
+      spikes: [],
+      gates: [],
+      specEdits: [],
+      needsSecondRound: false,
+      skipped: true,
+      skipReason: skip.reason,
+      reviewPath: /** @type {string|null} */ (null),
+    };
+    await writeReview(input, out, log);
+    return out;
+  }
 
   // (1) and (1b): first reviewer pass.
   const r1 = await agent(reviewerPrompt(ctx, { pass: 1 }), { label: 'reviewer r1', phase: 'Review', schema: REVIEWER_SCHEMA, ...models.reviewer });
@@ -415,21 +482,11 @@ export async function runSpecReview(input) {
     gates: mergeGates(gates, scanTasks(tasks, wave), wave, tasks),
     specEdits,
     needsSecondRound,
+    skipped: false,
+    skipReason: '',
     reviewPath: /** @type {string|null} */ (null),
   };
 
-  // The review file. No date, no file (scripts have no clock); a writer failure does not lose the result.
-  if (input.date && input.write) {
-    const dir = `${input.outDir ?? DEFAULT_OUT_DIR}/${String(project.name).toLowerCase()}`;
-    const path = `${dir}/${input.date}-wave-${wave}-review.json`;
-    try {
-      await input.write(path, JSON.stringify({ ...out, reviewPath: path }, null, 2) + '\n');
-      out.reviewPath = path;
-    } catch (err) {
-      log(`could not write ${path}: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  } else {
-    log('no date or writer given: the review file was not written');
-  }
+  await writeReview(input, out, log);
   return out;
 }
