@@ -1,6 +1,7 @@
 // Chain loop: runs a list of waves in order, one wave-loop call per wave, and stops when a wave's result says to.
 // Run with the Workflow tool: { name: 'chain-loop', args: { project, waves: [{ wave, tasks, tail }] } }.
 // args.project: the parsed .claude/loop.local.json. args.waves: the waves to run, in order, each shaped as for wave-loop.
+// args.gates (optional): the parsed gate checklist array, forwarded as args.gates on every wave-loop call.
 // Each wave runs through workflow('wave-loop', { project, wave, tasks, tail }); nesting is one level, so wave-loop
 // itself never calls workflow() and runs exactly as in v1. Chaining follows project.chain (default: chain after wave 1
 // when the first-pass merge rate is at least 0.7; chain: false runs one wave and stops).
@@ -191,11 +192,13 @@ function shouldContinue(waveResult, project, nextWave, firstPassRate) {
 
 /**
  * Run waves in order through the runtime's workflow('wave-loop', ...), one call per wave. A wave-loop call that
- * throws or returns nothing stops the chain and is reported once; it is never retried.
- * @param {{ project: any, waves: Array<{ wave: string, tasks: any[], tail?: any }>, workflow: (name: string, args: any) => Promise<any>, log?: (s: string) => void }} io
+ * throws or returns nothing stops the chain and is reported once; it is never retried. `gates` (the parsed gate
+ * checklist, an array) is forwarded unchanged on every child call; when it is undefined the child args carry no
+ * `gates` key (the v1 shape). The session re-reads the gate file and relaunches the chain to pick up changes.
+ * @param {{ project: any, waves: Array<{ wave: string, tasks: any[], tail?: any }>, workflow: (name: string, args: any) => Promise<any>, log?: (s: string) => void, gates?: any[] }} io
  * @returns {Promise<{ waves: any[], stoppedBecause: string, remaining: string[], error?: { wave: string, message: string } }>}
  */
-async function runChain({ project, waves, workflow, log = () => {} }) {
+async function runChain({ project, waves, workflow, log = () => {}, gates }) {
   if (!Array.isArray(waves) || waves.length === 0) throw new Error('args.waves is missing or empty: pass [{ wave, tasks, tail }] in the order to run.');
   waves.forEach((w, i) => {
     if (!w || w.wave === undefined || w.wave === null || w.wave === '') throw new Error(`args.waves[${i}].wave is missing.`);
@@ -207,7 +210,10 @@ async function runChain({ project, waves, workflow, log = () => {} }) {
     const w = waves[i];
     let result;
     try {
-      result = await workflow('wave-loop', { project, wave: ids[i], tasks: w.tasks || [], tail: w.tail ?? null });
+      /** @type {any} */
+      const childArgs = { project, wave: ids[i], tasks: w.tasks || [], tail: w.tail ?? null };
+      if (gates !== undefined) childArgs.gates = gates;
+      result = await workflow('wave-loop', childArgs);
       if (!result || typeof result !== 'object') throw new Error('wave-loop returned nothing');
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -226,4 +232,4 @@ async function runChain({ project, waves, workflow, log = () => {} }) {
 // @bundle-end chain
 
 phase('Waves')
-return await runChain({ project: P, waves: args.waves, workflow, log })
+return await runChain({ project: P, waves: args.waves, workflow, log, gates: args.gates })
