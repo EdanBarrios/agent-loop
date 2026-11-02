@@ -14,7 +14,7 @@ Worktree: `git worktree add <worktrees>/<id> -b <branch> origin/main` and work o
 Order:
 1. Write the acceptance test exactly as specified, commit it first, and confirm it fails for the right reason.
 2. Implement.
-3. Run the project's check command once and keep the output.
+3. Run the project's check once and keep the output. If your task prompt gives a quick check, run that instead: a shell command in the worktree where `{files}` is replaced by the files you changed, with no slot wait and no full local check, because CI runs the full check on the PR and satisfies a project rule such as 'a change is done when `npm run check` exits 0'. Time the check with `date +%s` before and after and report the elapsed milliseconds as `localCheckMs` (an integer). `checkCommand` and `checkExitCode` then describe the quick check. If you return before the check has finished, set `checkExitCode` to -1.
 4. Commit in small steps, each ending with `Co-Authored-By: Claude <noreply@anthropic.com>`.
 5. Sync: `git fetch origin && git merge origin/main -m "Sync branch with upstream before merge"`, resolving only the conflicts the config allows.
 6. Push and open a PR titled `<id>: <title>` whose body lists files changed, the exact check command and its output tail, a "Decisions" list for every default you took, and open questions.
