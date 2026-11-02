@@ -24,6 +24,8 @@ async function runWave(answers: Record<string, Answer>, extra: { project?: Json;
     calls.push(opts.label);
     optsSeen.push(opts);
     (prompts[opts.label] ||= []).push(prompt);
+    // Agents take time: yield a macrotask so promise chains settle in label order, not in microtask-depth order.
+    await new Promise((r) => setTimeout(r, 0));
     const a = all[opts.label];
     const v = typeof a === 'function' ? await (a as (o: Opts, p: string) => unknown)(opts, prompt) : a;
     return v === undefined ? null : v;
@@ -490,13 +492,13 @@ describe('2.1 project.merger = agent restores only the merger agent', () => {
   });
 
   it('the merger prompt equals the stored v2 snapshot (main CI configured)', async () => {
-    const { prompts } = await runWave({ 'worker:9.1': w1, 'ci:9.1 r1': green, 'critic:9.1 r1': criticMerge, 'merger:9.1': mergedAgent }, { project: { merger: 'agent', mainCi: 'check', syncPolicy: 'conflict' }, withPreflight: false });
+    const { prompts } = await runWave({ 'worker:9.1': { ...w1, prUrl: 'u' }, 'ci:9.1 r1': green, 'critic:9.1 r1': criticMerge, 'merger:9.1': mergedAgent }, { project: { merger: 'agent', mainCi: 'check', syncPolicy: 'conflict' }, withPreflight: false });
     expect(prompts['merger:9.1'][0]).toBe(V2_MERGER_MAIN_CI);
   });
 
   it('the merger prompt equals the stored v2 snapshot (local check, always sync)', async () => {
     const { prompts } = await runWave(
-      { 'worker:9.1': w1, 'ci:9.1 r1': green, 'critic:9.1 r1': criticMerge, 'merger:9.1': mergedAgent },
+      { 'worker:9.1': { ...w1, prUrl: 'u' }, 'ci:9.1 r1': green, 'critic:9.1 r1': criticMerge, 'merger:9.1': mergedAgent },
       { project: { merger: 'agent', mainCi: '', syncPolicy: 'always', checkMutates: ['ratchet.json'], syncConflicts: 'ratchet.json by taking the higher value' }, withPreflight: false },
     );
     expect(prompts['merger:9.1'][0]).toBe(V2_MERGER_LOCAL);
