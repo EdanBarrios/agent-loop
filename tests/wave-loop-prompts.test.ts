@@ -69,6 +69,8 @@ describe('4.2 worker prompts', () => {
       expect(p, label).toMatch(/name the envelope rule/i);
       expect(p, label).toMatch(/not decided a third time/i);
       expect(p, label).toMatch(/failed twice/i);
+      expect(p, label).not.toMatch(/only if two readings/i);
+      expect(p, label).not.toMatch(/only for a genuine ambiguity/i);
     }
   });
 
