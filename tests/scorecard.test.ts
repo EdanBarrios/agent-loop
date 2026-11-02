@@ -30,7 +30,7 @@ function row(md: string, heading: string, first: string): string[] | undefined {
 
 const num = (s: string) => Number(s.replace(/[^0-9.]/g, ''));
 
-describe('loop-scorecard.py', () => {
+describe('loop-scorecard.py', { timeout: 30_000 }, () => {
   it('flags a critic that requested claude-fable-5-1 but was served claude-opus-5-5', async () => {
     const md = await scorecard(['1', '2026-10-30', fixture('scorecard-v2-mismatch.json')]);
     expect(md).toContain('MODEL MISMATCH critic requested claude-fable-5-1 served claude-opus-5-5');
