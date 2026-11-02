@@ -42,7 +42,7 @@ const waveArg = (wave: string) => ({
   tail: null,
 });
 
-async function runChain(opts: { project?: Any; waves: string[]; answers: Record<string, Any | Error> }) {
+async function runChain(opts: { project?: Any; waves: string[]; answers: Record<string, Any | Error>; gates?: Any[] }) {
   const calls: Array<{ name: string; args: Any }> = [];
   const workflow = async (name: string, args: Any) => {
     calls.push({ name, args });
@@ -51,7 +51,8 @@ async function runChain(opts: { project?: Any; waves: string[]; answers: Record<
     return a ?? null;
   };
   const logs: string[] = [];
-  const args = { project: opts.project ?? project, waves: opts.waves.map(waveArg) };
+  const args: Any = { project: opts.project ?? project, waves: opts.waves.map(waveArg) };
+  if (opts.gates !== undefined) args.gates = opts.gates;
   const out = await new AsyncFunction('agent', 'parallel', 'pipeline', 'phase', 'log', 'workflow', 'args', source)(
     async () => {
       throw new Error('chain-loop must not call agent()');
@@ -159,6 +160,40 @@ describe('chain-loop: running waves in order', () => {
 
   it('refuses to start without waves', async () => {
     await expect(runChain({ waves: [], answers: {} })).rejects.toThrow(/args\.waves/);
+  });
+});
+
+describe('chain-loop: forwarding gates', () => {
+  const gates = [
+    { id: 'G1', what: 'Create the account', owner: 'edan', leadTime: 'days', neededBefore: '2', status: 'done' },
+    { id: 'G2', what: 'Approve the budget', owner: 'edan', leadTime: 'minutes', neededBefore: '3', status: 'done' },
+  ];
+
+  it('with gates given to chain-loop, every wave-loop call receives the same array', async () => {
+    const { calls } = await runChain({
+      waves: ['1', '2', '3'],
+      answers: { '1': waveResult('1'), '2': waveResult('2'), '3': waveResult('3') },
+      gates,
+    });
+    expect(calls.map((c) => c.args.wave)).toEqual(['1', '2', '3']);
+    for (const c of calls) {
+      expect(c.args.gates).toBe(calls[0].args.gates);
+      expect(c.args.gates).toEqual(gates);
+    }
+  });
+
+  it('with no gates given, the child args carry no gates key (the v1 shape)', async () => {
+    const { calls } = await runChain({ waves: ['1', '2'], answers: { '1': waveResult('1'), '2': waveResult('2') } });
+    expect(calls).toHaveLength(2);
+    for (const c of calls) {
+      expect('gates' in c.args).toBe(false);
+      expect(Object.keys(c.args).sort()).toEqual(['project', 'tail', 'tasks', 'wave']);
+    }
+  });
+
+  it('an empty gates array is still forwarded (it is a given list, not a missing one)', async () => {
+    const { calls } = await runChain({ waves: ['1'], answers: { '1': waveResult('1') }, gates: [] });
+    expect(calls[0].args.gates).toEqual([]);
   });
 });
 
