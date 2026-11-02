@@ -73,11 +73,14 @@ describe('wave 1 integration', () => {
     expect(gates.length).toBeGreaterThan(0);
     expect(openBefore(gates, '0')).toEqual([]);
     expect(openBefore(gates, '1')).toEqual([]);
-    // The open item is real and is found once its wave is reached, so the empty results above are not vacuous.
-    const open = openBefore(gates, '4');
-    expect(open.length).toBeGreaterThan(0);
-    expect(open.every((g: { before: string }) => g.before === '4')).toBe(true);
-    expect(openBefore(gates, '3')).toEqual([]);
+    // The real file changes as gates are done, so prove the empty results are not vacuous with a synthetic open item.
+    const withOpen = [
+      ...gates,
+      { id: 'HX', what: 'x', why: 'y', owner: 'human', before: '2', leadTime: 'days', status: 'open', evidence: '' },
+    ];
+    const open = openBefore(loadGates(withOpen), '2');
+    expect(open.map((g: { id: string }) => g.id)).toEqual(['HX']);
+    expect(openBefore(loadGates(withOpen), '1')).toEqual([]);
 
     // 2. Three sample recommendations, one per outcome.
     const project = { envelope: { maxCostCents: 0, humanOnly: [] as string[] } };
