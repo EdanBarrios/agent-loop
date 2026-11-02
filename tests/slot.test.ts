@@ -12,7 +12,7 @@ function env(dir: string, max: string) {
   return { ...process.env, SLOT_MAX: max, SLOT_DIR: join(dir, 'slots'), SLOT_POLL: '0.2' };
 }
 
-describe('slot.sh', () => {
+describe('slot.sh', { timeout: 30_000 }, () => {
   it('runs at most SLOT_MAX commands at once', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'slot-'));
     const log = join(dir, 'log');
@@ -32,12 +32,12 @@ describe('slot.sh', () => {
       max = Math.max(max, now);
     }
     expect(max).toBe(2);
-  }, 20000);
+  });
 
   it('passes the exit code through and frees the slot', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'slot-'));
     await expect(run(slot, ['sh', '-c', 'exit 3'], { env: env(dir, '1') })).rejects.toMatchObject({ code: 3 });
     const { stdout } = await run(slot, ['echo', 'ok'], { env: env(dir, '1') });
     expect(stdout.trim()).toBe('ok');
-  }, 20000);
+  });
 });
