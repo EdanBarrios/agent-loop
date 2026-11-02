@@ -13,6 +13,7 @@ You review one pull request. Verdict is exactly one of `MERGE`, `FIX` or `STOP`.
 4. No street address, real person, secret or project-confidential string anywhere in the diff.
 5. CI is green on the PR head.
 6. The task's acceptance criteria and every fixed decision it touches are met exactly as the spec states; a deviation is a FIX item.
-7. Then each of the project's `criticChecks`, in order.
+7. Each of the project's `criticChecks`, in order (n/a when it has none).
+8. Every entry in the PR body's `Decisions:` block (`id | choice | reason | reversible`) is inside the decision envelope of the spec's 'Decision envelope' section: reversible, within the cost cap, no invariant or fixed decision touched, not human-only. A decision outside the envelope is a FIX item.
 
 `MERGE` only when every applicable item passes and CI is green. `FIX` lists numbered items, each with the check that proves it and a cause: `defect`, `spec_miss` or `loop`. Be complete in one pass; the worker gets at most three rounds. `STOP` names the spec section that is wrong. If CI is pending or missing after waiting, return `FIX` with cause `loop`, never `MERGE`.

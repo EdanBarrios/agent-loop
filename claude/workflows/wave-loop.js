@@ -330,6 +330,14 @@ ${PROJECT_NOTES}
 
 const SYNC_STEP = `Sync before pushing (always, so the PR can get a CI run): git fetch origin && git merge origin/main -m "Sync branch with upstream before merge". ${SYNC_CONFLICTS} Commit the merge and push with a plain git push.`
 
+// Task 4.2: what a worker may decide alone. The spec's End goal, Budget and Decision envelope sections are read by the
+// worker itself (scripts have no filesystem), so a project spec without them still works.
+const AUTONOMY = `Autonomy: before starting, READ the sections 'End goal', 'Budget' and 'Decision envelope' of ${SPEC} if present (a spec without them still works: then decide only what the conventional default settles). They bound what you may decide yourself.
+Inside the envelope, decide: take the choice and do not ask. Outside it, stop and ask (status blocked, the question in questions, and the PR opened as a draft with what you have). A choice is inside the envelope only when all hold: it is reversible by one revert PR or one config edit; it costs nothing or is under the project's cost cap; it touches no project invariant and no fixed decision; it is not in a human-only category (spending money or raising a cap; creating, rotating or sharing a secret; accounts, quotas and vendor plans; legal or privacy wording; irreversible production steps; changing a fixed decision or invariant; plus any extra human-only categories the spec names).
+Write each decision in the PR body under \`Decisions:\`, one line per decision, exactly as: id | choice | reason | reversible (id is a short label such as D1; reversible is yes or no; no "|" inside a field). Return the same lines in the decisions array of your structured result. On a later round, add new lines to that block (gh pr edit) instead of replacing it.
+When you stop and ask, name the envelope rule the choice fell outside (reversible, cost, invariant or fixed decision, or the human-only category) in each question, so the escalation says why a human is needed.
+You may spawn read-only research or spike subagents (they edit no file and run no write command) to settle an external fact before you decide.`
+
 const WORKER_SCHEMA = {
   type: 'object',
   properties: {
@@ -420,6 +428,7 @@ Task text (verbatim from the spec): ${t.text}
 You own only: ${t.owns}. Do not edit anything else. If you need a change elsewhere, stop and report it in the PR body.
 Task notes: ${t.notes || 'none'}
 ${WORKER_NOTES}
+${AUTONOMY}
 
 Worktree: cd ${REPO} && git fetch origin && git worktree add ${wtPath(t)} -b ${t.branch} origin/main. Then work ONLY inside ${wtPath(t)} (cd there; run ${INSTALL_CMD} there first). Never run git checkout in ${REPO}.
 Order: (1) write the acceptance test exactly as specified and commit it first, confirming it fails for the right reason before the implementation exists; (2) implement; (3) run ${CHECK_CMD} once in the worktree and keep the output (the slot wrapper waits for a free check slot on this machine, so the command can take up to 15 minutes: run it with the Bash tool's maximum timeout, and if the tool moves it to the background, wait for its completion notification and read its output file; never run a second copy; ${CHECK_WAIT}); (4) commit in small steps; (5) ${SYNC_STEP} (6) git push -u origin ${t.branch} and open a PR with gh pr create titled "${t.id}: ${t.title}" whose body lists files changed, the exact test command and its output tail, a "Decisions" list for every default you took where the spec left a detail open, and open questions.
@@ -433,6 +442,7 @@ function fixPrompt(t, prev, critic, round) {
 Task text: ${t.text}
 You own only: ${t.owns}. Task notes: ${t.notes || 'none'}
 ${WORKER_NOTES}
+${AUTONOMY}
 Your PR: #${prev.prNumber} ${prev.prUrl || ''} on branch ${prev.branch}. Your worktree is ${prev.worktree || wtPath(t)}; cd there and git pull --ff-only. If the worktree is missing, recreate it: cd ${REPO} && git fetch origin && git worktree add ${wtPath(t)} ${t.branch}.
 The critic returned FIX with these numbered items; fix every one and nothing else:
 ${items}
@@ -455,6 +465,7 @@ function finishPrompt(t, prev, attempt) {
 Task text: ${t.text}
 You own only: ${t.owns}. Task notes: ${t.notes || 'none'}
 ${WORKER_NOTES}
+${AUTONOMY}
 The previous worker on this task returned before ${CHECK} had finished, so nothing has been reviewed. Branch ${prev.branch || t.branch}, worktree ${prev.worktree || wtPath(t)}; cd there (if the worktree is missing: cd ${REPO} && git fetch origin && git worktree add ${wtPath(t)} ${t.branch}). ${pr}
 Its open questions were: ${(prev.questions || []).join('; ') || 'none'}. Answer each by taking the conventional default and listing it under Decisions, unless two readings of the spec would lead to materially different work.
 Steps: (1) make sure every change is committed; (2) run ${CHECK_CMD} once and wait for it to finish: with the slot wait it can take 15 minutes; use the Bash tool's maximum timeout, and if the tool moves it to the background, wait for its completion notification and read its output; you may not return while it runs; (3) if it fails, fix the cause inside the files you own and run it again, at most twice; (4) ${SYNC_STEP} Push, and if no PR exists open it with gh pr create titled "${t.id}: ${t.title}", its body listing files changed, the check command and output tail, Decisions and open questions.
@@ -480,8 +491,12 @@ function criticChecklist() {
     `No street address, real person, secret${FORBIDDEN ? ' or project-confidential string' : ''} anywhere in the diff.`,
     `CI is green on the PR head.`,
     `The task's own acceptance criteria and every fixed decision it touches are met exactly as the spec states (names, counts, columns, enums, the Done line). Treat a deviation from the spec as a FIX item.`,
+    CRITIC_EXTRA.length
+      ? `Each of the project's own critic checks, in order (one result for this item, with each check's result in the evidence; it fails if any listed check fails):\n${CRITIC_EXTRA.map((s, i) => `   7.${i + 1} ${s}`).join('\n')}`
+      : `The project's own critic checks (criticChecks): the project defines none, so record n/a.`,
+    `Every entry in the PR body's \`Decisions:\` block (lines of the form id | choice | reason | reversible) is inside the decision envelope as the 'Decision envelope' section of ${SPEC} defines it: reversible by one revert PR or one config edit, within the cost cap, no project invariant or fixed decision touched, not in a human-only category. A decision outside the envelope is a FIX item. Record n/a when the PR took no decisions.`,
   ]
-  return core.concat(CRITIC_EXTRA).map((s, i) => `${i + 1}. ${s}`).join('\n')
+  return core.map((s, i) => `${i + 1}. ${s}`).join('\n')
 }
 
 function criticPrompt(t, w, round) {
