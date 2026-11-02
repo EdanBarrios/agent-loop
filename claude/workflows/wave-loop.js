@@ -20,7 +20,8 @@
 // haiku/low agent; a block gap (or a check that does not run cleanly) fails the gate with a reality_gap escalation.
 // Result: { project, wave, gate, models, state, tasks, escalations, reality, decisions, timings }. reality is null when no
 // check is configured, else { ok, gaps, error? }; decisions are the workers' `id | choice | reason | reversible` lines.
-// timings[taskId] = { ciWaitMs, mergeMs, mainCheckMs } copied from the scripts' JSON lines (this script has no clock).
+// timings[taskId] = { ciWaitMs, mergeMs, mainCheckMs } copied from the scripts' JSON lines, plus localCheckMs from the
+// worker's structured result (this script has no clock).
 // This script never calls workflow(): chain-loop calls it, and nesting is one level.
 
 export const meta = {
@@ -831,7 +832,13 @@ const SYNC_POLICY = P.syncPolicy || 'always' // 'always': merge main into the br
 const FIX_ROUNDS = P.fixRounds || 3
 // Rounds that send a worker back to finish a check it returned before (see finishIfUnfinished).
 const FINISH_ROUNDS = P.finishRounds || 2
+// v2.1: project.quickCheck is what a worker runs instead of the full check (CI runs the full check on the PR). It is a shell
+// command run in the worktree; {files} is replaced by the worker with the files it changed. Unset keeps the v2 prompts.
+const QUICK_CHECK = typeof P.quickCheck === 'string' ? P.quickCheck.trim() : ''
+const LOCAL_CHECK_NAME = QUICK_CHECK ? 'the quick check' : CHECK // how worker-facing text and logs name the worker's own check
 const CHECK_WAIT = `If you return before it has finished, set checkExitCode to -1 and say so: the workflow sends a worker back to finish it. Never report a slow or unfinished check as status blocked.`
+// What the worker prompts say about the quick check. The workflow has no clock, so the worker times the check.
+const QUICK_RULE = `The quick check is: ${QUICK_CHECK}  ({files} is replaced by you with the files you changed, space separated, relative to the worktree). Run it directly in the worktree: there is no slot wait, so do not run it through the slot wrapper, and do not run the full check (${CHECK}) yourself. CI runs the full check on the PR and that satisfies a project rule such as 'a change is done when \`${CHECK}\` exits 0'. Time the quick check with date +%s before and after and set localCheckMs in your result to the elapsed milliseconds (an integer). Set checkCommand to the quick check as you ran it (files filled in) and checkExitCode to its exit code.`
 const READ_FIRST = (P.readFirst && P.readFirst.length ? P.readFirst : ['CLAUDE.md']).join('; ')
 const FORBIDDEN = (P.forbiddenStrings || []).length ? ` No project-confidential strings (${P.forbiddenStrings.join(', ')}).` : ''
 const EXTRA_RULES = (P.extraRules || []).length ? ' ' + P.extraRules.join(' ') : ''
@@ -918,6 +925,7 @@ const WORKER_SCHEMA = {
     filesChanged: { type: 'array', items: { type: 'string' } },
     checkCommand: { type: 'string' },
     checkExitCode: { type: 'integer' },
+    localCheckMs: { type: 'integer' },
     checkOutputTail: { type: 'string' },
     decisions: { type: 'array', items: { type: 'string' } },
     questions: { type: 'array', items: { type: 'string' } },
@@ -1027,7 +1035,11 @@ ${WORKER_NOTES}
 ${AUTONOMY}
 
 Worktree: cd ${REPO} && git fetch origin && git worktree add ${wtPath(t)} -b ${t.branch} origin/main. Then work ONLY inside ${wtPath(t)} (cd there; run ${INSTALL_CMD} there first). Never run git checkout in ${REPO}.
-Order: (1) write the acceptance test exactly as specified and commit it first, confirming it fails for the right reason before the implementation exists; (2) implement; (3) run ${CHECK_CMD} once in the worktree and keep the output (the slot wrapper waits for a free check slot on this machine, so the command can take up to 15 minutes: run it with the Bash tool's maximum timeout, and if the tool moves it to the background, wait for its completion notification and read its output file; never run a second copy; ${CHECK_WAIT}); (4) commit in small steps; (5) ${SYNC_STEP} (6) git push -u origin ${t.branch} and open a PR with gh pr create titled "${t.id}: ${t.title}" whose body lists files changed, the exact test command and its output tail, a "Decisions" list for every default you took where the spec left a detail open, and open questions.
+Order: (1) write the acceptance test exactly as specified and commit it first, confirming it fails for the right reason before the implementation exists; (2) implement; (3) ${
+    QUICK_CHECK
+      ? `run the quick check once in the worktree and keep the output. ${QUICK_RULE} ${CHECK_WAIT}`
+      : `run ${CHECK_CMD} once in the worktree and keep the output (the slot wrapper waits for a free check slot on this machine, so the command can take up to 15 minutes: run it with the Bash tool's maximum timeout, and if the tool moves it to the background, wait for its completion notification and read its output file; never run a second copy; ${CHECK_WAIT});`
+  } (4) commit in small steps; (5) ${SYNC_STEP} (6) git push -u origin ${t.branch} and open a PR with gh pr create titled "${t.id}: ${t.title}" whose body lists files changed, the exact test command and its output tail, a "Decisions" list for every default you took where the spec left a detail open, and open questions.
 Where the spec leaves a detail open, take the conventional default and list it under Decisions. Stop (status: blocked) if two readings of the spec would lead to materially different work or if a choice falls outside the envelope; then list the question and still open the PR as a draft with what you have.
 Return the structured result with worktree set to ${wtPath(t)}. Leave the branch pushed and the worktree in place; do not merge.`
 }
@@ -1043,7 +1055,11 @@ Your PR: #${prev.prNumber} ${prev.prUrl || ''} on branch ${prev.branch}. Your wo
 The critic returned FIX with these numbered items; fix every one and nothing else:
 ${items}
 Critic notes: ${critic.notes}
-Run ${CHECK_CMD} once after the fixes (up to 15 minutes including the slot wait; maximum Bash timeout, and if the tool moves it to the background wait for its notification; ${CHECK_WAIT}), commit in small steps. ${SYNC_STEP} Add a PR comment (gh pr comment) listing each fix item and the check output tail. Do not merge. Return the structured result with the same prNumber, branch and worktree.`
+${
+    QUICK_CHECK
+      ? `Run the quick check once after the fixes. ${QUICK_RULE} ${CHECK_WAIT} Commit in small steps.`
+      : `Run ${CHECK_CMD} once after the fixes (up to 15 minutes including the slot wait; maximum Bash timeout, and if the tool moves it to the background wait for its notification; ${CHECK_WAIT}), commit in small steps.`
+  } ${SYNC_STEP} Add a PR comment (gh pr comment) listing each fix item and the check output tail. Do not merge. Return the structured result with the same prNumber, branch and worktree.`
 }
 
 // A worker that returns before its check has finished (checkExitCode -1) is sent back to finish it, at most
@@ -1062,16 +1078,20 @@ Task text: ${t.text}
 You own only: ${t.owns}. Task notes: ${t.notes || 'none'}
 ${WORKER_NOTES}
 ${AUTONOMY}
-The previous worker on this task returned before ${CHECK} had finished, so nothing has been reviewed. Branch ${prev.branch || t.branch}, worktree ${prev.worktree || wtPath(t)}; cd there (if the worktree is missing: cd ${REPO} && git fetch origin && git worktree add ${wtPath(t)} ${t.branch}). ${pr}
+The previous worker on this task returned before ${LOCAL_CHECK_NAME} had finished, so nothing has been reviewed. Branch ${prev.branch || t.branch}, worktree ${prev.worktree || wtPath(t)}; cd there (if the worktree is missing: cd ${REPO} && git fetch origin && git worktree add ${wtPath(t)} ${t.branch}). ${pr}
 Its open questions were: ${(prev.questions || []).join('; ') || 'none'}. Answer each by taking the conventional default and listing it under Decisions, unless two readings of the spec would lead to materially different work.
-Steps: (1) make sure every change is committed; (2) run ${CHECK_CMD} once and wait for it to finish: with the slot wait it can take 15 minutes; use the Bash tool's maximum timeout, and if the tool moves it to the background, wait for its completion notification and read its output; you may not return while it runs; (3) if it fails, fix the cause inside the files you own and run it again, at most twice; (4) ${SYNC_STEP} Push, and if no PR exists open it with gh pr create titled "${t.id}: ${t.title}", its body listing files changed, the check command and output tail, Decisions and open questions.
+Steps: (1) make sure every change is committed; (2) ${
+    QUICK_CHECK
+      ? `run the quick check once and wait for it to finish. ${QUICK_RULE} If the Bash tool moves it to the background, wait for its completion notification and read its output; you may not return while it runs;`
+      : `run ${CHECK_CMD} once and wait for it to finish: with the slot wait it can take 15 minutes; use the Bash tool's maximum timeout, and if the tool moves it to the background, wait for its completion notification and read its output; you may not return while it runs;`
+  } (3) if it fails, fix the cause inside the files you own and run it again, at most twice; (4) ${SYNC_STEP} Push, and if no PR exists open it with gh pr create titled "${t.id}: ${t.title}", its body listing files changed, the check command and output tail, Decisions and open questions.
 Return the structured result with the real exit code of the last check. Set status blocked for a genuine ambiguity in the spec or a choice outside the envelope, and for nothing else, never for a slow or unfinished check.`
 }
 
 async function finishIfUnfinished(t, w, ph, tag) {
   for (let attempt = 1; attempt <= FINISH_ROUNDS && checkUnfinished(w); attempt++) {
-    log(`${t.id}: worker returned before ${CHECK} finished (${tag}); finish attempt ${attempt}`)
-    const next = await agent(finishPrompt(t, w, attempt), { label: `worker:${t.id} finish${attempt}`, phase: ph.build, schema: WORKER_SCHEMA, ...MODELS.worker })
+    log(`${t.id}: worker returned before ${LOCAL_CHECK_NAME} finished (${tag}); finish attempt ${attempt}`)
+    const next = await callWorker(t, finishPrompt(t, w, attempt), { label: `worker:${t.id} finish${attempt}`, phase: ph.build, schema: WORKER_SCHEMA, ...MODELS.worker })
     if (!next) return w
     w = { ...next, prNumber: next.prNumber || w.prNumber, prUrl: next.prUrl || w.prUrl, branch: next.branch || w.branch, worktree: next.worktree || w.worktree }
   }
@@ -1245,6 +1265,14 @@ function addTiming(id, key, ms) {
   if (typeof ms !== 'number' || !isFinite(ms)) return
   const o = timings[id] || (timings[id] = {})
   o[key] = (o[key] || 0) + ms
+}
+
+// Every worker call goes through here: the worker's own timing of its local check (localCheckMs, an integer it measured
+// with date +%s) is copied into timings[taskId], summed over rounds. slotWaitMs has no source (slot.sh reports no wait).
+async function callWorker(t, prompt, opts) {
+  const w = await agent(prompt, opts)
+  if (w && Number.isInteger(w.localCheckMs) && w.localCheckMs >= 0) addTiming(t.id, 'localCheckMs', w.localCheckMs)
+  return w
 }
 
 const taskStates = {}
@@ -1543,7 +1571,7 @@ async function reviewAndMerge(t, initialWorker, ph) {
       escalate(t.id, 'another fix round would be needed', items.map((i) => `${i.n}. ${i.what}`).join('; '))
       return { w, state: 'parked' }
     }
-    let next = await agent(fixPrompt(t, w, { fixItems: items, notes }, round), { label: `worker:${t.id} fix${round}`, phase: ph.build, schema: WORKER_SCHEMA, ...MODELS.worker })
+    let next = await callWorker(t, fixPrompt(t, w, { fixItems: items, notes }, round), { label: `worker:${t.id} fix${round}`, phase: ph.build, schema: WORKER_SCHEMA, ...MODELS.worker })
     if (next) next = await finishIfUnfinished(t, { ...next, prNumber: next.prNumber || w.prNumber, prUrl: next.prUrl || w.prUrl, branch: next.branch || w.branch, worktree: next.worktree || w.worktree }, ph, `fix${round}`)
     if (!next) {
       escalate(t.id, 'worker agent returned nothing on a fix round', 'Relaunch the wave.')
@@ -1564,11 +1592,11 @@ async function runTask(t, ph) {
   let worker
   if (t.resume) {
     const prev = { prNumber: t.resume.prNumber, prUrl: t.resume.prUrl || '', branch: t.branch, worktree: t.resume.worktree || wtPath(t) }
-    const synthetic = { fixItems: (t.resume.items || []).map((what, i) => ({ n: i + 1, what, provedBy: `${CHECK} green and CI green`, cause: 'loop' })), notes: `${t.resume.notes || ''} The PR is a draft; when ${CHECK} passes, mark it ready with gh pr ready ${t.resume.prNumber} and set status opened.` }
-    worker = await agent(fixPrompt(t, prev, synthetic, 'resume'), { label: `worker:${t.id} resume`, phase: ph.build, schema: WORKER_SCHEMA, ...MODELS.worker })
+    const synthetic = { fixItems: (t.resume.items || []).map((what, i) => ({ n: i + 1, what, provedBy: `${LOCAL_CHECK_NAME} green and CI green`, cause: 'loop' })), notes: `${t.resume.notes || ''} The PR is a draft; when ${LOCAL_CHECK_NAME} passes, mark it ready with gh pr ready ${t.resume.prNumber} and set status opened.` }
+    worker = await callWorker(t, fixPrompt(t, prev, synthetic, 'resume'), { label: `worker:${t.id} resume`, phase: ph.build, schema: WORKER_SCHEMA, ...MODELS.worker })
     if (worker) worker = { ...worker, prNumber: worker.prNumber || prev.prNumber, prUrl: worker.prUrl || prev.prUrl, branch: worker.branch || prev.branch, worktree: worker.worktree || prev.worktree }
   } else {
-    worker = await agent(workerPrompt(t), { label: `worker:${t.id}`, phase: ph.build, schema: WORKER_SCHEMA, ...MODELS.worker })
+    worker = await callWorker(t, workerPrompt(t), { label: `worker:${t.id}`, phase: ph.build, schema: WORKER_SCHEMA, ...MODELS.worker })
   }
   if (!worker) {
     escalate(t.id, 'worker agent returned nothing', 'Relaunch the wave.')
@@ -1577,7 +1605,7 @@ async function runTask(t, ph) {
   worker = await finishIfUnfinished(t, worker, ph, t.resume ? 'resume' : 'build')
   r.pr = { number: worker.prNumber, url: worker.prUrl, branch: worker.branch, decisions: worker.decisions, questions: worker.questions, checkExitCode: worker.checkExitCode }
   if (worker.status === 'blocked' || !worker.prNumber) {
-    escalate(t.id, checkUnfinished(worker) ? `${CHECK} unfinished after ${FINISH_ROUNDS} finish rounds` : 'worker blocked (ambiguity)', worker.questions.join('; ') || 'no PR opened')
+    escalate(t.id, checkUnfinished(worker) ? `${LOCAL_CHECK_NAME} unfinished after ${FINISH_ROUNDS} finish rounds` : 'worker blocked (ambiguity)', worker.questions.join('; ') || 'no PR opened')
     return r
   }
   log(`${t.id}: PR #${worker.prNumber} opened on ${worker.branch}; local check exit ${worker.checkExitCode}`)
@@ -1592,10 +1620,10 @@ async function runTask(t, ph) {
   log(`${t.id}: main went red after merge; reverted once, reopening for one more round`)
   const fix = {
     verdict: 'FIX',
-    notes: `Main went red after merging PR #${w.prNumber}; it was reverted (${r.merge.revertPrUrl || ''}). Reproduce with ${INSTALL_CMD} && ${CHECK_CMD} and fix the cause. The original PR is merged and reverted on main; open a NEW PR from a new branch ${t.branch}-2 that re-applies your work on top of current main (git fetch; git worktree add ${wtPath(t)}-2 -b ${t.branch}-2 origin/main; git merge ${t.branch}), titled "${t.id}: ${t.title} (reopen)".`,
+    notes: `Main went red after merging PR #${w.prNumber}; it was reverted (${r.merge.revertPrUrl || ''}). ${QUICK_CHECK ? 'Reproduce the failure from the output in the item below, using the quick check where it covers it (CI runs the full check on the new PR), and fix the cause.' : `Reproduce with ${INSTALL_CMD} && ${CHECK_CMD} and fix the cause.`} The original PR is merged and reverted on main; open a NEW PR from a new branch ${t.branch}-2 that re-applies your work on top of current main (git fetch; git worktree add ${wtPath(t)}-2 -b ${t.branch}-2 origin/main; git merge ${t.branch}), titled "${t.id}: ${t.title} (reopen)".`,
     fixItems: [{ n: 1, what: `${CHECK} failed on main after merge: ${(r.merge.checkOnMainTail || '').slice(-1500)}`, provedBy: `${CHECK} on main`, cause: 'defect' }],
   }
-  let again = await agent(fixPrompt(t, w, fix, 'reopen'), { label: `worker:${t.id} reopen`, phase: ph.build, schema: WORKER_SCHEMA, ...MODELS.worker })
+  let again = await callWorker(t, fixPrompt(t, w, fix, 'reopen'), { label: `worker:${t.id} reopen`, phase: ph.build, schema: WORKER_SCHEMA, ...MODELS.worker })
   if (again) again = await finishIfUnfinished(t, { ...again, prNumber: again.prNumber || w.prNumber, prUrl: again.prUrl || w.prUrl, branch: again.branch || w.branch, worktree: again.worktree || w.worktree }, ph, 'reopen')
   if (!again || again.status === 'blocked') {
     escalate(t.id, 'worker blocked after revert', again ? again.questions.join('; ') : 'no result')
