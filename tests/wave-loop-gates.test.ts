@@ -274,10 +274,14 @@ describe('wave-loop models', () => {
 
 describe('wave-loop script rules', () => {
   it('has no import, no dynamic import, no require and never calls workflow()', () => {
-    expect(source).not.toMatch(/^\s*import\s/m);
-    expect(source).not.toMatch(/\bimport\s*\(/);
-    expect(source).not.toMatch(/\brequire\s*\(/);
-    expect(source).not.toMatch(/\bworkflow\s*\(/);
+    const code = source
+      .split('\n')
+      .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+      .join('\n');
+    expect(code).not.toMatch(/^\s*import\s/m);
+    expect(code).not.toMatch(/\bimport\s*\(/);
+    expect(code).not.toMatch(/\brequire\s*\(/);
+    expect(code).not.toMatch(/\bworkflow\s*\(/);
   });
 
   it('carries the gates and reality libs as bundled regions', () => {

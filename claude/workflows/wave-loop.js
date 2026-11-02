@@ -5,7 +5,14 @@
 // resume: { prNumber, prUrl, worktree, items: [string], notes } continues an existing draft PR (after an escalation
 // was answered) with a fix-round worker instead of a fresh worker; the worker must mark the PR ready.
 // Role defaults: worker = Sonnet/high, critic = Fable/high, merger = Sonnet/low (set after the first scorecards,
-// 2026-10-27); project.models overrides per role.
+// 2026-10-27), pinned by full model id; project.models overrides per role.
+// args.gates: the project's gate checklist, already parsed from project.gates by the session (scripts have no fs).
+// An open item with before <= this wave returns { gate: 'BLOCKED', blockedBy: [ids] } before any agent starts.
+// project.realityCheck: { command, readOnly: true, timeoutSec }: run after the machine gate through a small
+// haiku/low agent; a block gap (or a check that does not run cleanly) fails the gate with a reality_gap escalation.
+// Result: { project, wave, gate, models, state, tasks, escalations, reality, decisions }. reality is null when no
+// check is configured, else { ok, gaps, error? }; decisions are the workers' `id | choice | reason | reversible` lines.
+// This script never calls workflow(): chain-loop calls it, and nesting is one level.
 
 export const meta = {
   name: 'wave-loop',
@@ -24,12 +31,229 @@ for (const k of ['name', 'repo', 'github', 'worktrees', 'spec']) {
   if (!P[k]) throw new Error(`args.project.${k} is missing. Read .claude/loop.local.json in the repo and pass it as args.project.`)
 }
 
+// The runtime accepts only self-contained scripts, so the libs are bundled here by scripts/bundle-workflows.js.
+// Order matters: bundled names share one scope (the bundler refuses duplicates), and a lib may use an earlier one.
+// @bundle-start gates
+// generated from claude/lib/gates.js by scripts/bundle-workflows.js: do not edit
+// Gate checklist: the up-front list of human steps a project spec needs before a wave may start.
+// Pure functions; the CLI in scripts/gates.js does the file I/O.
+
+/**
+ * @typedef {Object} Gate
+ * @property {string} id
+ * @property {string} what
+ * @property {string} why
+ * @property {'human'} owner
+ * @property {string} before  wave id the item must be settled before, e.g. '0', '0a', '3'
+ * @property {'minutes'|'hours'|'days'} leadTime
+ * @property {'open'|'done'|'waived'} status
+ * @property {string} evidence
+ */
+
+const STATUSES = ['open', 'done', 'waived'];
+const LEAD_TIMES = ['minutes', 'hours', 'days'];
+const OWNERS = ['human'];
+const STRING_FIELDS = ['id', 'what', 'why', 'before', 'evidence'];
+// Longest lead time sorts first: those are the items that stall a wave.
+const LEAD_RANK = { days: 0, hours: 1, minutes: 2 };
+
+/**
+ * Natural sort of wave ids: digit runs compare as numbers, other text as text, and a shorter
+ * id sorts before a longer one it prefixes, so 0 < 0a < 0b < 1 < 2 < 10.
+ * @param {string} a
+ * @param {string} b
+ * @returns {number}
+ */
+function compareWaves(a, b) {
+  const pa = String(a).match(/\d+|\D+/g) ?? [];
+  const pb = String(b).match(/\d+|\D+/g) ?? [];
+  for (let i = 0; i < Math.min(pa.length, pb.length); i++) {
+    const x = pa[i];
+    const y = pb[i];
+    const numeric = /^\d/.test(x) && /^\d/.test(y);
+    if (numeric) {
+      const d = Number(x) - Number(y);
+      if (d !== 0) return d < 0 ? -1 : 1;
+    } else if (x !== y) {
+      // A digit run sorts before a letter run; otherwise plain code-unit order.
+      if (/^\d/.test(x)) return -1;
+      if (/^\d/.test(y)) return 1;
+      return x < y ? -1 : 1;
+    }
+  }
+  return Math.sign(pa.length - pb.length);
+}
+
+/**
+ * Validate a gate checklist. Every error names the offending item id.
+ * @param {string|unknown} json  the parsed array, or its JSON text
+ * @returns {Gate[]}
+ */
+function loadGates(json) {
+  let data = json;
+  if (typeof json === 'string') {
+    try {
+      data = JSON.parse(json);
+    } catch (err) {
+      throw new Error(`gates: invalid JSON: ${/** @type {Error} */ (err).message}`);
+    }
+  }
+  if (!Array.isArray(data)) throw new Error('gates: expected an array of gate items');
+  const seen = new Set();
+  data.forEach((item, index) => {
+    const label = item && typeof item === 'object' && typeof item.id === 'string' && item.id ? item.id : `#${index}`;
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new Error(`gates: item ${label} is not an object`);
+    }
+    for (const field of [...STRING_FIELDS, 'owner', 'leadTime', 'status']) {
+      if (!(field in item)) throw new Error(`gates: item ${label} is missing field "${field}"`);
+    }
+    for (const field of STRING_FIELDS) {
+      if (typeof item[field] !== 'string') throw new Error(`gates: item ${label} field "${field}" must be a string`);
+    }
+    for (const field of ['id', 'what', 'why', 'before']) {
+      if (item[field].trim() === '') throw new Error(`gates: item ${label} field "${field}" must not be empty`);
+    }
+    if (!OWNERS.includes(item.owner)) {
+      throw new Error(`gates: item ${label} has bad owner "${item.owner}" (expected ${OWNERS.join('|')})`);
+    }
+    if (!LEAD_TIMES.includes(item.leadTime)) {
+      throw new Error(`gates: item ${label} has bad leadTime "${item.leadTime}" (expected ${LEAD_TIMES.join('|')})`);
+    }
+    if (!STATUSES.includes(item.status)) {
+      throw new Error(`gates: item ${label} has bad status "${item.status}" (expected ${STATUSES.join('|')})`);
+    }
+    if (seen.has(item.id)) throw new Error(`gates: duplicate id ${item.id}`);
+    seen.add(item.id);
+  });
+  return /** @type {Gate[]} */ (data);
+}
+
+/**
+ * Open items that must be settled before `wave` starts (before <= wave), longest lead time first,
+ * then by wave, then by id. Done and waived items never block. With no `wave`, every open item.
+ * @param {Gate[]} gates
+ * @param {string} [wave]
+ * @returns {Gate[]}
+ */
+function openBefore(gates, wave) {
+  return gates
+    .filter((g) => g.status === 'open' && (wave === undefined || compareWaves(g.before, wave) <= 0))
+    .sort(
+      (a, b) =>
+        LEAD_RANK[a.leadTime] - LEAD_RANK[b.leadTime] ||
+        compareWaves(a.before, b.before) ||
+        (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+    );
+}
+// @bundle-end gates
+// @bundle-start reality
+// generated from claude/lib/reality.js by scripts/bundle-workflows.js: do not edit
+// Reality gate runner: runs a project's read-only reality check and reads its contract JSON.
+// Pure apart from the injected `exec`; the caller treats `ok: false` as a `block`.
+
+/**
+ * @typedef {Object} RealityConfig
+ * @property {string} command      shell command that prints the contract JSON and exits 0
+ * @property {true} readOnly       must be exactly true; the runner refuses otherwise
+ * @property {number} [timeoutSec] default 60
+ *
+ * @typedef {Object} ExecResult
+ * @property {number} code         process exit code
+ * @property {string} stdout
+ * @property {boolean} [timedOut]  true when the command was killed for exceeding the timeout
+ *
+ * @typedef {Object} Gap
+ * @property {string} id
+ * @property {'block'|'warn'} severity
+ * @property {string} what
+ *
+ * @typedef {{ ok: true, gaps: Gap[], blocking: Gap[] } | { ok: false, error: string, gaps: [] }} RealityResult
+ */
+
+const DEFAULT_TIMEOUT_SEC = 60;
+const SEVERITIES = ['block', 'warn'];
+
+/**
+ * Check parsed JSON against the contract `{ gaps: [{ id, severity, what }] }`.
+ * @param {unknown} value
+ * @returns {string|null} the problem, or null when valid
+ */
+function contractProblem(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return 'output is not a JSON object';
+  }
+  const gaps = /** @type {{ gaps?: unknown }} */ (value).gaps;
+  if (!Array.isArray(gaps)) return 'output has no "gaps" array';
+  for (let i = 0; i < gaps.length; i++) {
+    const g = gaps[i];
+    if (g === null || typeof g !== 'object' || Array.isArray(g)) return `gaps[${i}] is not an object`;
+    if (typeof g.id !== 'string' || g.id === '') return `gaps[${i}].id is not a non-empty string`;
+    if (!SEVERITIES.includes(g.severity)) return `gaps[${i}] (${g.id}) has severity other than block or warn`;
+    if (typeof g.what !== 'string') return `gaps[${i}] (${g.id}).what is not a string`;
+  }
+  return null;
+}
+
+/** @param {string} error @returns {RealityResult} */
+function failed(error) {
+  return { ok: false, error, gaps: [] };
+}
+
+/**
+ * Run the reality check.
+ * Throws (a configuration error, not a check outcome) when `cfg.readOnly !== true`.
+ * Every other failure resolves to `{ ok: false, error, gaps: [] }`, which the caller treats as a block.
+ * @param {RealityConfig} cfg
+ * @param {(command: string, timeoutSec: number) => ExecResult | Promise<ExecResult>} exec
+ * @returns {Promise<RealityResult>}
+ */
+async function runReality(cfg, exec) {
+  if (!cfg || cfg.readOnly !== true) {
+    throw new Error('reality check refused: realityCheck.readOnly must be true');
+  }
+  if (typeof cfg.command !== 'string' || cfg.command.trim() === '') {
+    throw new Error('reality check refused: realityCheck.command is missing');
+  }
+  const timeoutSec =
+    typeof cfg.timeoutSec === 'number' && cfg.timeoutSec > 0 ? cfg.timeoutSec : DEFAULT_TIMEOUT_SEC;
+
+  /** @type {ExecResult} */
+  let res;
+  try {
+    res = await exec(cfg.command, timeoutSec);
+  } catch (e) {
+    return failed(`reality command could not run: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  if (res.timedOut) return failed(`reality command timed out after ${timeoutSec}s`);
+  if (res.code !== 0) return failed(`reality command exited with code ${res.code}`);
+
+  // Strict: the whole of stdout (surrounding whitespace aside) must be the JSON object.
+  let parsed;
+  try {
+    parsed = JSON.parse(String(res.stdout));
+  } catch (e) {
+    return failed(`reality command output is not valid JSON: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  const problem = contractProblem(parsed);
+  if (problem) return failed(`reality command output breaks the contract: ${problem}`);
+
+  const gaps = parsed.gaps;
+  return { ok: true, gaps, blocking: gaps.filter((/** @type {Gap} */ g) => g.severity === 'block') };
+}
+// @bundle-end reality
+
+// Full model ids, so the scorecard baseline cannot drift (verified on the Workflow runtime 2026-11-01).
 const DEFAULT_MODELS = {
-  worker: { model: 'sonnet', effort: 'high' },
-  critic: { model: 'fable', effort: 'high' },
-  merger: { model: 'sonnet', effort: 'low' },
+  worker: { model: 'claude-sonnet-5-5', effort: 'high' },
+  critic: { model: 'claude-fable-5-1', effort: 'high' },
+  merger: { model: 'claude-sonnet-5-5', effort: 'low' },
 }
 const MODELS = { ...DEFAULT_MODELS, ...(P.models || {}) }
+// The reality check only runs a shell command and returns its output; its result is read by deterministic code.
+const REALITY_MODEL = { model: 'claude-haiku-5-5', effort: 'low', ...((P.models || {}).reality || {}) }
+// A critic that hits a usage limit is retried once on this model, and later critics start on it.
+const CRITIC_FALLBACK = { model: 'opus', effort: 'high' }
 
 const NAME = P.name
 const REPO = P.repo
@@ -64,6 +288,35 @@ const PROJECT_NOTES = P.notes || ''
 const WAVE = String(args.wave)
 const TASKS = args.tasks || []
 const TAIL = args.tail || null
+const REALITY_CHECK = P.realityCheck || null
+
+// Before anything starts: a bad reality config or gate list fails now, not after a whole wave has run.
+if (REALITY_CHECK) {
+  if (REALITY_CHECK.readOnly !== true) throw new Error('args.project.realityCheck.readOnly must be true: the reality check must be read-only.')
+  if (typeof REALITY_CHECK.command !== 'string' || REALITY_CHECK.command.trim() === '') throw new Error('args.project.realityCheck.command is missing.')
+}
+if (args.gates === undefined && P.gates) {
+  throw new Error(`args.gates is missing: read ${P.gates} (project.gates), parse it and pass the array as args.gates. A project with gates configured never runs a wave unchecked.`)
+}
+if (args.gates !== undefined) {
+  const open = openBefore(loadGates(args.gates), WAVE)
+  if (open.length) {
+    log(`Wave ${WAVE} BLOCKED by open gate items: ${open.map((g) => g.id).join(', ')}`)
+    return {
+      project: NAME,
+      wave: WAVE,
+      gate: 'BLOCKED',
+      blockedBy: open.map((g) => g.id),
+      blocked: open.map((g) => ({ id: g.id, what: g.what, before: g.before, leadTime: g.leadTime })),
+      models: MODELS,
+      state: {},
+      tasks: {},
+      escalations: [],
+      reality: null,
+      decisions: [],
+    }
+  }
+}
 
 const COMMON_RULES = `
 Repository: ${REPO} (GitHub ${P.github}, default branch main, gh is authenticated). The main checkout stays on main; do not run git checkout in ${REPO}.
@@ -130,6 +383,16 @@ const CRITIC_SCHEMA = {
     notes: { type: 'string' },
   },
   required: ['verdict', 'ciState', 'checklist', 'fixItems', 'notes'],
+}
+
+const REALITY_SCHEMA = {
+  type: 'object',
+  properties: {
+    stdout: { type: 'string' },
+    code: { type: 'integer' },
+    timedOut: { type: 'boolean' },
+  },
+  required: ['stdout', 'code'],
 }
 
 const MERGER_SCHEMA = {
@@ -258,6 +521,36 @@ ${verifySteps}
 Finally remove the task worktree: cd ${REPO} && git worktree remove --force ${w.worktree || wtPath(t)} && git worktree prune && git branch -D ${w.branch} (ignore errors). Leave ${REPO} on main. Do not edit source files.`
 }
 
+// The critic role: a call that throws a usage-limit error is retried once on CRITIC_FALLBACK, and the swap is recorded
+// in models.critic, so every later critic call (any task, any round) starts on the fallback. Any other error propagates.
+let criticModel = MODELS.critic
+function isUsageLimit(e) {
+  return /usage limit|limit reached|rate.?limit|quota|\b429\b/i.test(e && e.message ? e.message : String(e))
+}
+async function callCritic(prompt, opts) {
+  const used = criticModel
+  try {
+    return await agent(prompt, { ...opts, ...used })
+  } catch (e) {
+    if (!isUsageLimit(e)) throw e
+    if (used.model === CRITIC_FALLBACK.model) {
+      log(`critic hit a usage limit on the fallback model ${used.model} too; not retried again`)
+      return null
+    }
+    if (criticModel === used) {
+      criticModel = { ...CRITIC_FALLBACK, swappedFrom: { model: used.model, effort: used.effort }, reason: 'usage_limit' }
+      log(`critic hit a usage limit on ${used.model}; swapped to ${CRITIC_FALLBACK.model}/${CRITIC_FALLBACK.effort}`)
+    }
+    try {
+      return await agent(prompt, { ...opts, model: criticModel.model, effort: criticModel.effort })
+    } catch (e2) {
+      if (!isUsageLimit(e2)) throw e2
+      log(`critic retry on ${criticModel.model} hit a usage limit too`)
+      return null
+    }
+  }
+}
+
 const escalations = []
 function escalate(id, what, question) {
   escalations.push({ task: id, what, question })
@@ -288,7 +581,7 @@ async function reviewLoop(t, initialWorker, ph) {
   let w = initialWorker
   let critic = null
   for (let round = 1; round <= FIX_ROUNDS; round++) {
-    critic = await agent(criticPrompt(t, w, round), { label: `critic:${t.id} r${round}`, phase: ph.review, schema: CRITIC_SCHEMA, ...MODELS.critic })
+    critic = await callCritic(criticPrompt(t, w, round), { label: `critic:${t.id} r${round}`, phase: ph.review, schema: CRITIC_SCHEMA })
     results[t.id].rounds.push(roundRecord(round, critic))
     if (!critic) {
       escalate(t.id, 'critic agent returned nothing', 'Relaunch the wave; it re-runs only parked tasks.')
@@ -372,7 +665,7 @@ async function runTask(t, ph) {
     return r
   }
   const w2 = { ...again, prNumber: again.prNumber || w.prNumber, prUrl: again.prUrl || w.prUrl, branch: again.branch || w.branch, worktree: again.worktree || w.worktree }
-  const critic2 = await agent(criticPrompt(t, w2, 'reopen'), { label: `critic:${t.id} reopen`, phase: ph.review, schema: CRITIC_SCHEMA, ...MODELS.critic })
+  const critic2 = await callCritic(criticPrompt(t, w2, 'reopen'), { label: `critic:${t.id} reopen`, phase: ph.review, schema: CRITIC_SCHEMA })
   r.rounds.push(roundRecord('reopen', critic2))
   if (!critic2 || critic2.verdict !== 'MERGE') {
     escalate(t.id, 'critic did not MERGE after reopen', critic2 ? critic2.stopSection || critic2.notes : 'no result')
@@ -451,6 +744,55 @@ if (TAIL) {
 const everyMerged = Object.values(state).every((s) => s === 'merged')
 const last = TAIL ? tail : Object.values(results).slice(-1)[0]
 const checkGreen = !!(last && last.merge && last.merge.checkOnMainExitCode === 0)
-const gate = everyMerged && checkGreen && escalations.length === 0
+let gate = everyMerged && checkGreen && escalations.length === 0
 log(gate ? `Wave ${WAVE} machine gate: PASS` : `Wave ${WAVE} machine gate: FAIL`)
-return { project: NAME, wave: WAVE, gate: gate ? 'PASS' : 'FAIL', models: MODELS, state, tasks: results, escalations }
+
+// Reality gate: after the machine gate, a read-only check against the real system. Block gaps (and a check that does
+// not run cleanly, which runReality reports as ok: false) fail the wave; warn gaps are only returned.
+function realityPrompt(command, timeoutSec) {
+  return `You run one read-only shell command for the ${NAME} repository and report its output. Do not interpret it.
+Run exactly this command with the Bash tool from ${REPO} (cd there first), with the Bash timeout set to ${timeoutSec * 1000} milliseconds:
+${command}
+Do not modify any file, branch, database or setting; do not run any other command except to cd; do not retry; do not start background processes.
+Return stdout as the command printed it (verbatim, nothing added or removed) and code as its exit code. If the command was killed for exceeding the timeout, set timedOut true; if it could not be started, set code to 127 and put the error in stdout.`
+}
+async function execReality(command, timeoutSec) {
+  const r = await agent(realityPrompt(command, timeoutSec), { label: 'reality:check', phase: 'Reality', schema: REALITY_SCHEMA, ...REALITY_MODEL })
+  if (!r || typeof r.stdout !== 'string' || typeof r.code !== 'number') throw new Error('the reality agent returned no usable result')
+  return { code: r.code, stdout: r.stdout, timedOut: r.timedOut === true }
+}
+let reality = null
+let realityModel = null
+if (REALITY_CHECK) {
+  phase('Reality')
+  realityModel = REALITY_MODEL
+  const res = await runReality(REALITY_CHECK, execReality)
+  reality = res.ok ? { ok: true, gaps: res.gaps } : { ok: false, error: res.error, gaps: [] }
+  const blocking = res.ok ? res.blocking : []
+  if (!res.ok || blocking.length) {
+    const what = res.ok ? `reality_gap: ${blocking.map((g) => g.id).join(', ')}` : `reality_gap: ${res.error}`
+    escalate('reality', what, res.ok ? blocking.map((g) => `${g.id}: ${g.what}`).join('; ') : 'Fix the reality command or its environment, then relaunch.')
+    gate = false
+    log(`Wave ${WAVE} reality gate: FAIL`)
+  } else {
+    log(`Wave ${WAVE} reality gate: PASS (${res.gaps.length} warn gap${res.gaps.length === 1 ? '' : 's'})`)
+  }
+}
+
+// Decisions: workers write each as `id | choice | reason | reversible` in the PR body (task 4.2) and return the lines in
+// their result. Only lines in that format are collected; any other text stays in tasks[id].pr.decisions.
+function parseDecision(taskId, line) {
+  const parts = String(line).split('|').map((x) => x.trim())
+  if (parts.length !== 4 || !parts[0] || !parts[1]) return null
+  return { id: parts[0], task: taskId, choice: parts[1], reason: parts[2], reversible: /^(true|yes|y)$/i.test(parts[3]), outcome: 'accepted' }
+}
+const decisions = []
+for (const r of Object.values(results)) {
+  for (const line of (r.pr && r.pr.decisions) || []) {
+    const d = parseDecision(r.task, line)
+    if (d) decisions.push(d)
+  }
+}
+
+const models = { ...MODELS, critic: criticModel, ...(realityModel ? { reality: realityModel } : {}) }
+return { project: NAME, wave: WAVE, gate: gate ? 'PASS' : 'FAIL', models, state, tasks: results, escalations, reality, decisions }
