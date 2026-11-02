@@ -67,6 +67,8 @@ describe('4.2 worker prompts', () => {
       expect(p, label).toMatch(/outside it, stop and ask/i);
       expect(p, label).toMatch(/read-only research or spike subagents?/i);
       expect(p, label).toMatch(/name the envelope rule/i);
+      expect(p, label).toMatch(/not decided a third time/i);
+      expect(p, label).toMatch(/failed twice/i);
     }
   });
 
@@ -163,6 +165,8 @@ describe('4.2 agent files', () => {
     expect(p).toMatch(/outside it, stop and ask/i);
     expect(p).toMatch(/read-only research or spike subagents?/i);
     expect(p).toMatch(/name the envelope rule/i);
+    expect(p).toMatch(/not decided a third time/i);
+    expect(p).toMatch(/failed twice/i);
     expect(p).toContain(`'End goal', 'Budget' and 'Decision envelope'`);
   });
 });
