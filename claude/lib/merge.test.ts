@@ -77,6 +77,7 @@ function baseRules(): Rule[] {
     { when: /^git merge-base --is-ancestor origin\/main /, reply: { code: 0 } },
     { when: /^git worktree remove /, reply: {} },
     { when: /^git branch -D /, reply: {} },
+    { when: /^git checkout -- /, reply: {} },
     // sync, in the task worktree
     { when: (c, cwd) => cwd === WT && c === 'git rev-parse --abbrev-ref HEAD', reply: out(`${BRANCH}\n`) },
     { when: (c, cwd) => cwd === WT && c === 'git rev-parse HEAD', reply: out(`${SYNC_SHA}\n`) },
@@ -438,9 +439,9 @@ describe('mergePr: --dry-run', () => {
     const { result, cmds } = await go([], { dryRun: true });
     expect(result).toMatchObject({ outcome: 'dry-run', exit: 0 });
     expect(result.wouldRun).toContain(MERGE_CMD);
-    const writes = cmds.filter((c) => !/^(gh pr (view|checks)|gh run (list|view)|git (fetch origin|merge-base|rev-parse|diff --name-only))\b/.test(c));
-    // writes were handed to the runner only to be intercepted; the result lists every one of them
-    for (const w of writes) expect(result.wouldRun).toContain(w);
+    // the runner saw read-only calls only; every write was kept back and listed
+    expect(cmds.filter((c) => !/^(gh pr (view|checks)|gh run (list|view)|git (fetch origin|merge-base|rev-parse|diff --name-only))\b/.test(c))).toEqual([]);
+    expect(result.wouldRun).toEqual([MERGE_CMD]);
   });
 
   it('plans the sync without running it when main moved', async () => {
