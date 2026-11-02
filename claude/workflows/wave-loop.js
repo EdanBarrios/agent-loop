@@ -862,6 +862,7 @@ const FAST_LANE = P.fastLane || {}
 // A fast-lane task needs a test-count command; without one nothing is eligible, so such a task keeps the normal path.
 const FAST_LANE_ON = FAST_LANE.enabled === true && typeof FAST_LANE.testCountCommand === 'string' && FAST_LANE.testCountCommand.trim() !== ''
 const FAST_LANE_CAP = Number.isInteger(FAST_LANE.maxPerWave) && FAST_LANE.maxPerWave >= 0 ? FAST_LANE.maxPerWave : DEFAULT_MAX_PER_WAVE
+const CI_RELAY_MAX_MIN = 9 // one foreground relay call (Bash max 10 min) must be able to finish; 'pending' handling covers slower CI
 const CI_FIX_WAIT_MIN = 5 // on a FIX verdict the workflow waits at most this long for a CI result still running
 const CI_TIMEOUT_NOTE = 'the 20-minute wait-ci.js timeout'
 
@@ -1225,7 +1226,7 @@ function relayPrompt(command) {
   return `You are a relay for the ${NAME} repository. You run exactly one shell command and report what it printed. You do not interpret, summarise, repair or retry anything.
 Run exactly this command with the Bash tool from ${REPO} (cd there first):
 ${command}
-It can take many minutes. You may run it with run_in_background set to true; if you do, wait for its completion notification, then read its output file. Do not poll in a loop, and never run a second copy of the command.
+It can take many minutes. Run it in the FOREGROUND with the Bash tool's maximum timeout (timeout 600000) and do not set run_in_background: you cannot receive notifications, so a background command would die when your turn ends. Never end your turn while the command is still running; if the tool moves it to the background anyway, read its output file again after each wait until the command has exited. Never run a second copy of the command.
 Run no other command except cd. Do not edit any file, branch or setting. If the command fails, report that; do not retry it and do not try another way.
 If the permission system denies the command, or the tool refuses to run it, return status "blocked" with the denial text in note, and stop.
 Otherwise return status "ran", exitCode as the command's exit code, and stdout as exactly what the command printed on stdout (verbatim: nothing added, removed, reordered or summarised).`
@@ -1289,7 +1290,7 @@ function roundLabel(tag) {
 // Wait for the PR's CI through wait-ci.js. A result with no parseable JSON line is run once more; a block or an empty
 // relay result is not retried. Never throws for those cases: { ok: false, what, question } says what to escalate.
 async function awaitCi(t, w, tag, ph, bounded) {
-  const command = `node ${SCRIPTS}/wait-ci.js ${w.prNumber} --repo ${REPO}${bounded ? ` --timeout-min ${CI_FIX_WAIT_MIN}` : ''}`
+  const command = `node ${SCRIPTS}/wait-ci.js ${w.prNumber} --repo ${REPO} --timeout-min ${bounded ? CI_FIX_WAIT_MIN : CI_RELAY_MAX_MIN}`
   const base = `ci:${t.id} ${roundLabel(tag)}${bounded ? ' fix' : ''}`
   for (let attempt = 0; attempt < 2; attempt++) {
     const rr = await relay(command, attempt ? `${base} retry` : base, ph.review)

@@ -127,12 +127,14 @@ describe('2.1 script mode: CI and merge are commands run by relay agents', () =>
     expect(prompts['merger:9.1'][0]).toContain('/tmp/sim/.claude/scripts/merge-pr.js 7 --repo /tmp/sim --worktree /tmp/sim-wt/9.1');
   });
 
-  it('the relay prompt allows run_in_background, says to wait for the notification, and allows no other command', async () => {
+  it('the relay prompt runs in the foreground, never ends the turn early, and allows no other command', async () => {
     const { prompts } = await runWave(happy);
     for (const label of ['preflight:merge', 'ci:9.1 r1', 'merger:9.1']) {
       const p = prompts[label][0];
-      expect(p, label).toContain('run_in_background');
-      expect(p, label).toMatch(/completion notification/i);
+      expect(p, label).toMatch(/FOREGROUND/);
+      expect(p, label).toContain('timeout 600000');
+      expect(p, label).toMatch(/Never end your turn while the command is still running/);
+      expect(p, label).not.toContain('run_in_background set to true');
       expect(p, label).toMatch(/no other command/i);
       expect(p, label).toMatch(/never run a second copy/i);
       expect(p, label).toMatch(/blocked/);
