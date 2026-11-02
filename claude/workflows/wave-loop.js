@@ -521,33 +521,43 @@ ${verifySteps}
 Finally remove the task worktree: cd ${REPO} && git worktree remove --force ${w.worktree || wtPath(t)} && git worktree prune && git branch -D ${w.branch} (ignore errors). Leave ${REPO} on main. Do not edit source files.`
 }
 
-// The critic role: a call that throws a usage-limit error is retried once on CRITIC_FALLBACK, and the swap is recorded
-// in models.critic, so every later critic call (any task, any round) starts on the fallback. Any other error propagates.
+// The critic role: a call that throws a usage-limit error, or returns null (the runtime's answer when the subagent dies
+// on a terminal API error such as a usage limit), is retried once on CRITIC_FALLBACK, and the swap is recorded in
+// models.critic, so every later critic call (any task, any round) starts on the fallback. A null or usage limit on the
+// fallback itself is not retried. Any other error propagates.
 let criticModel = MODELS.critic
 function isUsageLimit(e) {
   return /usage limit|limit reached|rate.?limit|quota|\b429\b/i.test(e && e.message ? e.message : String(e))
 }
+function swapCritic(used, reason) {
+  if (criticModel === used) {
+    criticModel = { ...CRITIC_FALLBACK, swappedFrom: { model: used.model, effort: used.effort }, reason }
+    log(`critic ${reason === 'usage_limit' ? 'hit a usage limit' : 'returned nothing'} on ${used.model}; swapped to ${CRITIC_FALLBACK.model}/${CRITIC_FALLBACK.effort}`)
+  }
+}
 async function callCritic(prompt, opts) {
   const used = criticModel
+  let reason = null
   try {
-    return await agent(prompt, { ...opts, ...used })
+    const r = await agent(prompt, { ...opts, ...used })
+    if (r !== null && r !== undefined) return r
+    if (used.model === CRITIC_FALLBACK.model) return r
+    reason = 'agent_returned_nothing'
   } catch (e) {
     if (!isUsageLimit(e)) throw e
     if (used.model === CRITIC_FALLBACK.model) {
       log(`critic hit a usage limit on the fallback model ${used.model} too; not retried again`)
       return null
     }
-    if (criticModel === used) {
-      criticModel = { ...CRITIC_FALLBACK, swappedFrom: { model: used.model, effort: used.effort }, reason: 'usage_limit' }
-      log(`critic hit a usage limit on ${used.model}; swapped to ${CRITIC_FALLBACK.model}/${CRITIC_FALLBACK.effort}`)
-    }
-    try {
-      return await agent(prompt, { ...opts, model: criticModel.model, effort: criticModel.effort })
-    } catch (e2) {
-      if (!isUsageLimit(e2)) throw e2
-      log(`critic retry on ${criticModel.model} hit a usage limit too`)
-      return null
-    }
+    reason = 'usage_limit'
+  }
+  swapCritic(used, reason)
+  try {
+    return await agent(prompt, { ...opts, model: criticModel.model, effort: criticModel.effort })
+  } catch (e2) {
+    if (!isUsageLimit(e2)) throw e2
+    log(`critic retry on ${criticModel.model} hit a usage limit too`)
+    return null
   }
 }
 

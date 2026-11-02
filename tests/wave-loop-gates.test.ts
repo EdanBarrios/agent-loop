@@ -251,6 +251,29 @@ describe('wave-loop models', () => {
     expect(out.gate).toBe('PASS');
   });
 
+  it('treats a null critic result as the usage-limit case: swaps once to opus/high and retries', async () => {
+    const nullOnFable = (opts: Opts) => (opts.model === 'claude-fable-5-1' ? null : merge);
+    const { out, calls, optsSeen, escalations } = await runWave({ ...green, 'critic:2.1 r1': nullOnFable });
+    expect(calls).toEqual(['worker:2.1', 'critic:2.1 r1', 'critic:2.1 r1', 'merger:2.1']);
+    expect(optsSeen.filter((o) => o.label.startsWith('critic')).map((o) => [o.model, o.effort])).toEqual([
+      ['claude-fable-5-1', 'high'],
+      ['opus', 'high'],
+    ]);
+    expect(out.gate).toBe('PASS');
+    expect(escalations).toEqual([]);
+    const critic = (out.models as Record<string, Record<string, unknown>>).critic;
+    expect(critic).toMatchObject({ model: 'opus', effort: 'high', swappedFrom: { model: 'claude-fable-5-1', effort: 'high' } });
+    expect(String(critic.reason)).toMatch(/nothing/);
+    expect(critic.reason).not.toBe('usage_limit');
+  });
+
+  it('escalates once when the critic returns null on both models, with exactly two critic calls', async () => {
+    const { out, calls, escalations } = await runWave({ 'worker:2.1': opened, 'critic:2.1 r1': null });
+    expect(calls.filter((c) => c.startsWith('critic'))).toHaveLength(2);
+    expect(out.gate).toBe('FAIL');
+    expect(escalations).toEqual(['critic agent returned nothing']);
+  });
+
   it('does not retry a critic error that is not a usage limit, and a second limit escalates', async () => {
     let n = 0;
     const boom = () => {
