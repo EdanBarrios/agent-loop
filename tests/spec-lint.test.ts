@@ -202,6 +202,51 @@ describe('spec-lint Reads or writes', () => {
   });
 });
 
+describe('spec-lint Lane', () => {
+  const lane = (extra: string) => `- **4.1 Fast one.** Owns \`lib/a.js\`. ${extra}Test: a case.`;
+
+  for (const value of ['fast', 'normal']) {
+    it(`passes "Lane: ${value}"`, () => {
+      const r = lint(spec({ tasks: lane(`Lane: ${value}. `) }));
+      expect(r.code, r.out).toBe(0);
+    });
+  }
+
+  it('accepts the value in backticks', () => {
+    const r = lint(spec({ tasks: lane('`Lane: fast`. ') }));
+    expect(r.code, r.out).toBe(0);
+  });
+
+  it('passes a task with no Lane line (default normal)', () => {
+    const r = lint(spec({ tasks: lane('') }));
+    expect(r.code, r.out).toBe(0);
+  });
+
+  for (const value of ['quick', 'slow', 'fast-ish', 'both']) {
+    it(`fails "Lane: ${value}" and names the task and the value`, () => {
+      const r = lint(spec({ tasks: lane(`Lane: ${value}. `) }));
+      expect(r.code).toBe(1);
+      expect(r.out).toContain('4.1');
+      expect(r.out).toContain('Lane');
+      expect(r.out).toContain(value);
+    });
+  }
+
+  it('does not read a quoted mention or the words "fast lane" as a value', () => {
+    const tasks =
+      '- **4.2 Prose.** Owns `lib/a.js`. Rejects a `Lane:` value other than fast or normal; the fast lane: skips the critic. Test: a case.';
+    const r = lint(spec({ tasks }));
+    expect(r.code, r.out).toBe(0);
+  });
+
+  it('still passes the v2.1 speed spec', () => {
+    let out = '';
+    const path = join(root, 'docs', 'agent-loop-v2', '2026-11-01-agent-loop-v2-1-tasks.md');
+    const code = main(['node', script, path], { out: (s) => (out += s), err: (s) => (out += s) });
+    expect(code, out).toBe(0);
+  });
+});
+
 describe('spec-lint quoted mentions', () => {
   it('does not read a quoted example list as a value', () => {
     const tasks =
