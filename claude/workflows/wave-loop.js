@@ -1,7 +1,15 @@
-// Wave loop: parallel tasks through worker -> critic -> merger, then a tail task alone.
+// Wave loop: parallel tasks through worker -> critic (beside a CI wait) -> merge, then a tail task alone.
 // Run with the Workflow tool: { name: 'wave-loop', args: { project, wave, tasks, tail } }.
 // args.project: the parsed contents of the repo's .claude/loop.local.json (see README.md, "Project config").
-// args.tasks: [{ id, title, branch, deps: [ids], text, owns, notes, resume? }]; args.tail: same shape or null.
+// args.tasks: [{ id, title, branch, deps: [ids], text, owns, notes, lane?, resume? }]; args.tail: same shape or null.
+// lane is 'fast' or 'normal' (default normal), set by the session from the task's `Lane:` line in the spec.
+// CI and the merge are commands, not model work (v2.1): scripts/wait-ci.js and scripts/merge-pr.js, each run by one
+// low-cost relay agent that returns the command's stdout and exit code; this script parses the JSON line itself.
+// project.loopScripts is the directory holding them (default <repo>/.claude/scripts). Before any worker starts, a
+// preflight relay runs `merge-pr.js 0 --repo <repo> --dry-run`; a block or a missing script fails the wave.
+// project.merger = 'agent' restores the v2 merger agent (the CI relay and the verdict rules stay on).
+// project.fastLane { enabled, maxPerWave, denyPaths, testCountCommand }: a `Lane: fast` task skips the critic when
+// fastLaneEligible (claude/lib/lane.js) agrees after the CI result.
 // resume: { prNumber, prUrl, worktree, items: [string], notes } continues an existing draft PR (after an escalation
 // was answered) with a fix-round worker instead of a fresh worker; the worker must mark the PR ready.
 // Role defaults: worker = Sonnet/high, critic = Fable/high, merger = Sonnet/low (set after the first scorecards,
@@ -10,18 +18,20 @@
 // An open item with before <= this wave returns { gate: 'BLOCKED', blockedBy: [ids] } before any agent starts.
 // project.realityCheck: { command, readOnly: true, timeoutSec }: run after the machine gate through a small
 // haiku/low agent; a block gap (or a check that does not run cleanly) fails the gate with a reality_gap escalation.
-// Result: { project, wave, gate, models, state, tasks, escalations, reality, decisions }. reality is null when no
+// Result: { project, wave, gate, models, state, tasks, escalations, reality, decisions, timings }. reality is null when no
 // check is configured, else { ok, gaps, error? }; decisions are the workers' `id | choice | reason | reversible` lines.
+// timings[taskId] = { ciWaitMs, mergeMs, mainCheckMs } copied from the scripts' JSON lines (this script has no clock).
 // This script never calls workflow(): chain-loop calls it, and nesting is one level.
 
 export const meta = {
   name: 'wave-loop',
-  description: 'One wave of spec tasks: parallel tasks through worker -> critic -> merger, then the tail alone',
+  description: 'One wave of spec tasks: parallel tasks through worker -> critic beside a CI wait -> merge script, then the tail alone',
   whenToUse: 'One run per wave of the project spec; pass .claude/loop.local.json as args.project and the wave tasks as args.tasks.',
   phases: [
+    { title: 'Preflight', detail: 'One relay runs merge-pr.js --dry-run; a block or a missing script fails the wave', model: 'sonnet' },
     { title: 'Build', detail: 'Workers, a few at a time, one git worktree each', model: 'sonnet' },
-    { title: 'Review', detail: 'Critic applies the checklist; FIX returns to a worker, max 3 rounds' },
-    { title: 'Merge', detail: 'Serialized merger: merge main into branch if moved, wait CI, merge, check main, revert once', model: 'sonnet' },
+    { title: 'Review', detail: 'Critic applies the checklist beside a wait-ci.js relay; FIX returns to a worker, max 3 rounds' },
+    { title: 'Merge', detail: 'Serialized merge-pr.js relay: sync if needed, wait CI, merge, check main, revert once', model: 'sonnet' },
     { title: 'Tail', detail: 'The tail task runs alone after every parallel task is merged or parked' },
   ],
 }
@@ -242,6 +252,555 @@ async function runReality(cfg, exec) {
   return { ok: true, gaps, blocking: gaps.filter((/** @type {Gap} */ g) => g.severity === 'block') };
 }
 // @bundle-end reality
+// @bundle-start envelope
+// generated from claude/lib/envelope.js by scripts/bundle-workflows.js: do not edit
+// Decision envelope: decides whether a recommendation is auto-accepted by the loop or goes to a human.
+// Pure functions, no I/O. The rules are the spec section "Decision envelope".
+
+/**
+ * @typedef {Object} Rec
+ * @property {string} id
+ * @property {string} text
+ * @property {string} evidence        a quote, fixture, source or command output; an opinion is not evidence
+ * @property {string} reverseCost
+ * @property {string} wouldBeWrongIf  what observation would show the recommendation is wrong
+ * @property {boolean} reversible     true only if one revert PR or one config edit undoes it
+ * @property {number} costCents       integer cents
+ * @property {string[]} touches       'invariant', 'fixed_decision' or any other string
+ * @property {string} category
+ */
+
+/**
+ * @typedef {Object} Classification
+ * @property {'accept'|'ask'} decision
+ * @property {string} reason
+ */
+
+/**
+ * @typedef {Object} LedgerEntry
+ * @property {string} [id]
+ * @property {'accept'|'ask'} [decision]
+ * @property {string|null} [reversedBy]  set when a later decision or PR reversed this one
+ * @property {boolean} [failed]
+ */
+
+/**
+ * Categories a human always decides, from the spec: spending money or raising a cap; creating,
+ * rotating or sharing a secret; accounts, quotas and vendor plans; legal or privacy wording;
+ * irreversible production steps (schema migrations on a real database, sends, deletes, DNS);
+ * changing a fixed decision or invariant. Written in normalised form (see normaliseCategory).
+ */
+const HUMAN_ONLY_CATEGORIES = Object.freeze([
+  'money',
+  'spend',
+  'cost_cap',
+  'secret',
+  'secrets',
+  'account',
+  'accounts',
+  'quota',
+  'quotas',
+  'vendor_plan',
+  'vendor_plans',
+  'legal',
+  'privacy',
+  'irreversible_production',
+  'schema_migration',
+  'send',
+  'sends',
+  'delete',
+  'dns',
+  'fixed_decision',
+  'invariant',
+]);
+
+/** Touch values that always need a human, whatever else is true. */
+const PROTECTED_TOUCHES = ['invariant', 'fixed_decision'];
+
+/**
+ * Lower-case, trim, and turn runs of spaces and hyphens into one underscore, so
+ * 'Vendor-Plan', 'vendor plan' and ' vendor_plan ' are the same category.
+ * @param {unknown} value
+ * @returns {string}
+ */
+function normaliseCategory(value) {
+  return typeof value === 'string' ? value.trim().toLowerCase().replace(/[\s-]+/g, '_') : '';
+}
+
+/** @param {unknown} value */
+function isBlank(value) {
+  return typeof value !== 'string' || value.trim() === '';
+}
+
+/** @param {unknown} value */
+function isCents(value) {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+}
+
+/**
+ * Classify a recommendation. It is accepted only when every envelope condition holds; otherwise
+ * it is asked, and the reason names every rule that failed.
+ * @param {Rec|null|undefined} rec
+ * @param {{ envelope?: { maxCostCents?: number, humanOnly?: string[] } }} [project]
+ * @returns {Classification}
+ */
+function classify(rec, project) {
+  if (rec === null || typeof rec !== 'object') {
+    return { decision: 'ask', reason: 'no recommendation to classify' };
+  }
+  const envelope = project?.envelope ?? {};
+  const cap = isCents(envelope.maxCostCents) ? envelope.maxCostCents : 0;
+  const extra = Array.isArray(envelope.humanOnly) ? envelope.humanOnly.map(normaliseCategory) : [];
+  const humanOnly = new Set([...HUMAN_ONLY_CATEGORIES, ...extra].filter(Boolean));
+
+  const failed = [];
+
+  if (isBlank(rec.evidence)) failed.push('evidence is empty (an opinion is not evidence)');
+  if (isBlank(rec.wouldBeWrongIf)) failed.push('wouldBeWrongIf is empty (no way to tell it is wrong)');
+  if (rec.reversible !== true) failed.push('not reversible by one revert PR or one config edit');
+
+  if (!isCents(rec.costCents)) {
+    failed.push('cost is not a non-negative integer number of cents');
+  } else if (rec.costCents > cap) {
+    failed.push(`cost ${rec.costCents} cents is over the cap of ${cap} cents`);
+  }
+
+  const touches = Array.isArray(rec.touches) ? rec.touches.map(normaliseCategory) : [];
+  for (const t of PROTECTED_TOUCHES) {
+    if (touches.includes(t)) failed.push(`touches ${t}`);
+  }
+
+  const category = normaliseCategory(rec.category);
+  if (humanOnly.has(category)) failed.push(`category ${category} is human-only`);
+
+  if (failed.length > 0) return { decision: 'ask', reason: failed.join('; ') };
+
+  const costNote = rec.costCents === 0 ? 'no cost' : `cost ${rec.costCents} cents within the cap of ${cap}`;
+  return {
+    decision: 'accept',
+    reason: `inside the envelope: evidence given, reversible, ${costNote}, touches no invariant or fixed decision, category ${category || 'none'} is not human-only`,
+  };
+}
+
+/**
+ * Summarise a decision log. Reversal rate is reversed / all decisions, 0 for an empty log.
+ * @param {LedgerEntry[]} decisions
+ * @returns {{ accepted: number, asked: number, reversed: number, failures: number, reversalRate: number }}
+ */
+function ledger(decisions) {
+  if (!Array.isArray(decisions)) throw new TypeError('ledger: decisions must be an array');
+  let accepted = 0;
+  let asked = 0;
+  let reversed = 0;
+  let failures = 0;
+  for (const d of decisions) {
+    if (d?.decision === 'accept') accepted += 1;
+    else if (d?.decision === 'ask') asked += 1;
+    if (d?.reversedBy) reversed += 1;
+    if (d?.failed === true) failures += 1;
+  }
+  const reversalRate = decisions.length === 0 ? 0 : reversed / decisions.length;
+  return { accepted, asked, reversed, failures, reversalRate };
+}
+// @bundle-end envelope
+// @bundle-start ci
+// generated from claude/lib/ci.js by scripts/bundle-workflows.js: do not edit
+// CI wait: poll a pull request's checks in code and combine the result with the critic's verdict.
+// Pure functions with injected I/O (exec, sleep); scripts/wait-ci.js wires real gh and sleep.
+// No import and no export list, so scripts/bundle-workflows.js can copy this file into a workflow.
+// Reads or writes: reads (only `gh pr checks` and `gh run view`).
+
+/**
+ * @typedef {Object} ExecResult
+ * @property {number} code  process exit code (gh exits 8 while checks are pending and 1 on a failure)
+ * @property {string} stdout
+ * @property {string} [stderr]
+ */
+
+/**
+ * @typedef {Object} CiResult
+ * @property {'green'|'red'|'pending'|'missing'} state
+ * @property {string[]} failing  names of the failed or cancelled checks
+ * @property {string} logTail    tail of `gh run view --log-failed` for the failing runs, '' when none
+ * @property {number} polls      how many times the checks were read
+ */
+
+/**
+ * @typedef {Object} FixItem
+ * @property {number} n
+ * @property {string} what
+ * @property {string} provedBy
+ * @property {'defect'|'spec_miss'|'loop'} cause
+ */
+
+const CI_POLL_MS = 20000
+const CI_TIMEOUT_MS = 20 * 60 * 1000
+const CI_MISSING_MS = 2 * 60 * 1000
+const CI_LOG_TAIL_CHARS = 3000
+
+/**
+ * Parse the JSON array that `gh pr checks --json ...` prints. Returns null when stdout is not a JSON array
+ * (for example gh's "no checks reported" message, which goes to stderr with exit 1).
+ * @param {string} stdout
+ * @returns {Array<{name: string, bucket: string, link: string}> | null}
+ */
+function parseChecks(stdout) {
+  const text = String(stdout || '').trim()
+  if (!text) return null
+  try {
+    const data = JSON.parse(text)
+    return Array.isArray(data) ? data : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Wait for the checks of a pull request to settle.
+ *
+ * Polls `gh pr checks <n> --json name,state,bucket,link,workflow` every `pollMs` (default 20 s). Bucket `pass`
+ * is green, `skipping` is ignored, `fail` and `cancel` are red, `pending` (and any bucket gh may add later) is
+ * pending. stdout is parsed whatever the exit code. Stops when no check is pending, or after `timeoutMs`
+ * (default 20 min). No real check reported after `missingMs` (default 2 min) is `missing`: not the worker's fault.
+ * Time is counted from the sleeps, so tests need no clock; pass `now` to count real elapsed time instead.
+ *
+ * @param {number|string} prNumber
+ * @param {(command: string) => Promise<ExecResult>|ExecResult} exec runs one shell command, never throws on a non-zero exit
+ * @param {{ sleep: (ms: number) => Promise<void>|void, pollMs?: number, timeoutMs?: number, missingMs?: number, logTailChars?: number, now?: () => number }} opts
+ * @returns {Promise<CiResult>}
+ */
+async function waitForCi(prNumber, exec, opts) {
+  const o = opts || {}
+  if (typeof o.sleep !== 'function') throw new Error('waitForCi: opts.sleep is required')
+  const pollMs = o.pollMs ?? CI_POLL_MS
+  const timeoutMs = o.timeoutMs ?? CI_TIMEOUT_MS
+  const missingMs = Math.min(o.missingMs ?? CI_MISSING_MS, timeoutMs)
+  const tailChars = o.logTailChars ?? CI_LOG_TAIL_CHARS
+  const started = o.now ? o.now() : 0
+  let slept = 0
+  const elapsed = () => (o.now ? o.now() - started : slept)
+  const command = `gh pr checks ${prNumber} --json name,state,bucket,link,workflow`
+
+  let polls = 0
+  let lastError = ''
+  for (;;) {
+    const r = await exec(command)
+    polls++
+    const parsed = parseChecks(r.stdout)
+    if (parsed === null && (r.stderr || r.stdout)) lastError = String(r.stderr || r.stdout).trim().slice(0, 300)
+    // A skipping check is ignored; if nothing else is left, no real check has reported yet.
+    const checks = (parsed || []).filter((c) => c.bucket !== 'skipping')
+    const failed = checks.filter((c) => c.bucket === 'fail' || c.bucket === 'cancel')
+    const pending = checks.filter((c) => !['pass', 'fail', 'cancel'].includes(c.bucket))
+
+    if (checks.length > 0 && pending.length === 0) {
+      if (failed.length === 0) return { state: 'green', failing: [], logTail: '', polls }
+      return { state: 'red', failing: unique(failed.map((c) => c.name)), logTail: await failedLogTail(failed, exec, tailChars), polls }
+    }
+    if (checks.length === 0 && elapsed() >= missingMs) {
+      return { state: 'missing', failing: [], logTail: lastError, polls }
+    }
+    if (elapsed() >= timeoutMs) {
+      return { state: 'pending', failing: unique(failed.map((c) => c.name)), logTail: '', polls }
+    }
+    await o.sleep(pollMs)
+    slept += pollMs
+  }
+}
+
+/** @param {string[]} list */
+function unique(list) {
+  return [...new Set(list)]
+}
+
+/**
+ * Tail of the failed-step log of each failing run (one `gh run view` per distinct run id).
+ * @param {Array<{name: string, link: string}>} failed
+ * @param {(command: string) => Promise<ExecResult>|ExecResult} exec
+ * @param {number} tailChars
+ * @returns {Promise<string>}
+ */
+async function failedLogTail(failed, exec, tailChars) {
+  const runs = new Map()
+  for (const c of failed) {
+    const m = String(c.link || '').match(/\/actions\/runs\/(\d+)/)
+    if (!m) continue
+    if (!runs.has(m[1])) runs.set(m[1], [])
+    runs.get(m[1]).push(c.name)
+  }
+  const parts = []
+  for (const [id, names] of runs) {
+    const r = await exec(`gh run view ${id} --log-failed`)
+    const out = String(r.stdout || '')
+    if (r.code !== 0 && !out.trim()) {
+      parts.push(`[${names.join(', ')}] (log unavailable: ${String(r.stderr || `exit ${r.code}`).trim().slice(0, 200)})`)
+    } else {
+      parts.push(`[${names.join(', ')}]\n${out.slice(-tailChars).trim()}`)
+    }
+  }
+  if (parts.length === 0) return `(log unavailable: no run id in the check link of ${unique(failed.map((c) => c.name)).join(', ')})`
+  return parts.join('\n\n')
+}
+
+/**
+ * Combine the critic's verdict with the CI result. Pending or missing CI is never a FIX.
+ *
+ * MERGE + green merges; MERGE + red is FIX with the failing check; MERGE + pending or missing escalates.
+ * FIX stays FIX (a red CI appends its failing-check item to the critic's items); STOP stays STOP.
+ * An unknown verdict escalates, so nothing merges on a verdict this function does not know.
+ *
+ * @param {{ verdict: string, fixItems?: FixItem[] } | string} criticVerdict the critic's result, or just its verdict
+ * @param {{ state: string, failing?: string[], logTail?: string }} ci the waitForCi result
+ * @returns {{ action: 'merge'|'fix'|'escalate'|'stop', fixItems: FixItem[], reason: string }}
+ */
+function combineVerdict(criticVerdict, ci) {
+  const verdict = String(typeof criticVerdict === 'string' ? criticVerdict : criticVerdict?.verdict ?? '').toUpperCase()
+  const items = (typeof criticVerdict === 'object' && criticVerdict && Array.isArray(criticVerdict.fixItems) ? criticVerdict.fixItems : []).map((i) => ({ ...i }))
+  const state = ci?.state
+
+  if (verdict === 'STOP') return { action: 'stop', fixItems: items, reason: 'Critic returned STOP; CI does not change it.' }
+  if (verdict !== 'MERGE' && verdict !== 'FIX') {
+    return { action: 'escalate', fixItems: [], reason: `Unknown critic verdict "${verdict}"; nothing merges on it.` }
+  }
+
+  if (state === 'red') {
+    const names = (ci.failing || []).join(', ') || 'unnamed check'
+    const n = items.reduce((m, i) => Math.max(m, Number(i.n) || 0), 0) + 1
+    items.push({
+      n,
+      what: `CI failed on the PR head: ${names}.${ci.logTail ? `\n${ci.logTail}` : ''}`,
+      provedBy: 'CI green on the PR head',
+      cause: 'defect',
+    })
+    return {
+      action: 'fix',
+      fixItems: items,
+      reason: verdict === 'MERGE' ? `Critic returned MERGE but CI is red (${names}).` : `Critic returned FIX and CI is red (${names}); one round fixes both.`,
+    }
+  }
+  if (verdict === 'FIX') return { action: 'fix', fixItems: items, reason: `Critic returned FIX; CI is ${state}.` }
+
+  if (state === 'green') return { action: 'merge', fixItems: [], reason: 'Critic returned MERGE and CI is green.' }
+  if (state === 'pending') {
+    return { action: 'escalate', fixItems: [], reason: 'CI still pending after the timeout; this is not the worker\'s fault, so no FIX round.' }
+  }
+  if (state === 'missing') {
+    return { action: 'escalate', fixItems: [], reason: 'No CI checks were reported; this is not the worker\'s fault, so no FIX round and no merge.' }
+  }
+  return { action: 'escalate', fixItems: [], reason: `Unknown CI state "${state}"; nothing merges on it.` }
+}
+// @bundle-end ci
+// @bundle-start lane
+// generated from claude/lib/lane.js by scripts/bundle-workflows.js: do not edit
+// Fast-lane check: decides whether a task may skip the critic. Pure functions, no I/O: the workflow
+// supplies every input (changed files, added diff text, test counts, Decisions lines, the CI result),
+// the worker reports none of them. The rules are the spec's "Fast lane" fixed decision.
+// The path matcher here also serves the critic's owned-paths check.
+
+
+/**
+ * @typedef {Object} FastLaneConfig
+ * @property {boolean} [enabled]          default false; a human turns it on per project
+ * @property {string[]} [denyPaths]       path patterns no fast-lane task may touch (default DEFAULT_DENY_PATHS)
+ * @property {number} [maxPerWave]        default 3
+ * @property {string} [testCountCommand]  prints the test count; none configured means not eligible
+ */
+
+/**
+ * @typedef {Object} LaneInput
+ * @property {{ id?: string, lane?: string, owns?: string[]|string }} task
+ * @property {string[]} changedFiles     from `gh pr view --json files`
+ * @property {string} addedText          added lines of `gh pr diff`
+ * @property {string[]|string} decisions the PR body's `Decisions:` lines (id | choice | reason | reversible)
+ * @property {{ forbiddenStrings?: string[], fastLane?: FastLaneConfig }} project
+ * @property {{ state?: string }} ci     the waitForCi result
+ * @property {{ before: number, after: number }} testCount  from fastLane.testCountCommand on the default branch and on the PR head
+ * @property {number} laneUsedInWave     fast-lane tasks already taken in this wave
+ */
+
+const DEFAULT_MAX_PER_WAVE = 3;
+
+/**
+ * Used when the project sets no fastLane.denyPaths: the loop's own workflow files, hookify rules and
+ * agent prompts, plus CI definitions. A project that sets denyPaths replaces this list.
+ */
+const DEFAULT_DENY_PATHS = Object.freeze([
+  'claude/workflows/',
+  'claude/agents/',
+  'claude/hookify.*',
+  '.claude/',
+  '.github/workflows/',
+]);
+
+/** @param {string} p repo-relative path with forward slashes and no leading './' */
+function cleanPath(p) {
+  let s = String(p).trim().replace(/\\/g, '/');
+  while (s.startsWith('./')) s = s.slice(2);
+  return s.replace(/\/{2,}/g, '/');
+}
+
+/** True for paths that must never match anything: absolute, or with a '..' segment. */
+function escapes(p) {
+  return p.startsWith('/') || p.split('/').includes('..');
+}
+
+/** @param {string} pattern */
+function patternToRegExp(pattern) {
+  let source = '';
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === '*') {
+      if (pattern[i + 1] === '*') {
+        source += '.*';
+        i++;
+      } else {
+        source += '[^/]*';
+      }
+    } else {
+      source += c.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+    }
+  }
+  return new RegExp(`^${source}(?:/.*)?$`);
+}
+
+/**
+ * The one path matcher. `pattern` is a path prefix made of whole segments: 'scripts/' and 'scripts'
+ * both cover everything under scripts/, 'scripts/a.js' covers that file (not 'scripts/a.js.bak'), and
+ * '*' inside a segment is a wildcard ('claude/hookify.*', 'tests/fixtures/timings-*.json'; '**'
+ * crosses segments). Absolute paths, '..' segments and empty patterns never match.
+ * @param {string} file
+ * @param {string} pattern
+ * @returns {boolean}
+ */
+function matchesPath(file, pattern) {
+  const f = cleanPath(file);
+  const p = cleanPath(pattern).replace(/\/+$/, '');
+  if (f === '' || p === '' || p === '.' || escapes(f) || escapes(p)) return false;
+  return patternToRegExp(p).test(f);
+}
+
+/**
+ * Owns as the spec writes it is either a list of path prefixes or the task's prose with the paths in
+ * backticks; both give a list of patterns.
+ * @param {string[]|string|undefined|null} owns
+ * @returns {string[]}
+ */
+function parseOwns(owns) {
+  if (Array.isArray(owns)) return owns.filter((x) => typeof x === 'string' && x.trim() !== '').map((x) => x.trim());
+  if (typeof owns !== 'string') return [];
+  const ticked = [...owns.matchAll(/`([^`]+)`/g)].map((m) => m[1].trim()).filter(Boolean);
+  if (ticked.length > 0) return ticked;
+  return owns.split(/[,\s]+/).map((x) => x.replace(/[.;]+$/, '')).filter(Boolean);
+}
+
+/**
+ * Files that no Owns entry covers. Serves the fast-lane check and the critic's owned-paths check.
+ * @param {string[]} files
+ * @param {string[]|string} owns
+ * @returns {string[]}
+ */
+function filesOutsideOwns(files, owns) {
+  const patterns = parseOwns(owns);
+  return (files || []).filter((f) => !patterns.some((p) => matchesPath(f, p)));
+}
+
+/** Decisions: lines of `id | choice | reason | reversible`, with list markers, blanks and the heading ignored. */
+function decisionLines(decisions) {
+  const raw = Array.isArray(decisions) ? decisions : typeof decisions === 'string' ? decisions.split(/\r?\n/) : [];
+  return raw
+    .map((l) => String(l).trim().replace(/^[-*]\s+/, ''))
+    .filter((l) => l !== '' && !/^decisions:?$/i.test(l) && !/^(none|n\/a)\.?$/i.test(l));
+}
+
+const HUMAN_ONLY_WORDS = HUMAN_ONLY_CATEGORIES
+  // 'invariant' and 'fixed_decision' appear in benign sentences ("touches no invariant"); the deny
+  // paths and the forbidden strings guard those, and the critic's STOP rule still applies elsewhere.
+  .filter((c) => c !== 'invariant' && c !== 'fixed_decision')
+  .map((c) => c.replace(/_/g, ' '));
+
+/**
+ * Check the PR's Decisions lines against the envelope (claude/lib/envelope.js). A line carries no
+ * category, cost or touches, so those are checked from what it does carry: it must be readable,
+ * reversible, give a reason, and name no human-only category as a whole word.
+ * @returns {string|null} the first problem, or null
+ */
+function decisionProblem(decisions) {
+  for (const line of decisionLines(decisions)) {
+    const parts = line.split('|').map((x) => x.trim());
+    if (parts.length !== 4 || !parts[0] || !parts[1]) {
+      return `Decisions line cannot be read as "id | choice | reason | reversible": "${line}"`;
+    }
+    const [id, choice, reason, reversible] = parts;
+    const verdict = classify({
+      id,
+      text: choice,
+      evidence: reason,
+      // The line has no field for it; CI and the default-branch check are the observation that would show it wrong.
+      wouldBeWrongIf: 'CI or the check on the default branch fails',
+      reverseCost: 'one revert PR',
+      reversible: /^(true|yes|y)$/i.test(reversible),
+      costCents: 0,
+      touches: [],
+      category: '',
+    });
+    if (verdict.decision !== 'accept') return `decision ${id} is outside the envelope: ${verdict.reason}`;
+    const text = `${choice} ${reason}`.toLowerCase();
+    const hit = HUMAN_ONLY_WORDS.find((w) => new RegExp(`(^|[^a-z])${w}([^a-z]|$)`).test(text));
+    if (hit) return `decision ${id} is outside the envelope: it names the human-only category "${hit}"`;
+  }
+  return null;
+}
+
+/**
+ * Decide whether a task may take the fast lane (skip the critic).
+ * @param {LaneInput} input
+ * @returns {{ eligible: boolean, reason: string }}
+ */
+function fastLaneEligible(input) {
+  const { task, changedFiles, addedText, decisions, project, ci, testCount, laneUsedInWave } = input || {};
+  const no = (reason) => ({ eligible: false, reason });
+  const cfg = project?.fastLane ?? {};
+
+  if (cfg.enabled !== true) return no('fastLane.enabled is not true for this project');
+  if (task?.lane !== 'fast') return no('the task is not marked Lane: fast (default normal)');
+
+  const cap = Number.isInteger(cfg.maxPerWave) && cfg.maxPerWave >= 0 ? cfg.maxPerWave : DEFAULT_MAX_PER_WAVE;
+  const used = Number.isInteger(laneUsedInWave) && laneUsedInWave > 0 ? laneUsedInWave : 0;
+  if (used >= cap) return no(`the per-wave fast-lane cap is reached (${used} of ${cap})`);
+
+  if (typeof cfg.testCountCommand !== 'string' || cfg.testCountCommand.trim() === '') {
+    return no('no fastLane.testCountCommand is configured, so the test count cannot be compared');
+  }
+
+  const files = Array.isArray(changedFiles) ? changedFiles : [];
+  if (files.length === 0) return no('no changed files were reported for the PR');
+
+  const outside = filesOutsideOwns(files, task.owns);
+  if (outside.length > 0) return no(`changed files outside Owns: ${outside.join(', ')}`);
+
+  const deny = Array.isArray(cfg.denyPaths) ? cfg.denyPaths : DEFAULT_DENY_PATHS;
+  const denied = files.filter((f) => deny.some((p) => matchesPath(f, p)));
+  if (denied.length > 0) return no(`changed files under denyPaths: ${denied.join(', ')}`);
+
+  const haystack = String(addedText ?? '').toLowerCase();
+  const forbidden = (project?.forbiddenStrings ?? []).filter((s) => typeof s === 'string' && s !== '' && haystack.includes(s.toLowerCase()));
+  if (forbidden.length > 0) return no(`the added text contains a forbidden string: ${forbidden.join(', ')}`);
+
+  if (ci?.state !== 'green') return no(`CI is not green (${ci?.state ?? 'no result'})`);
+
+  const { before, after } = testCount ?? {};
+  if (!Number.isFinite(before) || !Number.isFinite(after)) return no('the test count is missing or not a number');
+  if (after < before) return no(`test count fell from ${before} to ${after}`);
+
+  const problem = decisionProblem(decisions);
+  if (problem) return no(problem);
+
+  return {
+    eligible: true,
+    reason: `fast lane: ${files.length} file(s) inside Owns, none denied, no forbidden string, CI green, test count ${before} to ${after}, decisions inside the envelope (${used + 1} of ${cap} this wave)`,
+  };
+}
+// @bundle-end lane
 
 // Full model ids, so the scorecard baseline cannot drift (verified on the Workflow runtime 2026-11-01).
 const DEFAULT_MODELS = {
@@ -289,6 +848,15 @@ const WAVE = String(args.wave)
 const TASKS = args.tasks || []
 const TAIL = args.tail || null
 const REALITY_CHECK = P.realityCheck || null
+// v2.1: CI and the merge are scripts in the loop checkout, each run by one relay agent.
+const SCRIPTS = P.loopScripts || `${REPO}/.claude/scripts`
+const MERGER_AGENT = P.merger === 'agent' // the v2 merger agent, kept as the rollback
+const FAST_LANE = P.fastLane || {}
+// A fast-lane task needs a test-count command; without one nothing is eligible, so such a task keeps the normal path.
+const FAST_LANE_ON = FAST_LANE.enabled === true && typeof FAST_LANE.testCountCommand === 'string' && FAST_LANE.testCountCommand.trim() !== ''
+const FAST_LANE_CAP = Number.isInteger(FAST_LANE.maxPerWave) && FAST_LANE.maxPerWave >= 0 ? FAST_LANE.maxPerWave : DEFAULT_MAX_PER_WAVE
+const CI_FIX_WAIT_MIN = 5 // on a FIX verdict the workflow waits at most this long for a CI result still running
+const CI_TIMEOUT_NOTE = 'the 20-minute wait-ci.js timeout'
 
 // Before anything starts: a bad reality config or gate list fails now, not after a whole wave has run.
 if (REALITY_CHECK) {
@@ -361,7 +929,6 @@ const CRITIC_SCHEMA = {
   type: 'object',
   properties: {
     verdict: { type: 'string', enum: ['MERGE', 'FIX', 'STOP'] },
-    ciState: { type: 'string', enum: ['green', 'red', 'pending', 'missing'] },
     prHeadSha: { type: 'string' },
     checklist: {
       type: 'array',
@@ -391,7 +958,7 @@ const CRITIC_SCHEMA = {
     stopSection: { type: 'string' },
     notes: { type: 'string' },
   },
-  required: ['verdict', 'ciState', 'checklist', 'fixItems', 'notes'],
+  required: ['verdict', 'checklist', 'fixItems', 'notes'],
 }
 
 const REALITY_SCHEMA = {
@@ -416,6 +983,34 @@ const MERGER_SCHEMA = {
     details: { type: 'string' },
   },
   required: ['outcome', 'details'],
+}
+
+// A relay agent runs exactly one command and returns what it printed; the workflow reads the JSON line itself.
+const RELAY_SCHEMA = {
+  type: 'object',
+  properties: {
+    status: { type: 'string', enum: ['ran', 'blocked'] },
+    exitCode: { type: 'integer' },
+    stdout: { type: 'string' },
+    note: { type: 'string' },
+  },
+  required: ['status'],
+}
+
+// The fast-lane facts the workflow cannot read itself (it has no shell). Test counts come back as the command's raw
+// output and are parsed in code.
+const FACTS_SCHEMA = {
+  type: 'object',
+  properties: {
+    status: { type: 'string', enum: ['ran', 'blocked'] },
+    changedFiles: { type: 'array', items: { type: 'string' } },
+    addedText: { type: 'string' },
+    decisions: { type: 'array', items: { type: 'string' } },
+    testCountBeforeOut: { type: 'string' },
+    testCountAfterOut: { type: 'string' },
+    note: { type: 'string' },
+  },
+  required: ['status'],
 }
 
 function wtPath(t) {
@@ -490,7 +1085,7 @@ function criticChecklist() {
     `Only owned paths changed (plus ${SIDE_FILES_SHORT} and merge commits from origin/main).`,
     `No test touches the network or a paid API; no .skip, .only, or disabled test, and no lowered test count.`,
     `No street address, real person, secret${FORBIDDEN ? ' or project-confidential string' : ''} anywhere in the diff.`,
-    `CI is green on the PR head.`,
+    `CI result supplied by the workflow; n/a. The workflow waits for CI in code and combines it with your verdict. Record n/a with pass.`,
     `The task's own acceptance criteria and every fixed decision it touches are met exactly as the spec states (names, counts, columns, enums, the Done line). Treat a deviation from the spec as a FIX item.`,
     CRITIC_EXTRA.length
       ? `Each of the project's own critic checks, in order (one result for this item, with each check's result in the evidence; it fails if any listed check fails):\n${CRITIC_EXTRA.map((s, i) => `   7.${i + 1} ${s}`).join('\n')}`
@@ -506,10 +1101,9 @@ Review PR #${w.prNumber} (${w.prUrl || ''}, branch ${w.branch}) for task ${t.id}
 Task text: ${t.text}
 Owned paths for this task: ${t.owns}. Task notes given to the worker: ${t.notes || 'none'}
 Work from ${REPO} on main without checking anything out: gh pr diff ${w.prNumber}, gh pr view ${w.prNumber}, gh pr view ${w.prNumber} --json commits,files, and PR comments if round > 1. Read the spec sections the task names and compare the diff against them line by line. Do not run ${CHECK} locally and do not edit any file or branch.
-CI: run gh pr checks ${w.prNumber} --watch --fail-fast (allow up to 15 minutes). If GitHub reports no checks at all, record ciState "missing"; that is not the worker's fault.
 Apply the checklist in order and record pass/fail with evidence for each item; record "n/a" with pass when an item does not apply to this task:
 ${criticChecklist()}
-Verdict: MERGE if every applicable item passes and CI is green. FIX lists numbered items each with the check that proves it and a cause (defect, spec_miss or loop); be complete in one pass, the worker gets at most ${FIX_ROUNDS} rounds. STOP only if the spec itself is wrong or contradictory; name the section. If CI is pending or missing after the wait, do not return MERGE; return FIX with cause "loop" for the CI item plus anything else you found.`
+Verdict: MERGE if every applicable item passes. FIX lists numbered items each with the check that proves it and a cause (defect, spec_miss or loop); be complete in one pass, the worker gets at most ${FIX_ROUNDS} rounds. STOP only if the spec itself is wrong or contradictory; name the section. Do not watch or wait for CI and do not look at its status: the workflow waits for CI itself and combines the result with your verdict.`
 }
 
 function mergerPrompt(t, w, critic) {
@@ -592,50 +1186,376 @@ function withMergeLock(fn) {
 
 const results = {}
 
-function roundRecord(round, critic) {
+function roundRecord(round, critic, ci) {
   return {
     round,
     verdict: critic ? critic.verdict : null,
-    ci: critic ? critic.ciState : null,
+    ci: ci ? ci.state : null,
     fixItems: critic ? critic.fixItems : [],
     notes: critic ? critic.notes : null,
     checklist: critic ? critic.checklist : [],
   }
 }
 
-async function reviewLoop(t, initialWorker, ph) {
-  let w = initialWorker
-  let critic = null
-  for (let round = 1; round <= FIX_ROUNDS; round++) {
-    critic = await callCritic(criticPrompt(t, w, round), { label: `critic:${t.id} r${round}`, phase: ph.review, schema: CRITIC_SCHEMA })
-    results[t.id].rounds.push(roundRecord(round, critic))
-    if (!critic) {
-      escalate(t.id, 'critic agent returned nothing', 'Relaunch the wave; it re-runs only parked tasks.')
-      return { w, critic: null }
+// ---- Relays: one low-cost agent runs one command and hands back its stdout and exit code. ----
+// The workflow parses the JSON line itself and never trusts a summary typed by the relay.
+const RELAY_MODEL = MODELS.merger
+
+function relayPrompt(command) {
+  return `You are a relay for the ${NAME} repository. You run exactly one shell command and report what it printed. You do not interpret, summarise, repair or retry anything.
+Run exactly this command with the Bash tool from ${REPO} (cd there first):
+${command}
+It can take many minutes. You may run it with run_in_background set to true; if you do, wait for its completion notification, then read its output file. Do not poll in a loop, and never run a second copy of the command.
+Run no other command except cd. Do not edit any file, branch or setting. If the command fails, report that; do not retry it and do not try another way.
+If the permission system denies the command, or the tool refuses to run it, return status "blocked" with the denial text in note, and stop.
+Otherwise return status "ran", exitCode as the command's exit code, and stdout as exactly what the command printed on stdout (verbatim: nothing added, removed, reordered or summarised).`
+}
+
+async function relay(command, label, phaseName) {
+  const r = await agent(relayPrompt(command), { label, phase: phaseName, schema: RELAY_SCHEMA, ...RELAY_MODEL })
+  if (!r) return { status: 'none' }
+  if (r.status === 'blocked') return { status: 'blocked', note: r.note || '' }
+  return { status: 'ran', exitCode: Number.isInteger(r.exitCode) ? r.exitCode : null, stdout: String(r.stdout == null ? '' : r.stdout), note: r.note || '' }
+}
+
+// The last line of stdout that is a JSON object; the scripts print exactly one.
+function parseJsonLine(text) {
+  const lines = String(text || '').split('\n')
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const l = lines[i].trim()
+    if (!l.startsWith('{') || !l.endsWith('}')) continue
+    try {
+      const v = JSON.parse(l)
+      if (v && typeof v === 'object' && !Array.isArray(v)) return v
+    } catch {
+      // not JSON: keep looking
     }
-    log(`${t.id} critic round ${round}: ${critic.verdict} (CI ${critic.ciState})`)
-    if (critic.verdict === 'MERGE') return { w, critic }
-    if (critic.verdict === 'STOP') {
-      escalate(t.id, 'critic STOP', critic.stopSection || critic.notes)
-      return { w, critic }
+  }
+  return null
+}
+
+function tailOf(text, n) {
+  const t = String(text || '').trim()
+  return t.length > n ? '...' + t.slice(-n) : t
+}
+
+// Elapsed times come from the scripts' JSON lines (this script has no clock); only numbers are added.
+const timings = {}
+function addTiming(id, key, ms) {
+  if (typeof ms !== 'number' || !isFinite(ms)) return
+  const o = timings[id] || (timings[id] = {})
+  o[key] = (o[key] || 0) + ms
+}
+
+const taskStates = {}
+function taskState(t) {
+  return taskStates[t.id] || (taskStates[t.id] = { criticUsed: false, fastFixUsed: false, laneCounted: false, conflictFixes: 0 })
+}
+let fastLaneUsed = 0 // fast-lane tasks found eligible in this wave; incremented in the same step as the eligibility call
+
+const CI_STATES = ['green', 'red', 'pending', 'missing']
+function roundLabel(tag) {
+  return tag === 'reopen' ? 'reopen' : `r${tag}`
+}
+
+// Wait for the PR's CI through wait-ci.js. A result with no parseable JSON line is run once more; a block or an empty
+// relay result is not retried. Never throws for those cases: { ok: false, what, question } says what to escalate.
+async function awaitCi(t, w, tag, ph, bounded) {
+  const command = `node ${SCRIPTS}/wait-ci.js ${w.prNumber} --repo ${REPO}${bounded ? ` --timeout-min ${CI_FIX_WAIT_MIN}` : ''}`
+  const base = `ci:${t.id} ${roundLabel(tag)}${bounded ? ' fix' : ''}`
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const rr = await relay(command, attempt ? `${base} retry` : base, ph.review)
+    if (rr.status === 'blocked') {
+      return { ok: false, what: `CI relay blocked: ${command}`, question: `The permission system refused ${command}${rr.note ? ` (${rr.note})` : ''}. Allow it or run it by hand, then relaunch the wave.` }
+    }
+    if (rr.status === 'none') return { ok: false, what: 'CI relay returned nothing', question: `Relaunch the wave; it re-runs only parked tasks. Command: ${command}` }
+    const line = parseJsonLine(rr.stdout)
+    if (line && CI_STATES.includes(line.state)) {
+      const ci = { state: line.state, failing: Array.isArray(line.failing) ? line.failing : [], logTail: String(line.logTail || ''), polls: line.polls }
+      return { ok: true, ci, elapsedMs: line.elapsedMs }
+    }
+  }
+  return { ok: false, what: 'wait-ci.js printed no JSON line twice', question: `Run ${command} by hand and relaunch the wave.` }
+}
+
+function parseCount(out) {
+  const m = String(out || '').match(/\d+/g)
+  return m ? Number(m[m.length - 1]) : NaN
+}
+
+function factsPrompt(t, w) {
+  const n = w.prNumber
+  const wt = w.worktree || wtPath(t)
+  const cmd = FAST_LANE.testCountCommand
+  return `You gather facts about one pull request of the ${NAME} repository for a deterministic check. You run read-only commands and report their output. You do not interpret it, edit any file, or run any other command except cd.
+Work from ${REPO} (cd there first). Run these commands, one after the other:
+1. gh pr view ${n} --json files -q '.files[].path'  -> changedFiles: one array entry per path.
+2. gh pr diff ${n}  -> addedText: every added line (lines starting with a single + that are not the +++ header), the leading + removed, joined with newlines, verbatim.
+3. gh pr view ${n} --json body -q .body  -> decisions: the lines under the Decisions: heading of the PR body, up to the first blank line or the next heading, verbatim, one array entry per line; an empty array when there is no such block.
+4. cd ${REPO} && ${cmd}  -> testCountBeforeOut: its stdout, verbatim.
+5. cd ${wt} && ${cmd}  -> testCountAfterOut: its stdout, verbatim.
+If the permission system denies a command, or a command cannot be run, return status "blocked" with the reason in note and stop; do not try another way. Otherwise return status "ran" with the five fields.`
+}
+
+async function gatherFacts(t, w, tag, ph) {
+  const r = await agent(factsPrompt(t, w), { label: `facts:${t.id} ${roundLabel(tag)}`, phase: ph.review, schema: FACTS_SCHEMA, ...RELAY_MODEL })
+  if (!r || r.status !== 'ran' || !Array.isArray(r.changedFiles)) return null
+  return {
+    changedFiles: r.changedFiles,
+    addedText: String(r.addedText || ''),
+    decisions: Array.isArray(r.decisions) ? r.decisions : [],
+    testCount: { before: parseCount(r.testCountBeforeOut), after: parseCount(r.testCountAfterOut) },
+  }
+}
+
+// Escalation text for a CI result that is neither green nor red.
+function ciEscalation(decision, ci) {
+  if (ci.state === 'pending') return { what: `CI still pending after ${CI_TIMEOUT_NOTE} (pending-CI timeout); not the worker's fault, so no FIX round`, question: 'Check why the CI run is stuck or queued, then relaunch the wave; it re-runs only parked tasks.' }
+  if (ci.state === 'missing') return { what: 'no CI checks were reported (missing); not the worker\'s fault, so no FIX round and no merge', question: 'Check that the PR triggers CI, then relaunch the wave.' }
+  return { what: decision.reason, question: 'See the workflow transcript.' }
+}
+
+// One review round: the critic and the CI wait run in parallel, combineVerdict decides.
+// Returns { action: 'merge'|'fix'|'stop'|'nocritic'|'escalate', critic, ci, fixItems, notes, what, question }.
+async function reviewRound(t, w, tag, ph) {
+  const st = taskState(t)
+  const rec = (critic, ci, extra) => results[t.id].rounds.push({ ...roundRecord(tag, critic, ci), ...(extra || {}) })
+  const criticCall = () => callCritic(criticPrompt(t, w, tag), { label: `critic:${t.id} ${roundLabel(tag)}`, phase: ph.review, schema: CRITIC_SCHEMA })
+  let critic = null
+  let ci = null
+  let ciP = null
+
+  const ownCount = st.laneCounted ? 1 : 0
+  if (t.lane === 'fast' && FAST_LANE_ON && !st.criticUsed && fastLaneUsed - ownCount < FAST_LANE_CAP) {
+    // Fast lane: no critic is started beside the CI wait. The facts are gathered in parallel with it.
+    const ciFirst = awaitCi(t, w, tag, ph, false)
+    const factsP = gatherFacts(t, w, tag, ph)
+    factsP.catch(() => {})
+    const c = await ciFirst
+    if (!c.ok) {
+      rec(null, null)
+      return { action: 'escalate', what: c.what, question: c.question }
+    }
+    ci = c.ci
+    addTiming(t.id, 'ciWaitMs', c.elapsedMs)
+    if (ci.state === 'red') {
+      if (st.fastFixUsed) {
+        rec(null, ci, { lane: 'fast' })
+        return { action: 'escalate', what: 'fast-lane task: CI is red again after its one FIX round', question: `Failing: ${ci.failing.join(', ') || 'unnamed check'}. Look at the PR and relaunch.` }
+      }
+      st.fastFixUsed = true
+      const d = combineVerdict({ verdict: 'FIX', fixItems: [] }, ci)
+      rec({ verdict: 'FIX', fixItems: d.fixItems, notes: d.reason, checklist: [] }, ci, { lane: 'fast' })
+      return { action: 'fix', fixItems: d.fixItems, notes: d.reason }
+    }
+    if (ci.state !== 'green') {
+      const d = combineVerdict('MERGE', ci)
+      rec(null, ci, { lane: 'fast' })
+      return { action: 'escalate', ...ciEscalation(d, ci) }
+    }
+    const facts = await factsP
+    if (facts) {
+      const lane = fastLaneEligible({
+        task: { id: t.id, lane: t.lane, owns: t.owns },
+        changedFiles: facts.changedFiles,
+        addedText: facts.addedText,
+        decisions: facts.decisions,
+        project: P,
+        ci,
+        testCount: facts.testCount,
+        laneUsedInWave: fastLaneUsed - ownCount,
+      })
+      if (lane.eligible) {
+        if (!st.laneCounted) {
+          st.laneCounted = true
+          fastLaneUsed++
+        }
+        rec({ verdict: 'MERGE', fixItems: [], notes: lane.reason, checklist: [] }, ci, { lane: 'fast' })
+        log(`${t.id}: ${lane.reason}`)
+        return { action: 'merge', critic: null, ci }
+      }
+      log(`${t.id}: not fast lane, the critic reviews it: ${lane.reason}`)
+    } else {
+      log(`${t.id}: fast-lane facts unavailable, the critic reviews it`)
+    }
+    critic = await criticCall()
+  } else {
+    ciP = awaitCi(t, w, tag, ph, false)
+    ciP.catch(() => {})
+    critic = await criticCall()
+  }
+  st.criticUsed = true
+
+  if (!critic) {
+    rec(null, null)
+    return { action: 'nocritic' }
+  }
+  log(`${t.id} critic round ${tag}: ${critic.verdict}`)
+  if (critic.verdict === 'STOP') {
+    // CI does not change a STOP, so the workflow does not wait for it.
+    rec(critic, null)
+    return { action: 'stop', critic }
+  }
+  if (!ci) {
+    let res
+    if (critic.verdict === 'MERGE') {
+      res = await ciP
+    } else {
+      // FIX: wait for a CI result still running for at most CI_FIX_WAIT_MIN more minutes, then start the fix round.
+      const NOT_YET = {}
+      const peek = await Promise.race([ciP, Promise.resolve(NOT_YET)])
+      if (peek !== NOT_YET) {
+        res = peek
+      } else {
+        const bounded = awaitCi(t, w, tag, ph, true)
+        bounded.catch(() => {})
+        res = await Promise.race([ciP, bounded])
+      }
+    }
+    if (!res.ok) {
+      rec(critic, null)
+      return { action: 'escalate', critic, what: res.what, question: res.question }
+    }
+    ci = res.ci
+    addTiming(t.id, 'ciWaitMs', res.elapsedMs)
+  }
+  const d = combineVerdict(critic, ci)
+  rec(critic, ci)
+  if (d.action === 'merge') return { action: 'merge', critic, ci }
+  if (d.action === 'fix') return { action: 'fix', critic, ci, fixItems: d.fixItems, notes: critic.notes }
+  return { action: 'escalate', critic, ci, ...ciEscalation(d, ci) }
+}
+
+// ---- Merge: merge-pr.js through a relay (or the v2 merger agent when project.merger = 'agent'). ----
+let mergeBlocked = null // set when a merge relay is blocked; later merge relays then escalate without running
+
+function failedMerge(r, what, question, line) {
+  r.merge = { outcome: 'failed', details: line && line.message ? line.message : question, script: line || null }
+  return { kind: 'failed', what, question }
+}
+
+// Returns { kind: 'merged'|'reverted' } with r.merge set, { kind: 'failed', what, question }, or
+// { kind: 'fix', fixItems, notes } when the script refused for a reason one worker round can fix.
+async function mergeStep(t, w, rr, ph, reopen) {
+  const r = results[t.id]
+  const st = taskState(t)
+  const label = `merger:${t.id}${reopen ? ' reopen' : ''}`
+  if (MERGER_AGENT) {
+    const m = await withMergeLock(() => agent(mergerPrompt(t, w, rr.critic || {}), { label, phase: ph.merge, schema: MERGER_SCHEMA, ...MODELS.merger }))
+    r.merge = m
+    if (!m) return { kind: 'failed', what: 'merger agent returned nothing', question: 'Check the PR state by hand and relaunch.' }
+    if (m.outcome === 'failed') return { kind: 'failed', what: 'merge failed', question: m.details }
+    return { kind: m.outcome === 'merged' ? 'merged' : 'reverted' }
+  }
+
+  const command = `node ${SCRIPTS}/merge-pr.js ${w.prNumber} --repo ${REPO} --worktree ${w.worktree || wtPath(t)}`
+  const rr0 = await withMergeLock(async () => {
+    if (mergeBlocked) return { status: 'skipped' }
+    const x = await relay(command, label, ph.merge)
+    if (x.status === 'blocked') mergeBlocked = { command, note: x.note }
+    return x
+  })
+  if (rr0.status === 'skipped') {
+    return failedMerge(r, 'merge not run: a merge relay was blocked earlier in this wave', `Not run: ${command}. The earlier block was for ${mergeBlocked.command}${mergeBlocked.note ? ` (${mergeBlocked.note})` : ''}. Allow it, then relaunch the wave.`)
+  }
+  if (rr0.status === 'blocked') {
+    return failedMerge(r, `merge relay blocked: ${command}`, `The permission system refused ${command}${rr0.note ? ` (${rr0.note})` : ''}. It was not retried and no other way was tried. Allow it or merge PR #${w.prNumber} by hand, then relaunch.`)
+  }
+  if (rr0.status === 'none') {
+    r.merge = null
+    return { kind: 'failed', what: 'merge relay returned nothing', question: `Check the state of PR #${w.prNumber} by hand and relaunch; the merge was not re-run.` }
+  }
+  const line = parseJsonLine(rr0.stdout)
+  if (!line || typeof line.outcome !== 'string') {
+    return failedMerge(
+      r,
+      `merge-pr.js printed no JSON line (not re-run): ${command}`,
+      `The merge was not re-run, because a second run on a merged PR reports "refused". Check the state of PR #${w.prNumber} (gh pr view ${w.prNumber} --json state,mergeCommit) and the default branch by hand. Relay exit code ${rr0.exitCode}; output tail: ${tailOf(rr0.stdout, 300) || '(empty)'}`,
+    )
+  }
+  addTiming(t.id, 'ciWaitMs', line.ciWaitMs)
+  addTiming(t.id, 'mergeMs', line.mergeMs)
+  addTiming(t.id, 'mainCheckMs', line.mainCheckMs)
+  const exit = Number.isInteger(line.exit) ? line.exit : rr0.exitCode
+  const message = String(line.message || '')
+
+  if (exit === 0 && line.outcome === 'merged') {
+    r.merge = { outcome: 'merged', mergeSha: line.mergeSha, mainSha: line.mainSha, checkOnMainExitCode: 0, checkOnMainTail: '', revertPrUrl: '', details: message, script: line }
+    return { kind: 'merged' }
+  }
+  if (exit === 3) {
+    r.merge = { outcome: 'reverted', mergeSha: line.mergeSha, mainSha: line.mainSha, checkOnMainExitCode: 1, checkOnMainTail: String(line.logTail || ''), revertPrUrl: line.revertPrUrl || '', details: message, script: line }
+    return { kind: 'reverted' }
+  }
+  if (exit === 2) {
+    const files = Array.isArray(line.conflictFiles) ? line.conflictFiles : []
+    if (files.length) {
+      if (st.conflictFixes >= 1) return failedMerge(r, 'sync conflict again after the conflict fix round', message || files.join(', '), line)
+      st.conflictFixes++
+      r.merge = { outcome: 'failed', details: message, script: line }
+      return {
+        kind: 'fix',
+        fixItems: [{ n: 1, what: `Merging the default branch into the branch conflicts in: ${files.join(', ')}. ${SYNC_CONFLICTS}`, provedBy: 'merge-pr.js syncs the branch without a conflict', cause: 'loop' }],
+        notes: `merge-pr.js refused PR #${w.prNumber}: ${message}`,
+      }
+    }
+    if (line.ciState === 'red') {
+      const d = combineVerdict({ verdict: 'FIX', fixItems: [] }, { state: 'red', failing: Array.isArray(line.failing) ? line.failing : [], logTail: String(line.logTail || '') })
+      r.merge = { outcome: 'failed', details: message, script: line }
+      return { kind: 'fix', fixItems: d.fixItems, notes: `merge-pr.js refused PR #${w.prNumber}: ${message}` }
+    }
+    const pending = line.ciState === 'pending'
+    return failedMerge(r, pending ? `merge refused: CI still pending (pending-CI timeout)` : 'merge failed', message, line)
+  }
+  return failedMerge(r, `merge failed (exit ${exit})`, message, line)
+}
+
+// Review and merge until the PR is merged, reverted or parked. Returns { w, state: 'merged'|'reverted'|'parked' }.
+async function reviewAndMerge(t, initialWorker, ph) {
+  let w = initialWorker
+  for (let round = 1; round <= FIX_ROUNDS; round++) {
+    const rr = await reviewRound(t, w, round, ph)
+    let items
+    let notes
+    if (rr.action === 'merge') {
+      const m = await mergeStep(t, w, rr, ph, false)
+      if (m.kind === 'merged' || m.kind === 'reverted') return { w, state: m.kind }
+      if (m.kind === 'failed') {
+        escalate(t.id, m.what, m.question)
+        return { w, state: 'parked' }
+      }
+      items = m.fixItems
+      notes = m.notes
+    } else if (rr.action === 'fix') {
+      items = rr.fixItems
+      notes = rr.notes
+    } else if (rr.action === 'nocritic') {
+      escalate(t.id, 'critic agent returned nothing', 'Relaunch the wave; it re-runs only parked tasks.')
+      return { w, state: 'parked' }
+    } else if (rr.action === 'stop') {
+      escalate(t.id, 'critic STOP', rr.critic.stopSection || rr.critic.notes)
+      return { w, state: 'parked' }
+    } else {
+      escalate(t.id, rr.what, rr.question)
+      return { w, state: 'parked' }
     }
     if (round === FIX_ROUNDS) {
-      escalate(t.id, 'another fix round would be needed', critic.fixItems.map((i) => `${i.n}. ${i.what}`).join('; '))
-      return { w, critic }
+      escalate(t.id, 'another fix round would be needed', items.map((i) => `${i.n}. ${i.what}`).join('; '))
+      return { w, state: 'parked' }
     }
-    let next = await agent(fixPrompt(t, w, critic, round), { label: `worker:${t.id} fix${round}`, phase: ph.build, schema: WORKER_SCHEMA, ...MODELS.worker })
+    let next = await agent(fixPrompt(t, w, { fixItems: items, notes }, round), { label: `worker:${t.id} fix${round}`, phase: ph.build, schema: WORKER_SCHEMA, ...MODELS.worker })
     if (next) next = await finishIfUnfinished(t, { ...next, prNumber: next.prNumber || w.prNumber, prUrl: next.prUrl || w.prUrl, branch: next.branch || w.branch, worktree: next.worktree || w.worktree }, ph, `fix${round}`)
     if (!next) {
       escalate(t.id, 'worker agent returned nothing on a fix round', 'Relaunch the wave.')
-      return { w, critic }
+      return { w, state: 'parked' }
     }
     if (next.status === 'blocked') {
       escalate(t.id, 'worker blocked on a fix round', next.questions.join('; '))
-      return { w: next, critic }
+      return { w: next, state: 'parked' }
     }
     w = { ...next, prNumber: next.prNumber || w.prNumber, prUrl: next.prUrl || w.prUrl, branch: next.branch || w.branch, worktree: next.worktree || w.worktree }
   }
-  return { w, critic }
+  return { w, state: 'parked' }
 }
 
 async function runTask(t, ph) {
@@ -661,18 +1581,9 @@ async function runTask(t, ph) {
     return r
   }
   log(`${t.id}: PR #${worker.prNumber} opened on ${worker.branch}; local check exit ${worker.checkExitCode}`)
-  const { w, critic } = await reviewLoop(t, worker, ph)
-  if (!critic || critic.verdict !== 'MERGE') return r
-  r.merge = await withMergeLock(() => agent(mergerPrompt(t, w, critic), { label: `merger:${t.id}`, phase: ph.merge, schema: MERGER_SCHEMA, ...MODELS.merger }))
-  if (!r.merge) {
-    escalate(t.id, 'merger agent returned nothing', 'Check the PR state by hand and relaunch.')
-    return r
-  }
-  if (r.merge.outcome === 'failed') {
-    escalate(t.id, 'merge failed', r.merge.details)
-    return r
-  }
-  if (r.merge.outcome === 'merged') {
+  const { w, state: outcome } = await reviewAndMerge(t, worker, ph)
+  if (outcome === 'parked') return r
+  if (outcome === 'merged') {
     r.merged = true
     log(`${t.id}: merged at ${r.merge.mergeSha}, check on main exit ${r.merge.checkOnMainExitCode}`)
     return r
@@ -691,16 +1602,18 @@ async function runTask(t, ph) {
     return r
   }
   const w2 = { ...again, prNumber: again.prNumber || w.prNumber, prUrl: again.prUrl || w.prUrl, branch: again.branch || w.branch, worktree: again.worktree || w.worktree }
-  const critic2 = await callCritic(criticPrompt(t, w2, 'reopen'), { label: `critic:${t.id} reopen`, phase: ph.review, schema: CRITIC_SCHEMA })
-  r.rounds.push(roundRecord('reopen', critic2))
-  if (!critic2 || critic2.verdict !== 'MERGE') {
-    escalate(t.id, 'critic did not MERGE after reopen', critic2 ? critic2.stopSection || critic2.notes : 'no result')
+  const rr2 = await reviewRound(t, w2, 'reopen', ph)
+  if (rr2.action === 'escalate') {
+    escalate(t.id, rr2.what, rr2.question)
     return r
   }
-  const m2 = await withMergeLock(() => agent(mergerPrompt(t, w2, critic2), { label: `merger:${t.id} reopen`, phase: ph.merge, schema: MERGER_SCHEMA, ...MODELS.merger }))
-  r.merge = m2
-  if (!m2 || m2.outcome !== 'merged') {
-    escalate(t.id, 'second red main (or merge failure) after reopen', m2 ? m2.details : 'no result')
+  if (rr2.action !== 'merge') {
+    escalate(t.id, 'critic did not MERGE after reopen', rr2.critic ? rr2.critic.stopSection || rr2.critic.notes : 'no result')
+    return r
+  }
+  const m2 = await mergeStep(t, w2, rr2, ph, true)
+  if (m2.kind !== 'merged') {
+    escalate(t.id, 'second red main (or merge failure) after reopen', m2.kind === 'fix' ? m2.fixItems.map((i) => i.what).join('; ') : r.merge ? r.merge.details : m2.question)
     return r
   }
   r.merged = true
@@ -709,6 +1622,30 @@ async function runTask(t, ph) {
 
 // Scheduler: MAX_CHAINS task chains at a time, dependency-aware, priority order as listed in args.tasks (put the
 // longest tasks first). Memory is bounded separately: install and check run through .claude/slot.sh with MAX_BUILDERS slots.
+// Preflight: before any worker starts, one relay runs merge-pr.js against PR 0 in dry-run mode. It proves the script is
+// linked and the relay may run it. PR 0 does not exist, so an `error` outcome that is not about the config is the
+// expected answer. A block, a missing script or an unreadable config fails the wave now, not after a whole wave of work.
+async function preflightMerge() {
+  const command = `node ${SCRIPTS}/merge-pr.js 0 --repo ${REPO} --dry-run`
+  const fail = (why) => {
+    escalate('preflight', `preflight failed: ${why}`, `Run ${command} by hand. The scripts live in ${SCRIPTS} (project.loopScripts; link the loop's scripts directory there). A block is Edan's permission settings, not something the loop retries another way. Or set project.merger to "agent" to use the v2 merger agent.`)
+    return false
+  }
+  const rr = await relay(command, 'preflight:merge', 'Preflight')
+  if (rr.status === 'blocked') return fail(`the relay was blocked from running ${command}${rr.note ? ` (${rr.note})` : ''}`)
+  if (rr.status === 'none') return fail(`the relay returned nothing for ${command}`)
+  const line = parseJsonLine(rr.stdout)
+  if (!line || typeof line.outcome !== 'string') {
+    return fail(`${command} printed no JSON line (exit ${rr.exitCode}); the script is missing or does not run. Output tail: ${tailOf(rr.stdout, 200) || '(empty)'} ${rr.note}`.trim())
+  }
+  if (line.outcome === 'error' && /^(cannot read|usage:)/.test(String(line.message || ''))) return fail(String(line.message))
+  return true
+}
+if (!MERGER_AGENT && !(await preflightMerge())) {
+  log(`Wave ${WAVE} FAILED in preflight: ${escalations[escalations.length - 1].what}`)
+  return { project: NAME, wave: WAVE, gate: 'FAIL', models: MODELS, state: {}, tasks: {}, escalations, reality: null, decisions: [], timings: {} }
+}
+
 phase('Build')
 const state = {}
 for (const t of TASKS) state[t.id] = 'pending'
@@ -821,4 +1758,4 @@ for (const r of Object.values(results)) {
 }
 
 const models = { ...MODELS, critic: criticModel, ...(realityModel ? { reality: realityModel } : {}) }
-return { project: NAME, wave: WAVE, gate: gate ? 'PASS' : 'FAIL', models, state, tasks: results, escalations, reality, decisions }
+return { project: NAME, wave: WAVE, gate: gate ? 'PASS' : 'FAIL', models, state, tasks: results, escalations, reality, decisions, timings }
