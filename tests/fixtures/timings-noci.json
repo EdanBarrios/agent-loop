@@ -1,0 +1,89 @@
+{
+ "result": "{\"project\": \"demo\", \"wave\": \"1\", \"gate\": \"PASS\", \"models\": {}, \"state\": {\"1.1\": \"merged\", \"1.2\": \"merged\"}, \"tasks\": {\"1.1\": {\"task\": \"1.1\", \"title\": \"Task 1.1\", \"rounds\": [{\"round\": 1, \"verdict\": \"MERGE\", \"ci\": \"green\", \"fixItems\": []}], \"merge\": {\"outcome\": \"merged\", \"mergeSha\": \"0123456789abcdef\"}}, \"1.2\": {\"task\": \"1.2\", \"title\": \"Task 1.2\", \"rounds\": [{\"round\": 1, \"verdict\": \"FIX\", \"ci\": \"red\", \"fixItems\": []}, {\"round\": 2, \"verdict\": \"MERGE\", \"ci\": \"green\", \"fixItems\": []}], \"merge\": {\"outcome\": \"merged\", \"mergeSha\": \"0123456789abcdef\"}}}, \"escalations\": []}",
+ "workflowProgress": [
+  {
+   "type": "workflow_agent",
+   "index": 1,
+   "label": "worker:1.1",
+   "agentId": "agent1",
+   "state": "done",
+   "tokens": 1000,
+   "toolCalls": 5,
+   "durationMs": 600000,
+   "model": "claude-sonnet-5-5",
+   "queuedAt": 1699999999000,
+   "startedAt": 1700000000000,
+   "lastProgressAt": 1700000599500
+  },
+  {
+   "type": "workflow_agent",
+   "index": 2,
+   "label": "critic:1.1 r1",
+   "agentId": "agent2",
+   "state": "done",
+   "tokens": 1000,
+   "toolCalls": 5,
+   "durationMs": 180000,
+   "model": "claude-sonnet-5-5",
+   "queuedAt": 1700000599000,
+   "startedAt": 1700000600000,
+   "lastProgressAt": 1700000779500
+  },
+  {
+   "type": "workflow_agent",
+   "index": 3,
+   "label": "worker:1.2",
+   "agentId": "agent3",
+   "state": "done",
+   "tokens": 1000,
+   "toolCalls": 5,
+   "durationMs": 720000,
+   "model": "claude-sonnet-5-5",
+   "queuedAt": 1699999999000,
+   "startedAt": 1700000000000,
+   "lastProgressAt": 1700000719500
+  },
+  {
+   "type": "workflow_agent",
+   "index": 4,
+   "label": "critic:1.2 r1",
+   "agentId": "agent4",
+   "state": "done",
+   "tokens": 1000,
+   "toolCalls": 5,
+   "durationMs": 240000,
+   "model": "claude-sonnet-5-5",
+   "queuedAt": 1700000719000,
+   "startedAt": 1700000720000,
+   "lastProgressAt": 1700000959500
+  },
+  {
+   "type": "workflow_agent",
+   "index": 5,
+   "label": "worker:1.2 fix1",
+   "agentId": "agent5",
+   "state": "done",
+   "tokens": 1000,
+   "toolCalls": 5,
+   "durationMs": 360000,
+   "model": "claude-sonnet-5-5",
+   "queuedAt": 1700001199000,
+   "startedAt": 1700001200000,
+   "lastProgressAt": 1700001559500
+  },
+  {
+   "type": "workflow_agent",
+   "index": 6,
+   "label": "critic:1.2 r2",
+   "agentId": "agent6",
+   "state": "done",
+   "tokens": 1000,
+   "toolCalls": 5,
+   "durationMs": 120000,
+   "model": "claude-sonnet-5-5",
+   "queuedAt": 1700001559000,
+   "startedAt": 1700001560000,
+   "lastProgressAt": 1700001679500
+  }
+ ]
+}
