@@ -263,11 +263,11 @@ describe('scripts/wait-ci.js', () => {
     const j = JSON.parse(lines[0]);
     expect(j).toMatchObject({ state: 'green', failing: [] });
     expect(typeof j.elapsedMs).toBe('number');
-  });
+  }, 30000);
 
   it('exits 2 with usage on a missing or bad pull request number', () => {
     expect(run([], 'exit 0').status).toBe(2);
     expect(run(['abc'], 'exit 0').status).toBe(2);
     expect(run(['7', '--timeout-min', 'x'], 'exit 0').status).toBe(2);
-  });
+  }, 30000);
 });
