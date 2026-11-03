@@ -863,6 +863,8 @@ const FAST_LANE = P.fastLane || {}
 const FAST_LANE_ON = FAST_LANE.enabled === true && typeof FAST_LANE.testCountCommand === 'string' && FAST_LANE.testCountCommand.trim() !== ''
 const FAST_LANE_CAP = Number.isInteger(FAST_LANE.maxPerWave) && FAST_LANE.maxPerWave >= 0 ? FAST_LANE.maxPerWave : DEFAULT_MAX_PER_WAVE
 const CI_RELAY_MAX_MIN = 9 // one foreground relay call (Bash max 10 min) must be able to finish; 'pending' handling covers slower CI
+const CI_CHUNK_MIN = 1.5 // one relay call waits at most this long: well under the Bash tool's 120 s default timeout
+const CI_MISSING_MIN = 2 // wait-ci.js reports 'missing' after 2 minutes without a real check (CI_MISSING_MS in claude/lib/ci.js)
 const CI_FIX_WAIT_MIN = 5 // on a FIX verdict the workflow waits at most this long for a CI result still running
 const CI_TIMEOUT_NOTE = 'the 20-minute wait-ci.js timeout'
 
@@ -1224,9 +1226,11 @@ const RELAY_MODEL = MODELS.merger
 
 function relayPrompt(command) {
   return `You are a relay for the ${NAME} repository. You run exactly one shell command and report what it printed. You do not interpret, summarise, repair or retry anything.
+FIRST RULE: the Bash tool call that runs the command MUST include the parameter timeout=600000. Without it the command is moved to the background after 120 seconds and the task fails. Do not set run_in_background.
+If you see "moved to the background" anyway: do not end your turn and do not run the command again. Read the output file the tool reported with the Read tool, again and again (at most 30 reads), until it contains the JSON line the command prints, and return that.
 Run exactly this command with the Bash tool from ${REPO} (cd there first):
 ${command}
-It can take many minutes. Run it in the FOREGROUND with the Bash tool's maximum timeout (timeout 600000) and do not set run_in_background: you cannot receive notifications, so a background command would die when your turn ends. Never end your turn while the command is still running; if the tool moves it to the background anyway, read its output file again after each wait until the command has exited. Never run a second copy of the command.
+It can take many minutes. Never end your turn while the command is still running. Never run a second copy of the command.
 Run no other command except cd. Do not edit any file, branch or setting. If the command fails, report that; do not retry it and do not try another way.
 If the permission system denies the command, or the tool refuses to run it, return status "blocked" with the denial text in note, and stop.
 Otherwise return status "ran", exitCode as the command's exit code, and stdout as exactly what the command printed on stdout (verbatim: nothing added, removed, reordered or summarised).`
@@ -1287,24 +1291,43 @@ function roundLabel(tag) {
   return tag === 'reopen' ? 'reopen' : `r${tag}`
 }
 
-// Wait for the PR's CI through wait-ci.js. A result with no parseable JSON line is run once more; a block or an empty
-// relay result is not retried. Never throws for those cases: { ok: false, what, question } says what to escalate.
+// Wait for the PR's CI through wait-ci.js in chunks: each relay call runs `wait-ci.js --timeout-min <= CI_CHUNK_MIN`, so it
+// ends well inside the Bash tool's 120 s default timeout and can never be moved to the background. A chunk that reports
+// 'pending' (wait-ci.js prints state 'pending', exit 0, when its own timeout passes) is called again until the overall
+// budget (CI_RELAY_MAX_MIN, or CI_FIX_WAIT_MIN when bounded) is spent; then 'pending' is the result, as before. A 'missing'
+// from a chunk shorter than CI_MISSING_MIN is not final: wait-ci.js caps its missing window at its own timeout.
+// Chunk 1 keeps the label `ci:<id> r<n>`; later chunks add ` c2`, ` c3`. A result with no parseable JSON line is run once more
+// (label + ` retry`); a block or an empty relay result is not retried. Never throws: { ok: false, what, question }.
 async function awaitCi(t, w, tag, ph, bounded) {
-  const command = `node ${SCRIPTS}/wait-ci.js ${w.prNumber} --repo ${REPO} --timeout-min ${bounded ? CI_FIX_WAIT_MIN : CI_RELAY_MAX_MIN}`
-  const base = `ci:${t.id} ${roundLabel(tag)}${bounded ? ' fix' : ''}`
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const rr = await relay(command, attempt ? `${base} retry` : base, ph.review)
-    if (rr.status === 'blocked') {
-      return { ok: false, what: `CI relay blocked: ${command}`, question: `The permission system refused ${command}${rr.note ? ` (${rr.note})` : ''}. Allow it or run it by hand, then relaunch the wave.` }
+  const budgetMin = bounded ? CI_FIX_WAIT_MIN : CI_RELAY_MAX_MIN
+  const base0 = `ci:${t.id} ${roundLabel(tag)}${bounded ? ' fix' : ''}`
+  let spentMin = 0
+  let elapsedMs = 0
+  let last = null
+  for (let chunk = 1; spentMin < budgetMin; chunk++) {
+    const chunkMin = Math.min(CI_CHUNK_MIN, budgetMin - spentMin)
+    const command = `node ${SCRIPTS}/wait-ci.js ${w.prNumber} --repo ${REPO} --timeout-min ${chunkMin}`
+    const base = chunk === 1 ? base0 : `${base0} c${chunk}`
+    let line = null
+    for (let attempt = 0; attempt < 2 && !line; attempt++) {
+      const rr = await relay(command, attempt ? `${base} retry` : base, ph.review)
+      if (rr.status === 'blocked') {
+        return { ok: false, what: `CI relay blocked: ${command}`, question: `The permission system refused ${command}${rr.note ? ` (${rr.note})` : ''}. Allow it or run it by hand, then relaunch the wave.` }
+      }
+      if (rr.status === 'none') return { ok: false, what: 'CI relay returned nothing', question: `Relaunch the wave; it re-runs only parked tasks. Command: ${command}` }
+      const parsed = parseJsonLine(rr.stdout)
+      if (parsed && CI_STATES.includes(parsed.state)) line = parsed
     }
-    if (rr.status === 'none') return { ok: false, what: 'CI relay returned nothing', question: `Relaunch the wave; it re-runs only parked tasks. Command: ${command}` }
-    const line = parseJsonLine(rr.stdout)
-    if (line && CI_STATES.includes(line.state)) {
-      const ci = { state: line.state, failing: Array.isArray(line.failing) ? line.failing : [], logTail: String(line.logTail || ''), polls: line.polls }
-      return { ok: true, ci, elapsedMs: line.elapsedMs }
-    }
+    if (!line) return { ok: false, what: 'wait-ci.js printed no JSON line twice', question: `Run ${command} by hand and relaunch the wave.` }
+    spentMin += chunkMin
+    if (typeof line.elapsedMs === 'number' && isFinite(line.elapsedMs)) elapsedMs += line.elapsedMs
+    last = { state: line.state, failing: Array.isArray(line.failing) ? line.failing : [], logTail: String(line.logTail || ''), polls: line.polls }
+    if (line.state === 'green' || line.state === 'red') break
+    if (line.state === 'missing' && spentMin >= CI_MISSING_MIN) break
   }
-  return { ok: false, what: 'wait-ci.js printed no JSON line twice', question: `Run ${command} by hand and relaunch the wave.` }
+  // Budget spent while chunks kept saying pending (or a short-window missing): that is the pending-CI timeout.
+  if (last && last.state === 'missing' && spentMin < CI_MISSING_MIN) last = { ...last, state: 'pending' }
+  return { ok: true, ci: last, elapsedMs }
 }
 
 function parseCount(out) {
@@ -1660,10 +1683,16 @@ async function preflightMerge() {
     escalate('preflight', `preflight failed: ${why}`, `Run ${command} by hand. The scripts live in ${SCRIPTS} (project.loopScripts; link the loop's scripts directory there). A block is Edan's permission settings, not something the loop retries another way. Or set project.merger to "agent" to use the v2 merger agent.`)
     return false
   }
-  const rr = await relay(command, 'preflight:merge', 'Preflight')
-  if (rr.status === 'blocked') return fail(`the relay was blocked from running ${command}${rr.note ? ` (${rr.note})` : ''}`)
-  if (rr.status === 'none') return fail(`the relay returned nothing for ${command}`)
-  const line = parseJsonLine(rr.stdout)
+  let rr = null
+  let line = null
+  // A result with no parseable JSON line is run once more (the relay has misreported "no JSON line" for correct output).
+  for (let attempt = 0; attempt < 2; attempt++) {
+    rr = await relay(command, attempt ? 'preflight:merge retry' : 'preflight:merge', 'Preflight')
+    if (rr.status === 'blocked') return fail(`the relay was blocked from running ${command}${rr.note ? ` (${rr.note})` : ''}`)
+    if (rr.status === 'none') return fail(`the relay returned nothing for ${command}`)
+    line = parseJsonLine(rr.stdout)
+    if (line && typeof line.outcome === 'string') break
+  }
   if (!line || typeof line.outcome !== 'string') {
     return fail(`${command} printed no JSON line (exit ${rr.exitCode}); the script is missing or does not run. Output tail: ${tailOf(rr.stdout, 200) || '(empty)'} ${rr.note}`.trim())
   }
