@@ -1,36 +1,52 @@
 #!/usr/bin/env node
-// Usage: node scripts/merge-pr.js <pr> --repo <path> [--worktree <path>] [--dry-run]
+// Usage: node scripts/merge-pr.js <pr> --repo <path> [--worktree <path>] [--dry-run] [--defer-main]
+//        node scripts/merge-pr.js <pr> --repo <path> --verify-main <mergeSha> [--timeout-min <m>]
 // Merges one approved pull request and verifies the default branch, in this one process, and prints one JSON line:
-// { outcome: 'merged'|'refused'|'reverted'|'error', exit, mergeSha, mainSha, ciState, failing, conflictFiles,
-//   revertPrUrl, message, logTail, ciWaitMs, mergeMs, mainCheckMs, revertMs, elapsedMs }
-// (--dry-run prints outcome 'dry-run' and `wouldRun`: the write calls it did not make).
+// { outcome: 'merged'|'refused'|'reverted'|'error'|'pending', exit, mergeSha, mainSha, ciState, failing, conflictFiles,
+//   revertPrUrl, message, logTail, ciWaitMs, mergeMs, mainCheckMs, revertMs, elapsedMs, mainCheck }
+// (--dry-run prints outcome 'dry-run', `wouldRun`: the write calls it did not make, and `load`: the machine-load
+// warning { load1, cores, threshold, high }, threshold = project.loadWarnFactor (default 4) x cores).
+// mainCheck 'skipped:unchanged': the merged tree is the tree CI checked, so main's check is not waited for.
+// --defer-main (only with project.mainCi): merge, then return mainCheck 'deferred' without waiting for main's run; the
+// caller releases its merge lock and runs --verify-main <mergeSha>, which waits for that run and reverts once on red.
+// --verify-main stops after --timeout-min minutes (default 9) with outcome 'pending', exit 5, so it can be called again.
 // The project config is read from <repo>/.claude/loop.local.json (syncPolicy, mainCi, install, check, checkMutates,
 // worktrees, maxBuilders, trailer). The caller holds the merge lock: this script assumes it is the only merger.
-// Exit codes: 0 merged and the default branch green, 2 refused (CI not green, a sync conflict, or the merge was
-// refused), 3 reverted (one revert PR merged, default branch green again), 4 error (including bad usage).
+// Exit codes: 0 merged and the default branch green (or skipped:unchanged, or deferred), 2 refused (CI not green, a
+// sync conflict, or the merge was refused), 3 reverted (one revert PR merged, default branch green again), 4 error
+// (including bad usage), 5 pending (--verify-main only).
 // It never pushes to the default branch, never forces, never uses --admin or --auto, and never retries a refused
 // merge another way. Reads or writes: writes-files (merges a pull request; on red opens one revert pull request).
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { availableParallelism, cpus, loadavg, tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { mergePr } from '../claude/lib/merge.js';
+import { machineLoad, mergePr } from '../claude/lib/merge.js';
 
+const USAGE = 'usage: node scripts/merge-pr.js <pr> --repo <path> [--worktree <path>] [--dry-run] [--defer-main] | <pr> --repo <path> --verify-main <sha> [--timeout-min <m>]';
 const args = process.argv.slice(2);
 let pr = null;
 let repo = null;
 let worktree = null;
 let dryRun = false;
+let deferMain = false;
+let verifyMain = null;
+let timeoutMin = 9;
 let usageProblem = false;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--repo' && args[i + 1] !== undefined) repo = args[++i];
   else if (args[i] === '--worktree' && args[i + 1] !== undefined) worktree = args[++i];
   else if (args[i] === '--dry-run') dryRun = true;
+  else if (args[i] === '--defer-main') deferMain = true;
+  else if (args[i] === '--verify-main' && args[i + 1] !== undefined) verifyMain = args[++i];
+  else if (args[i] === '--timeout-min' && args[i + 1] !== undefined) timeoutMin = Number(args[++i]);
   else if (!args[i].startsWith('--') && pr === null) pr = args[i];
   else usageProblem = true;
 }
+if (verifyMain !== null && (dryRun || deferMain || !/^[0-9a-f]{7,64}$/.test(verifyMain))) usageProblem = true;
+if (!(timeoutMin > 0)) usageProblem = true;
 if (usageProblem || pr === null || !/^\d+$/.test(pr) || repo === null) {
-  fail('usage: node scripts/merge-pr.js <pr> --repo <path> [--worktree <path>] [--dry-run]');
+  fail(USAGE);
 }
 repo = resolve(repo);
 
@@ -60,9 +76,23 @@ function run(command, { cwd }) {
 }
 
 const result = await mergePr(
-  { pr, repo, worktree: worktree ? resolve(worktree) : undefined, dryRun, tempDir: tmpdir(), project },
+  {
+    pr,
+    repo,
+    worktree: worktree ? resolve(worktree) : undefined,
+    dryRun,
+    deferMain,
+    verifyMain: verifyMain || undefined,
+    mainWaitMs: Math.round(timeoutMin * 60 * 1000),
+    tempDir: tmpdir(),
+    project,
+  },
   { run, sleep: (ms) => new Promise((r) => setTimeout(r, ms)), now: Date.now },
 );
+if (dryRun) {
+  const cores = typeof availableParallelism === 'function' ? availableParallelism() : cpus().length;
+  result.load = machineLoad(loadavg()[0], cores, project.loadWarnFactor);
+}
 console.log(JSON.stringify(result));
 process.exitCode = result.exit;
 

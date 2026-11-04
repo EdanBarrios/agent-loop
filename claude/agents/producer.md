@@ -7,14 +7,16 @@ tools: Read, Write, Edit, Bash, Glob, Grep
 
 You are a worker on this repository. The project's rules are in `.claude/loop.local.json` (read it) and in the files it lists under `readFirst`; read those, then your task in the spec it names.
 
-Task `<id>`: `<title>`. You own only: `<paths>`. Do not edit anything else; if you need a change elsewhere, stop and report it in the PR body.
+Task `<id>`: `<title>`. You own only: `<paths>`. Edits outside those paths follow the project's own rule on them (usually in `CLAUDE.md`). Where it allows small mechanical edits (a test, replay script or generated block that breaks only because of your change), make them within its limit, weaken no assertion, and list each under "Edits outside owned files" in the PR body (file, lines, why). Anything else outside your paths, or any outside edit when the project has no such rule: do not edit it; stop and report it in the PR body.
+
+Read the `readFirst` files as the config writes them: an entry that names sections (`CONTRACT.md#Owner map`, or `{ "path", "sections" }`) is read only in those sections plus the sections your task names, never whole.
 
 Worktree: `git worktree add <worktrees>/<id> -b <branch> origin/main` and work only there. Never commit to main; never force push.
 
 Order:
 1. Write the acceptance test exactly as specified, commit it first, and confirm it fails for the right reason.
 2. Implement.
-3. Run the project's check once and keep the output. If your task prompt gives a quick check, run that instead: a shell command in the worktree where `{files}` is replaced by the files you changed, with no slot wait and no full local check, because CI runs the full check on the PR and satisfies a project rule such as 'a change is done when `npm run check` exits 0'. Time the check with `date +%s` before and after and report the elapsed milliseconds as `localCheckMs` (an integer). `checkCommand` and `checkExitCode` then describe the quick check. If you return before the check has finished, set `checkExitCode` to -1.
+3. Run the project's check once and keep the output. If your task prompt gives a quick check, run that instead: a shell command in the worktree where `{files}` is replaced by the files you changed, run through the machine-wide slot wrapper (`.claude/slot.sh sh -c '<quick check>'`) and with no full local check, because CI runs the full check on the PR and satisfies a project rule such as 'a change is done when `npm run check` exits 0'. Time the check with `date +%s` before and after and report the elapsed milliseconds as `localCheckMs` (an integer). `checkCommand` and `checkExitCode` then describe the quick check. If you return before the check has finished, set `checkExitCode` to -1.
 4. Commit in small steps, each ending with `Co-Authored-By: Claude <noreply@anthropic.com>`.
 5. Sync: `git fetch origin && git merge origin/main -m "Sync branch with upstream before merge"`, resolving only the conflicts the config allows.
 6. Push and open a PR titled `<id>: <title>` whose body lists files changed, the exact check command and its output tail, a "Decisions" list for every default you took, and open questions.

@@ -34,6 +34,12 @@ import { waitForCi } from './ci.js'
  * @property {boolean} [dryRun]
  * @property {string} [tempDir]      where a temporary worktree goes (default /tmp)
  * @property {MergeProject} [project]
+ * @property {boolean} [deferMain]   after the merge, do not wait for the main CI run (only with project.mainCi): report
+ *                                   mainCheck 'deferred' and let the caller run verifyMain outside its merge lock
+ * @property {string} [verifyMain]   verify mode: the PR is already merged at this sha; wait for the main CI run (or the
+ *                                   local check) on it and revert once on red. Nothing is merged in this mode.
+ * @property {number} [mainWaitMs]   verify mode: stop waiting after this long and report outcome 'pending' (exit 5), so a
+ *                                   caller with a bounded command time can call again
  */
 
 /**
@@ -43,7 +49,7 @@ import { waitForCi } from './ci.js'
  * @property {() => number} [now]    a clock for the elapsed-ms fields and the waits; without it elapsed is 0 and waits count the sleeps
  */
 
-export const MERGE_EXIT = { merged: 0, refused: 2, reverted: 3, error: 4 }
+export const MERGE_EXIT = { merged: 0, refused: 2, reverted: 3, error: 4, pending: 5 }
 export const SYNC_MESSAGE = 'Sync branch with upstream before merge'
 export const DEFAULT_TRAILER = 'Co-Authored-By: Claude <noreply@anthropic.com>'
 export const UNKNOWN_REREADS = 3
@@ -57,6 +63,22 @@ export const LOG_LINES = 40
 
 const PR_FIELDS = 'title,state,headRefName,baseRefName,headRefOid,mergeStateStatus,mergeable'
 const READ_ONLY = /^(gh pr (view|checks)|gh run (list|view)|git (fetch origin|merge-base|rev-parse|diff --name-only))\b/
+
+export const LOAD_WARN_FACTOR = 4
+
+/**
+ * The machine-load warning the preflight dry run reports: a 1-minute load average above `factor` times the core count
+ * means other heavy jobs are running, which slowed waves 3 to 4 times (Pilot wave 12). It warns; it never blocks.
+ * @param {number} load1 the 1-minute load average @param {number} cores @param {number} [factor]
+ * @returns {{ load1: number, cores: number, threshold: number, high: boolean }}
+ */
+export function machineLoad(load1, cores, factor) {
+  const f = typeof factor === 'number' && factor > 0 ? factor : LOAD_WARN_FACTOR
+  const c = Number.isInteger(cores) && cores > 0 ? cores : 1
+  const l = typeof load1 === 'number' && isFinite(load1) ? Math.round(load1 * 100) / 100 : 0
+  const threshold = f * c
+  return { load1: l, cores: c, threshold, high: l > threshold }
+}
 
 /** A planned early end of the run, with the outcome it reports. */
 class Stop extends Error {
@@ -97,6 +119,14 @@ function parseJson(text) {
  * 4 error (the revert PR was not green, main is still red after the revert, or anything unexpected).
  * A dry run reports outcome 'dry-run' with exit 0 and `wouldRun`, the write calls it did not make.
  *
+ * mainCheck says what was done about the default branch after the merge:
+ * - 'skipped:unchanged': the merge commit's tree equals the tree of the PR head whose CI was green (main had not moved
+ *   past the branch), so CI already checked exactly this tree and the check on main is not waited for.
+ * - 'deferred': deferMain was set (and mainCi is set): the caller runs verify mode for this merge outside its lock.
+ * - 'green', 'red' (then reverted), 'pending' (verify mode ran out of mainWaitMs), 'unknown' (an error), or null when
+ *   nothing was merged.
+ * Exit 5 (pending) happens only in verify mode.
+ *
  * @param {MergeOptions} opts
  * @param {MergeDeps} deps
  * @returns {Promise<Record<string, any>>} { outcome, exit, mergeSha, mainSha, ciState, failing, conflictFiles, revertPrUrl, message, logTail, ciWaitMs, mergeMs, mainCheckMs, revertMs, elapsedMs }
@@ -130,6 +160,7 @@ export async function mergePr(opts, deps) {
     mainCheckMs: 0,
     revertMs: 0,
     elapsedMs: 0,
+    mainCheck: null,
   }
   /** @type {string[]} */
   const wouldRun = []
@@ -168,6 +199,7 @@ export async function mergePr(opts, deps) {
   }
 
   try {
+    if (opts.verifyMain) return await verifyOnly(String(opts.verifyMain))
     let pr = await readPr()
     if (pr.state !== 'OPEN') throw new Stop('refused', `PR #${n} is ${pr.state}, not OPEN; nothing was merged.`)
     base = pr.baseRefName
@@ -218,23 +250,23 @@ export async function mergePr(opts, deps) {
     result.mergeSha = mergeSha
     await removeWorktree(opts.worktree, head)
 
-    // 4. Verify the default branch; revert once on red.
+    // 4. Verify the default branch; revert once on red. Skipped when the merged tree is the tree CI checked.
     const tMain = now()
-    const verdict = await verifyMain(mergeSha)
+    const pull = await run('git pull --ff-only')
+    if (await treeUnchanged(mergeSha, headSha)) {
+      result.mainCheck = 'skipped:unchanged'
+      result.mainSha = mergeSha
+      result.mainCheckMs += now() - tMain
+      return finish('merged', `PR #${n} merged; the check on the default branch was skipped: the merge commit's tree is the tree CI checked on the PR head ${headSha}.`)
+    }
+    if (opts.deferMain && mainCi) {
+      result.mainCheck = 'deferred'
+      result.mainCheckMs += now() - tMain
+      return finish('merged', `PR #${n} merged; the check on the default branch is deferred: run merge-pr.js ${n} --verify-main ${mergeSha}.`)
+    }
+    const verdict = await verifyMain(mergeSha, pull)
     result.mainCheckMs += now() - tMain
-    if (verdict.state === 'unknown') throw new Stop('error', `PR #${n} is merged (${mergeSha}) but the default branch could not be verified: ${verdict.message}`)
-    if (verdict.state === 'green') {
-      result.mainSha = verdict.sha
-      return finish('merged', `PR #${n} merged; the default branch is green.`)
-    }
-    result.logTail = verdict.tail
-    const tRevert = now()
-    try {
-      await revert(mergeSha, verdict.tail)
-    } finally {
-      result.revertMs += now() - tRevert
-    }
-    return finish('reverted', `The default branch was red after PR #${n}; it was reverted through ${result.revertPrUrl} and is green again.`)
+    return await settleMain(mergeSha, verdict)
   } catch (e) {
     if (e instanceof Stop) {
       Object.assign(result, e.extra)
@@ -244,6 +276,65 @@ export async function mergePr(opts, deps) {
     return finish('error', `unexpected error: ${e && e.message ? e.message : String(e)}`)
   } finally {
     await cleanupTemp()
+  }
+
+  /**
+   * True when the merge commit's tree equals the tree of the PR head that was merged. CI on the PR checked that tree
+   * (the head itself, or GitHub's merge ref, which has the same tree when main is already in the head), so a check on
+   * the default branch would test nothing new. Any failure to read either tree means "not proven": the check runs.
+   * @param {string} mergeSha @param {string} headSha
+   */
+  async function treeUnchanged(mergeSha, headSha) {
+    if (!headSha) return false
+    const a = await run(`git rev-parse ${mergeSha}^{tree}`)
+    const b = await run(`git rev-parse ${headSha}^{tree}`)
+    const ta = a.code === 0 ? a.stdout.trim() : ''
+    const tb = b.code === 0 ? b.stdout.trim() : ''
+    return /^[0-9a-f]{40,64}$/.test(ta) && ta === tb
+  }
+
+  /** The verdict on the default branch after a merge: green finishes, red reverts once, anything else is an error. */
+  async function settleMain(mergeSha, verdict) {
+    if (verdict.state === 'pending') {
+      result.mainCheck = 'pending'
+      return finish('pending', `PR #${n} is merged (${mergeSha}); its run on the default branch has not finished yet: call --verify-main again.`)
+    }
+    if (verdict.state === 'unknown') {
+      result.mainCheck = 'unknown'
+      throw new Stop('error', `PR #${n} is merged (${mergeSha}) but the default branch could not be verified: ${verdict.message}`)
+    }
+    if (verdict.state === 'green') {
+      result.mainCheck = 'green'
+      result.mainSha = verdict.sha
+      return finish('merged', `PR #${n} merged; the default branch is green.`)
+    }
+    result.mainCheck = 'red'
+    result.logTail = verdict.tail
+    const tRevert = now()
+    try {
+      await revert(mergeSha, verdict.tail)
+    } finally {
+      result.revertMs += now() - tRevert
+    }
+    return finish('reverted', `The default branch was red after PR #${n}; it was reverted through ${result.revertPrUrl} and is green again.`)
+  }
+
+  /** Verify mode: the PR is merged at `sha` already (a deferred main check); verify the default branch, revert once on red. */
+  async function verifyOnly(sha) {
+    if (!/^[0-9a-f]{7,64}$/.test(sha)) throw new Stop('error', `--verify-main needs a commit sha, got "${sha}"`)
+    const pr = await readPr()
+    if (pr.state !== 'MERGED') throw new Stop('error', `PR #${n} is ${pr.state}, not MERGED; --verify-main checks a merge that was made.`)
+    base = pr.baseRefName
+    head = pr.headRefName
+    title = String(pr.title || '')
+    if (!base) throw new Stop('error', `PR #${n} has no base branch.`)
+    result.mergeSha = sha
+    result.ciState = 'green'
+    const tMain = now()
+    const pull = await run('git pull --ff-only')
+    const verdict = await verifyMain(sha, pull, opts.mainWaitMs)
+    result.mainCheckMs += now() - tMain
+    return settleMain(sha, verdict)
   }
 
   /** Merge main into the branch in the worktree, push the head branch, wait for GitHub to show the new head. */
@@ -316,15 +407,19 @@ export async function mergePr(opts, deps) {
     }
   }
 
-  /** The default branch after a merge: the main CI run on that commit, or the local check. */
-  async function verifyMain(sha) {
-    const pull = await run('git pull --ff-only')
-    if (pull.code !== 0 && !mainCi) throw new Stop('error', `git pull --ff-only failed on the default branch: ${pull.stderr.trim().slice(0, 300)}`)
-    if (mainCi) return waitMainRun(sha)
+  /**
+   * The default branch after a merge: the main CI run on that commit, or the local check.
+   * @param {string} sha @param {RunResult} [pulled] the result of a `git pull --ff-only` already made @param {number} [budgetMs]
+   */
+  async function verifyMain(sha, pulled, budgetMs) {
+    const pull = pulled || (await run('git pull --ff-only'))
+    if (pull.code !== 0 && !mainCi) throw new Stop('error', `git pull --ff-only failed on the default branch: ${String(pull.stderr || '').trim().slice(0, 300)}`)
+    if (mainCi) return waitMainRun(sha, budgetMs)
     return localCheck()
   }
 
-  async function waitMainRun(sha) {
+  /** @param {string} sha @param {number} [budgetMs] past this, a run that has appeared but not finished is 'pending' */
+  async function waitMainRun(sha, budgetMs) {
     const command = `gh run list --branch ${sh(base)} --workflow ${sh(mainCi)} --commit ${sha} --json databaseId,status,conclusion`
     const t0 = now()
     let slept = 0
@@ -342,6 +437,7 @@ export async function mergePr(opts, deps) {
         // Cancelled, timed out and the like say nothing about the code: never revert on them.
         return { state: 'unknown', sha, tail: '', message: `the "${mainCi}" run ${latest.databaseId} ended ${latest.conclusion || 'without a result'}` }
       }
+      if (latest && budgetMs && elapsed() >= budgetMs && elapsed() < MAIN_TIMEOUT_MS) return { state: 'pending', sha, tail: '', message: '' }
       if (elapsed() >= (latest ? MAIN_TIMEOUT_MS : MAIN_APPEAR_MS)) {
         return { state: 'unknown', sha, tail: '', message: latest ? `the "${mainCi}" run on ${sha} did not finish in time` : `no "${mainCi}" run appeared for ${sha}` }
       }
@@ -406,6 +502,7 @@ export async function mergePr(opts, deps) {
   function finish(outcome, message) {
     result.outcome = outcome
     result.exit = outcome === 'dry-run' ? 0 : MERGE_EXIT[outcome]
+    if (outcome === 'error' && result.mergeSha && !result.mainCheck) result.mainCheck = 'unknown'
     result.message = message
     result.elapsedMs = now() - started
     result.mergeMs = Math.max(0, result.elapsedMs - result.ciWaitMs - result.mainCheckMs - result.revertMs)
