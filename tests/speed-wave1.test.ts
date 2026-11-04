@@ -84,6 +84,8 @@ function fakeRunner() {
     if (cmd === `gh run view ${RED_RUN_ID} --log-failed`) return ok(RED_LOG);
     if (/^git merge-base --is-ancestor origin\/main origin\//.test(cmd)) return ok(); // main has not moved: no sync
     if (/^git (fetch origin|pull --ff-only|worktree prune|worktree remove .+|branch -D .+)$/.test(cmd)) return ok();
+    // Each commit its own tree: the merged tree is never the head's, so the check on main runs as before.
+    if (/^git rev-parse [0-9a-f]+\^\{tree\}$/.test(cmd)) return ok(`${cmd.split(' ')[2].replace('^{tree}', '')}\n`);
     unexpected.push(cmd);
     return { code: 127, stdout: '', stderr: `unexpected call: ${cmd}` };
   };

@@ -21,7 +21,9 @@
 // Result: { project, wave, gate, models, state, tasks, escalations, reality, decisions, timings }. reality is null when no
 // check is configured, else { ok, gaps, error? }; decisions are the workers' `id | choice | reason | reversible` lines.
 // timings[taskId] = { ciWaitMs, mergeMs, mainCheckMs } copied from the scripts' JSON lines, plus localCheckMs from the
-// worker's structured result (this script has no clock).
+// worker's structured result (this script has no clock). tasks[id].merge.script.mainCheck is 'skipped:unchanged' when
+// the check on main was skipped because the merged tree is the tree CI checked.
+// tasks[id].rounds[n].criticSkipped is 'ci-only' when a later round reused the previous MERGE (scripts/ci-only.js).
 // This script never calls workflow(): chain-loop calls it, and nesting is one level.
 
 export const meta = {
@@ -32,7 +34,7 @@ export const meta = {
     { title: 'Preflight', detail: 'One relay runs merge-pr.js --dry-run; a block or a missing script fails the wave', model: 'sonnet' },
     { title: 'Build', detail: 'Workers, a few at a time, one git worktree each', model: 'sonnet' },
     { title: 'Review', detail: 'Critic applies the checklist beside a wait-ci.js relay; FIX returns to a worker, max 3 rounds' },
-    { title: 'Merge', detail: 'Serialized merge-pr.js relay: sync if needed, wait CI, merge, check main, revert once', model: 'sonnet' },
+    { title: 'Merge', detail: 'Serialized merge-pr.js relay: sync if needed, wait CI, merge; the check on main is skipped when the merged tree is the tree CI checked, else watched outside the lock; revert once', model: 'sonnet' },
     { title: 'Tail', detail: 'The tail task runs alone after every parallel task is merged or parked' },
   ],
 }
@@ -838,12 +840,35 @@ const QUICK_CHECK = typeof P.quickCheck === 'string' ? P.quickCheck.trim() : ''
 const LOCAL_CHECK_NAME = QUICK_CHECK ? 'the quick check' : CHECK // how worker-facing text and logs name the worker's own check
 const CHECK_WAIT = `If you return before it has finished, set checkExitCode to -1 and say so: the workflow sends a worker back to finish it. Never report a slow or unfinished check as status blocked.`
 // What the worker prompts say about the quick check. The workflow has no clock, so the worker times the check.
-const QUICK_RULE = `The quick check is: ${QUICK_CHECK} ({files} is replaced by you with the files you changed, space separated, relative to the worktree). Run it directly in the worktree: there is no slot wait, so do not run it through the slot wrapper, and do not run the full check (${CHECK}) yourself. CI runs the full check on the PR and that satisfies a project rule such as 'a change is done when \`${CHECK}\` exits 0'. Time the quick check with date +%s before and after and set localCheckMs in your result to the elapsed milliseconds (an integer). Set checkCommand to the quick check as you ran it (files filled in) and checkExitCode to its exit code.`
-const READ_FIRST = (P.readFirst && P.readFirst.length ? P.readFirst : ['CLAUDE.md']).join('; ')
+// The quick check runs through the slot wrapper (machine-wide check slots): wave 12's 12.1 worker ran its tests beside
+// a rescue's full checks at a load average of 200 to 480 and took 58.9 min against 25.7 min for a task of its size.
+const QUICK_RULE = `The quick check is: ${QUICK_CHECK} ({files} is replaced by you with the files you changed, space separated, relative to the worktree). Run it in the worktree through the machine-wide slot wrapper, so its tests count against the check slots every session on this machine shares: ${SLOT}sh -c '<the quick check, files filled in>' (write any single quote inside it as '\\''). The wrapper waits for a free slot, so the command can take several minutes: run it with the Bash tool's maximum timeout, and if the tool moves it to the background, wait for its completion notification and read its output file; never run a second copy. Do not run the full check (${CHECK}) yourself. CI runs the full check on the PR and that satisfies a project rule such as 'a change is done when \`${CHECK}\` exits 0'. Time the quick check (slot wait included) with date +%s before and after and set localCheckMs in your result to the elapsed milliseconds (an integer). Set checkCommand to the quick check as you ran it (files filled in) and checkExitCode to its exit code.`
+// readFirst entries: a plain string is read as written (a whole file, or free text such as 'spec.md section "X"').
+// An entry that names sections, as 'CONTRACT.md#Owner map#Schema' or { path, sections: [...] }, is read only in those
+// sections plus the sections the task names: CONTRACT.md grew to 69 KB and was re-read on every worker turn (wave 12).
+function readFirstEntry(e) {
+  let path = ''
+  let sections = []
+  if (e && typeof e === 'object') {
+    path = String(e.path || '')
+    sections = Array.isArray(e.sections) ? e.sections.map(String) : []
+  } else {
+    const parts = String(e).split('#').map((x) => x.trim())
+    path = parts[0]
+    sections = parts.slice(1).filter(Boolean)
+  }
+  if (!sections.length) return path
+  return `${path} (only the sections ${sections.map((x) => `"${x}"`).join(', ')} and the sections your task names; find them with grep -n '^#' ${path} and read just those line ranges, never the whole file)`
+}
+const READ_FIRST = (P.readFirst && P.readFirst.length ? P.readFirst : ['CLAUDE.md']).map(readFirstEntry).join('; ')
 const FORBIDDEN = (P.forbiddenStrings || []).length ? ` No project-confidential strings (${P.forbiddenStrings.join(', ')}).` : ''
 const EXTRA_RULES = (P.extraRules || []).length ? ' ' + P.extraRules.join(' ') : ''
 const SIDE_FILES = P.sideFiles || 'No generated files are expected to change beyond what the task touches.'
 const SIDE_FILES_SHORT = P.sideFiles ? `the side files the project allows (${P.sideFiles})` : 'nothing else'
+// Edits outside a task's owned files follow the project's own rule (its CLAUDE.md or another readFirst file). Six stops
+// in waves 6 to 12 of Pilot were 1-to-20-line test, replay or generated-file edits the task's own change forced.
+const OUTSIDE_EDITS = 'Edits outside owned files'
+const OWN_RULE = `Edits outside these paths follow the project's own rule on them (in the read-first files). If that rule allows small mechanical edits outside a task's files (for example to a test, replay script or generated block that breaks only because of your change), make each edit it allows, within its limit and with no assertion removed or weakened, and list each one under "${OUTSIDE_EDITS}" in the PR body (file, lines changed, and why your change forces it) instead of stopping. Anything else outside your paths, or any outside edit when the project has no such rule, is an ownership question: do not edit it; stop (status blocked) and report it in the PR body.`
 const SYNC_CONFLICTS = P.syncConflicts
   ? `Resolve conflicts only in ${P.syncConflicts}. Any other conflict: stop, report it in the PR body, and set status blocked.`
   : 'Any conflict: stop, report it in the PR body, and set status blocked.'
@@ -1032,7 +1057,7 @@ function workerPrompt(t) {
   return `You are a worker on the ${NAME} repository. ${COMMON_RULES}
 Task ${t.id}: ${t.title}.
 Task text (verbatim from the spec): ${t.text}
-You own only: ${t.owns}. Do not edit anything else. If you need a change elsewhere, stop and report it in the PR body.
+You own only: ${t.owns}. ${OWN_RULE}
 Task notes: ${t.notes || 'none'}
 ${WORKER_NOTES}
 ${AUTONOMY}
@@ -1051,7 +1076,7 @@ function fixPrompt(t, prev, critic, round) {
   const items = critic.fixItems.map((i) => `${i.n}. ${i.what} (proved by: ${i.provedBy})`).join('\n')
   return `You are a worker on the ${NAME} repository continuing task ${t.id}: ${t.title}, fix round ${round} of ${FIX_ROUNDS}. ${COMMON_RULES}
 Task text: ${t.text}
-You own only: ${t.owns}. Task notes: ${t.notes || 'none'}
+You own only: ${t.owns}. ${OWN_RULE} Task notes: ${t.notes || 'none'}
 ${WORKER_NOTES}
 ${AUTONOMY}
 Your PR: #${prev.prNumber} ${prev.prUrl || ''} on branch ${prev.branch}. Your worktree is ${prev.worktree || wtPath(t)}; cd there and git pull --ff-only. If the worktree is missing, recreate it: cd ${REPO} && git fetch origin && git worktree add ${wtPath(t)} ${t.branch}.
@@ -1078,7 +1103,7 @@ function finishPrompt(t, prev, attempt) {
     : 'No PR exists yet; step (4) opens it.'
   return `You are a worker on the ${NAME} repository finishing task ${t.id}: ${t.title} (finish attempt ${attempt} of ${FINISH_ROUNDS}). ${COMMON_RULES}
 Task text: ${t.text}
-You own only: ${t.owns}. Task notes: ${t.notes || 'none'}
+You own only: ${t.owns}. ${OWN_RULE} Task notes: ${t.notes || 'none'}
 ${WORKER_NOTES}
 ${AUTONOMY}
 The previous worker on this task returned before ${LOCAL_CHECK_NAME} had finished, so nothing has been reviewed. Branch ${prev.branch || t.branch}, worktree ${prev.worktree || wtPath(t)}; cd there (if the worktree is missing: cd ${REPO} && git fetch origin && git worktree add ${wtPath(t)} ${t.branch}). ${pr}
@@ -1105,7 +1130,7 @@ async function finishIfUnfinished(t, w, ph, tag) {
 function criticChecklist() {
   const core = [
     `The acceptance test exists and its commit precedes the implementation commits. Verify "fails on main" by checking that the paths or behaviour the test exercises do not exist at the PR's merge-base (git cat-file -e origin/main:<path>, or reasoning from the diff).`,
-    `Only owned paths changed (plus ${SIDE_FILES_SHORT} and merge commits from origin/main).`,
+    `Only owned paths changed (plus ${SIDE_FILES_SHORT} and merge commits from origin/main), apart from the files listed under "${OUTSIDE_EDITS}" in the PR body when the project's rules (in its read-first files) allow such edits. Check each listed edit: it is mechanical (it only follows the task's own change, such as a renamed key or call, a new required argument, an updated expected string or a regenerated block), it is within the project's limit, and it removes or weakens no assertion (no deleted or loosened expect, no deleted test case, no widened tolerance). A listed edit that fails any of these, or any other changed file outside the owned paths, fails this item.`,
     `No test touches the network or a paid API; no .skip, .only, or disabled test, and no lowered test count.`,
     `No street address, real person, secret${FORBIDDEN ? ' or project-confidential string' : ''} anywhere in the diff.`,
     `CI result supplied by the workflow; n/a. The workflow waits for CI in code and combines it with your verdict. Record n/a with pass.`,
@@ -1367,15 +1392,30 @@ function ciEscalation(decision, ci) {
   return { what: decision.reason, question: 'See the workflow transcript.' }
 }
 
+// Critic round 2 and later: when the previous critic said MERGE at head H and the only changes since H are CI-only
+// (no new commit, formatting or lint-autofix commits, or sync merges from the default branch with no conflict), the
+// MERGE stands and no critic runs again. scripts/ci-only.js decides from the diff (claude/lib/delta.js); a relay that
+// fails or a line that is not clear means the critic runs. Wave 12 spent 296k tokens on two such rounds.
+const SHA_RE = /^[0-9a-f]{7,64}$/
+async function ciOnlySince(t, w, tag, ph, since) {
+  const command = `node ${SCRIPTS}/ci-only.js ${w.prNumber} --repo ${REPO} --since ${since}`
+  const x = await relay(command, `delta:${t.id} ${roundLabel(tag)}`, ph.review)
+  if (x.status !== 'ran') return null
+  const line = parseJsonLine(x.stdout)
+  return line && line.ciOnly === true ? line : null
+}
+
 // One review round: the critic and the CI wait run in parallel, combineVerdict decides.
+// approved: the previous round's MERGE critic result, if any (see ciOnlySince).
 // Returns { action: 'merge'|'fix'|'stop'|'nocritic'|'escalate', critic, ci, fixItems, notes, what, question }.
-async function reviewRound(t, w, tag, ph) {
+async function reviewRound(t, w, tag, ph, approved) {
   const st = taskState(t)
   const rec = (critic, ci, extra) => results[t.id].rounds.push({ ...roundRecord(tag, critic, ci), ...(extra || {}) })
   const criticCall = () => callCritic(criticPrompt(t, w, tag), { label: `critic:${t.id} ${roundLabel(tag)}`, phase: ph.review, schema: CRITIC_SCHEMA })
   let critic = null
   let ci = null
   let ciP = null
+  let skipped = null
 
   const ownCount = st.laneCounted ? 1 : 0
   if (t.lane === 'fast' && FAST_LANE_ON && !st.criticUsed && fastLaneUsed - ownCount < FAST_LANE_CAP) {
@@ -1434,7 +1474,15 @@ async function reviewRound(t, w, tag, ph) {
   } else {
     ciP = awaitCi(t, w, tag, ph, false)
     ciP.catch(() => {})
-    critic = await criticCall()
+    if (approved && approved.verdict === 'MERGE' && SHA_RE.test(String(approved.prHeadSha || ''))) {
+      const delta = await ciOnlySince(t, w, tag, ph, approved.prHeadSha)
+      if (delta) {
+        skipped = { criticSkipped: 'ci-only', ciOnlyReason: String(delta.reason || '') }
+        critic = { ...approved, notes: `critic round ${tag} skipped: CI-only change since ${approved.prHeadSha} (${delta.reason || 'no reason given'}). ${approved.notes || ''}`.trim() }
+        log(`${t.id} critic round ${tag}: skipped (CI-only change)`)
+      }
+    }
+    if (!critic) critic = await criticCall()
   }
   st.criticUsed = true
 
@@ -1442,7 +1490,7 @@ async function reviewRound(t, w, tag, ph) {
     rec(null, null)
     return { action: 'nocritic' }
   }
-  log(`${t.id} critic round ${tag}: ${critic.verdict}`)
+  if (!skipped) log(`${t.id} critic round ${tag}: ${critic.verdict}`)
   if (critic.verdict === 'STOP') {
     // CI does not change a STOP, so the workflow does not wait for it.
     rec(critic, null)
@@ -1465,14 +1513,14 @@ async function reviewRound(t, w, tag, ph) {
       }
     }
     if (!res.ok) {
-      rec(critic, null)
+      rec(critic, null, skipped)
       return { action: 'escalate', critic, what: res.what, question: res.question }
     }
     ci = res.ci
     addTiming(t.id, 'ciWaitMs', res.elapsedMs)
   }
   const d = combineVerdict(critic, ci)
-  rec(critic, ci)
+  rec(critic, ci, skipped)
   if (d.action === 'merge') return { action: 'merge', critic, ci }
   if (d.action === 'fix') return { action: 'fix', critic, ci, fixItems: d.fixItems, notes: critic.notes }
   return { action: 'escalate', critic, ci, ...ciEscalation(d, ci) }
@@ -1500,7 +1548,10 @@ async function mergeStep(t, w, rr, ph, reopen) {
     return { kind: m.outcome === 'merged' ? 'merged' : 'reverted' }
   }
 
-  const command = `node ${SCRIPTS}/merge-pr.js ${w.prNumber} --repo ${REPO} --worktree ${w.worktree || wtPath(t)}`
+  // With a main CI workflow the merge relay does not wait for main's run inside the lock (--defer-main): the merge
+  // script skips that wait when the merged tree is the tree CI checked (mainCheck 'skipped:unchanged'), and otherwise
+  // the run is watched below by a --verify-main relay after the lock is released, so the next PR can sync and merge.
+  const command = `node ${SCRIPTS}/merge-pr.js ${w.prNumber} --repo ${REPO} --worktree ${w.worktree || wtPath(t)}${MAIN_CI ? ' --defer-main' : ''}`
   const rr0 = await withMergeLock(async () => {
     if (mergeBlocked) return { status: 'skipped' }
     const x = await relay(command, label, ph.merge)
@@ -1517,7 +1568,7 @@ async function mergeStep(t, w, rr, ph, reopen) {
     r.merge = null
     return { kind: 'failed', what: 'merge relay returned nothing', question: `Check the state of PR #${w.prNumber} by hand and relaunch; the merge was not re-run.` }
   }
-  const line = parseJsonLine(rr0.stdout)
+  let line = parseJsonLine(rr0.stdout)
   if (!line || typeof line.outcome !== 'string') {
     return failedMerge(
       r,
@@ -1528,6 +1579,13 @@ async function mergeStep(t, w, rr, ph, reopen) {
   addTiming(t.id, 'ciWaitMs', line.ciWaitMs)
   addTiming(t.id, 'mergeMs', line.mergeMs)
   addTiming(t.id, 'mainCheckMs', line.mainCheckMs)
+  if (line.mainCheck === 'skipped:unchanged') log(`${t.id}: check on main skipped: the merged tree is the tree CI checked`)
+  if (line.outcome === 'merged' && line.mainCheck === 'deferred') {
+    const v = await verifyDeferred(t, w, line, ph, label)
+    if (v.failed) return failedMerge(r, v.what, v.question, v.line || line)
+    line = v.line
+    addTiming(t.id, 'mainCheckMs', line.mainCheckMs)
+  }
   const exit = Number.isInteger(line.exit) ? line.exit : rr0.exitCode
   const message = String(line.message || '')
 
@@ -1562,11 +1620,34 @@ async function mergeStep(t, w, rr, ph, reopen) {
   return failedMerge(r, `merge failed (exit ${exit})`, message, line)
 }
 
+// The deferred check on main: merge-pr.js --verify-main, run outside the merge lock. A call that reports 'pending' (its
+// --timeout-min passed while main's run was still going) is made again, at most MAIN_VERIFY_CALLS times in all. A red main
+// is reverted once by the script, as before. Returns { line } or { failed: true, what, question, line? }.
+const MAIN_VERIFY_CALLS = 3
+async function verifyDeferred(t, w, merged, ph, label) {
+  const command = `node ${SCRIPTS}/merge-pr.js ${w.prNumber} --repo ${REPO} --verify-main ${merged.mergeSha} --timeout-min ${CI_RELAY_MAX_MIN}`
+  const base = label.replace(/^merger:/, 'main:')
+  let line = null
+  for (let call = 1; call <= MAIN_VERIFY_CALLS; call++) {
+    const x = await relay(command, call === 1 ? base : `${base} c${call}`, ph.merge)
+    if (x.status === 'blocked') return { failed: true, what: `main check relay blocked: ${command}`, question: `PR #${w.prNumber} is merged at ${merged.mergeSha}, but the permission system refused ${command}${x.note ? ` (${x.note})` : ''}. Check the default branch by hand (revert once if it is red), then relaunch.` }
+    if (x.status === 'none') return { failed: true, what: 'main check relay returned nothing', question: `PR #${w.prNumber} is merged at ${merged.mergeSha}; check the default branch by hand: ${command}` }
+    line = parseJsonLine(x.stdout)
+    if (!line || typeof line.outcome !== 'string') return { failed: true, what: `merge-pr.js --verify-main printed no JSON line: ${command}`, question: `PR #${w.prNumber} is merged at ${merged.mergeSha}; check the default branch by hand. Output tail: ${tailOf(x.stdout, 300) || '(empty)'}` }
+    if (line.outcome !== 'pending') break
+    if (call < MAIN_VERIFY_CALLS) addTiming(t.id, 'mainCheckMs', line.mainCheckMs)
+  }
+  if (line.outcome === 'pending') return { failed: true, what: `check on main still running after ${MAIN_VERIFY_CALLS} watch calls`, question: `PR #${w.prNumber} is merged at ${merged.mergeSha}; watch its run on the default branch by hand (revert once if it is red), then relaunch.`, line }
+  return { line }
+}
+
 // Review and merge until the PR is merged, reverted or parked. Returns { w, state: 'merged'|'reverted'|'parked' }.
 async function reviewAndMerge(t, initialWorker, ph) {
   let w = initialWorker
+  let approved = null // the last critic MERGE, kept while later rounds only fix CI (see ciOnlySince)
   for (let round = 1; round <= FIX_ROUNDS; round++) {
-    const rr = await reviewRound(t, w, round, ph)
+    const rr = await reviewRound(t, w, round, ph, approved)
+    approved = rr.critic && rr.critic.verdict === 'MERGE' ? rr.critic : null
     let items
     let notes
     if (rr.action === 'merge') {
@@ -1697,7 +1778,14 @@ async function preflightMerge() {
     return fail(`${command} printed no JSON line (exit ${rr.exitCode}); the script is missing or does not run. Output tail: ${tailOf(rr.stdout, 200) || '(empty)'} ${rr.note}`.trim())
   }
   if (line.outcome === 'error' && /^(cannot read|usage:)/.test(String(line.message || ''))) return fail(String(line.message))
+  warnLoad(line.load)
   return true
+}
+// The dry run reports the machine's 1-minute load average; above the threshold (project.loadWarnFactor, default 4, x the
+// core count) the wave still runs, but other heavy jobs are slowing it (README: no other heavy jobs during a wave).
+function warnLoad(load) {
+  if (!load || load.high !== true) return
+  log(`WARNING: the machine's 1-minute load average is ${load.load1}, above ${load.threshold} (${load.cores} cores). Other heavy jobs are running; the wave runs anyway but slower. Stop them, or let them finish, before the next wave.`)
 }
 if (!MERGER_AGENT && !(await preflightMerge())) {
   log(`Wave ${WAVE} FAILED in preflight: ${escalations[escalations.length - 1].what}`)

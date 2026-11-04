@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 // @ts-expect-error plain JavaScript module with JSDoc
-import { mergePr } from './merge.js';
+import { machineLoad, mergePr } from './merge.js';
 
 const root = join(import.meta.dirname, '..', '..');
 const fixture = (name: string) => readFileSync(join(root, 'tests', 'fixtures', name), 'utf8').trim();
@@ -30,6 +30,8 @@ const MERGE_SHA = fixtureJson('gh-pr-view-merged.json').mergeCommit.oid as strin
 const SYNC_SHA = 'a1'.repeat(20);
 const REVERT_HEAD = 'c3'.repeat(20);
 const REVERT_MERGE = 'd4'.repeat(20);
+const MERGE_TREE = 'e5'.repeat(20);
+const HEAD_TREE = 'f6'.repeat(20);
 
 const REPO = '/work/repo';
 const WT = '/work/wt/1.2';
@@ -74,6 +76,9 @@ function baseRules(): Rule[] {
     { when: /^gh pr merge 7 /, reply: {} },
     { when: new RegExp(`^gh run list --branch main --workflow check --commit ${MERGE_SHA} `), reply: out(RUN_SUCCESS) },
     { when: /^git (fetch origin|pull --ff-only|worktree prune)$/, reply: {} },
+    // Trees: by default the merge commit's tree differs from the head's (main moved), so the check on main runs.
+    { when: new RegExp(`^git rev-parse ${MERGE_SHA}\\^\\{tree\\}$`), reply: out(`${MERGE_TREE}\n`) },
+    { when: /^git rev-parse [0-9a-f]{40}\^\{tree\}$/, reply: out(`${HEAD_TREE}\n`) },
     { when: /^git merge-base --is-ancestor origin\/main /, reply: { code: 0 } },
     { when: /^git worktree remove /, reply: {} },
     { when: /^git branch -D /, reply: {} },
@@ -101,7 +106,7 @@ function baseRules(): Rule[] {
 
 const PROJECT = { syncPolicy: 'always', mainCi: 'check', install: 'npm ci', check: 'npm run check', checkMutates: [] as string[], worktrees: '/work/wt', maxBuilders: 2 };
 
-type Go = { project?: Record<string, unknown>; worktree?: string | null; dryRun?: boolean };
+type Go = { project?: Record<string, unknown>; worktree?: string | null; dryRun?: boolean; deferMain?: boolean; verifyMain?: string; mainWaitMs?: number };
 
 const everyCall: string[] = [];
 
@@ -109,7 +114,7 @@ async function go(rules: Rule[] = [], o: Go = {}) {
   const f = fakeRunner([...rules, ...baseRules()]);
   const sleeps: number[] = [];
   const result = await mergePr(
-    { pr: 7, repo: REPO, worktree: o.worktree === null ? undefined : (o.worktree ?? WT), dryRun: o.dryRun ?? false, tempDir: '/tmp', project: { ...PROJECT, ...o.project } },
+    { pr: 7, repo: REPO, worktree: o.worktree === null ? undefined : (o.worktree ?? WT), dryRun: o.dryRun ?? false, deferMain: o.deferMain, verifyMain: o.verifyMain, mainWaitMs: o.mainWaitMs, tempDir: '/tmp', project: { ...PROJECT, ...o.project } },
     { run: f.run, sleep: async (ms: number) => void sleeps.push(ms) },
   );
   const cmds = f.calls.map((c) => c.cmd);
@@ -452,6 +457,111 @@ describe('mergePr: --dry-run', () => {
   });
 });
 
+// Loop perf change 3: no check on main when the merged tree is the tree CI checked; otherwise the caller can defer the
+// wait for main's run (--defer-main) and watch it outside its merge lock (--verify-main).
+describe('mergePr: the check on main is skipped when nothing new can be learned', () => {
+  const sameTree: Rule = { when: new RegExp(`^git rev-parse ${MERGE_SHA}\\^\\{tree\\}$`), reply: out(`${HEAD_TREE}\n`) };
+
+  it('merged tree equals the green head tree: exit 0, mainCheck skipped:unchanged, no main run is read', async () => {
+    const { result, cmds } = await go([sameTree]);
+    expect(result).toMatchObject({ outcome: 'merged', exit: 0, mergeSha: MERGE_SHA, mainSha: MERGE_SHA, mainCheck: 'skipped:unchanged' });
+    expect(cmds).toContain(`git rev-parse ${MERGE_SHA}^{tree}`);
+    expect(cmds).toContain(`git rev-parse ${HEAD}^{tree}`);
+    expect(count(cmds, /^gh run (list|view)/)).toBe(0);
+    expect(count(cmds, /^git revert|^gh pr create/)).toBe(0);
+    expect(index(cmds, /^gh pr merge 7 /)).toBeLessThan(index(cmds, /\^\{tree\}$/));
+  });
+
+  it('skips the local check too when mainCi is empty', async () => {
+    const { result, cmds } = await go([sameTree], { project: { mainCi: '' } });
+    expect(result).toMatchObject({ outcome: 'merged', exit: 0, mainCheck: 'skipped:unchanged' });
+    expect(count(cmds, /slot\.sh/)).toBe(0);
+  });
+
+  it('a tree that cannot be read is not proof: the check on main runs', async () => {
+    const { result, cmds } = await go([{ when: new RegExp(`^git rev-parse ${MERGE_SHA}\\^\\{tree\\}$`), reply: { code: 128, stderr: 'fatal: bad object' } }]);
+    expect(result).toMatchObject({ outcome: 'merged', exit: 0, mainCheck: 'green' });
+    expect(count(cmds, /^gh run list/)).toBe(1);
+  });
+
+  it('main moved: the check on main runs as before and mainCheck is green', async () => {
+    const { result, cmds } = await go();
+    expect(result).toMatchObject({ outcome: 'merged', exit: 0, mainSha: MERGE_SHA, mainCheck: 'green' });
+    expect(count(cmds, /^gh run list/)).toBe(1);
+  });
+
+  it('keeps every field the wave loop reads', async () => {
+    const { result } = await go([sameTree]);
+    for (const k of ['outcome', 'exit', 'mergeSha', 'mainSha', 'ciState', 'failing', 'conflictFiles', 'revertPrUrl', 'message', 'logTail', 'ciWaitMs', 'mergeMs', 'mainCheckMs', 'revertMs', 'elapsedMs']) {
+      expect(result, k).toHaveProperty(k);
+    }
+  });
+});
+
+describe('mergePr: deferMain and verifyMain', () => {
+  const mergedPr: Rule = { when: /^gh pr view 7 --json .*headRefOid/, reply: prView({ ...PR_CLEAN, state: 'MERGED' }) };
+
+  it('deferMain with main moved: merges, reports mainCheck deferred, and does not wait for the main run', async () => {
+    const { result, cmds } = await go([], { deferMain: true });
+    expect(result).toMatchObject({ outcome: 'merged', exit: 0, mergeSha: MERGE_SHA, mainSha: null, mainCheck: 'deferred' });
+    expect(result.message).toContain(`--verify-main ${MERGE_SHA}`);
+    expect(cmds).toContain(MERGE_CMD);
+    expect(count(cmds, /^gh run (list|view)/)).toBe(0);
+  });
+
+  it('deferMain still skips when the tree is unchanged', async () => {
+    const { result } = await go([{ when: new RegExp(`^git rev-parse ${MERGE_SHA}\\^\\{tree\\}$`), reply: out(`${HEAD_TREE}\n`) }], { deferMain: true });
+    expect(result.mainCheck).toBe('skipped:unchanged');
+  });
+
+  it('deferMain without mainCi verifies inline: a local check is never run outside the caller lock', async () => {
+    const { result, cmds } = await go([{ when: (c, cwd) => cwd === REPO && c === 'git rev-parse HEAD', reply: out(`${MERGE_SHA}\n`) }, { when: /slot\.sh/, reply: out('ok\n') }], { deferMain: true, project: { mainCi: '' } });
+    expect(result).toMatchObject({ outcome: 'merged', exit: 0, mainCheck: 'green' });
+    expect(count(cmds, /slot\.sh/)).toBe(1);
+  });
+
+  it('verifyMain on a merged PR with a green main run: exit 0, mainCheck green, nothing merged or pushed', async () => {
+    const { result, cmds } = await go([mergedPr], { verifyMain: MERGE_SHA, worktree: null });
+    expect(result).toMatchObject({ outcome: 'merged', exit: 0, mergeSha: MERGE_SHA, mainSha: MERGE_SHA, mainCheck: 'green' });
+    expect(count(cmds, /^gh pr (merge|checks)|^git push|^git merge /)).toBe(0);
+    expect(count(cmds, new RegExp(`^gh run list --branch main --workflow check --commit ${MERGE_SHA} `))).toBe(1);
+  });
+
+  it('verifyMain with a red main run reverts once: exit 3, mainCheck red', async () => {
+    const { result, cmds } = await go([mergedPr, { when: new RegExp(`^gh run list --branch main --workflow check --commit ${MERGE_SHA} `), reply: out(RUN_FAILURE) }], { verifyMain: MERGE_SHA, worktree: null });
+    expect(result).toMatchObject({ outcome: 'reverted', exit: 3, mergeSha: MERGE_SHA, mainSha: REVERT_MERGE, mainCheck: 'red', revertPrUrl: 'https://github.com/example/repo/pull/8' });
+    expect(count(cmds, /^git revert/)).toBe(1);
+    expect(count(cmds, /^gh pr merge 7 /)).toBe(0);
+  });
+
+  it('verifyMain stops at mainWaitMs with a run still going: outcome pending, exit 5, no revert', async () => {
+    const { result, cmds, sleeps } = await go([mergedPr, { when: new RegExp(`^gh run list --branch main --workflow check --commit ${MERGE_SHA} `), reply: out(RUN_IN_PROGRESS) }], { verifyMain: MERGE_SHA, worktree: null, mainWaitMs: 60000 });
+    expect(result).toMatchObject({ outcome: 'pending', exit: 5, mainCheck: 'pending' });
+    expect(sleeps).toHaveLength(3);
+    expect(count(cmds, /^git revert|^gh pr create/)).toBe(0);
+  });
+
+  it('verifyMain on a PR that is not merged is an error and touches nothing', async () => {
+    const { result, cmds } = await go([], { verifyMain: MERGE_SHA, worktree: null });
+    expect(result).toMatchObject({ outcome: 'error', exit: 4 });
+    expect(result.message).toMatch(/not MERGED/);
+    expect(count(cmds, /^gh run list|^gh pr merge|^git push/)).toBe(0);
+  });
+});
+
+describe('machineLoad', () => {
+  it('is high only above factor x cores (default 4)', () => {
+    expect(machineLoad(31.9, 8)).toEqual({ load1: 31.9, cores: 8, threshold: 32, high: false });
+    expect(machineLoad(32.01, 8)).toMatchObject({ threshold: 32, high: true });
+    expect(machineLoad(10, 8, 1)).toMatchObject({ threshold: 8, high: true });
+  });
+
+  it('survives bad inputs without throwing', () => {
+    expect(machineLoad(Number.NaN, 0)).toEqual({ load1: 0, cores: 1, threshold: 4, high: false });
+    expect(machineLoad(5, 1, -2)).toMatchObject({ threshold: 4, high: true });
+  });
+});
+
 describe('the safety checks themselves', () => {
   it('catch a forbidden flag, a push to the default branch, a force push and an unpinned merge', () => {
     for (const bad of [
@@ -562,6 +672,21 @@ describe('scripts/merge-pr.js (spawned through a symlink with fake gh and git)',
     expect(r.status).toBe(4);
     expect(JSON.parse(r.stdout.trim())).toMatchObject({ outcome: 'error', exit: 4 });
     expect(w.calls()).toHaveLength(0);
+  }, 30000);
+
+  it('--dry-run reports the machine load; --verify-main needs a sha and no --defer-main', () => {
+    const w = spawnWorld({ syncPolicy: 'conflict', mainCi: 'check', loadWarnFactor: 1000 }, SPAWN_RULES(CHECKS_GREEN));
+    const dry = w.run(['7', '--repo', w.repo, '--dry-run']);
+    const line = JSON.parse(dry.stdout.trim());
+    expect(line.outcome).toBe('dry-run');
+    expect(line.load).toMatchObject({ high: false });
+    expect(line.load.threshold).toBe(1000 * line.load.cores);
+    expect(typeof line.load.load1).toBe('number');
+    for (const args of [['--verify-main', 'not-a-sha'], ['--verify-main', MERGE_SHA, '--defer-main']]) {
+      const r = w.run(['7', '--repo', w.repo, ...args]);
+      expect(r.status, args.join(' ')).toBe(4);
+      expect(JSON.parse(r.stdout.trim()).message).toMatch(/^usage:/);
+    }
   }, 30000);
 
   it('a repo without .claude/loop.local.json: exit 4 with a JSON error line', () => {

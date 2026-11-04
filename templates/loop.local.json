@@ -19,6 +19,7 @@
   "maxChains": 6,
   "mainCi": "",
   "syncPolicy": "always",
+  "loadWarnFactor": 4,
   "fixRounds": 3,
   "finishRounds": 2,
   "models": {
