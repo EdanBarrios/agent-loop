@@ -300,3 +300,45 @@ describe('spec-lint real CLI', () => {
     expect(r.stderr).toMatch(/usage/i);
   });
 }, 30000);
+
+// Loop perf changes 4 and 5 (3 Nov 2026): shape warnings. They never change the exit code.
+describe('spec-lint shape warnings', () => {
+  const t = (id: string, rest: string) => `- **${id} Task ${id}.** ${rest} Test: a table of cases.`;
+  const wide = [t('1.1', 'Owns `a/1.js`.'), t('1.2', 'Owns `a/2.js`.'), t('1.3', 'Depends on 1.1. Owns `a/3.js`.'), t('1.T', 'Owns `tail.ts`.')].join('\n');
+
+  it('a wide wave with chains at most 2 deep and small tasks gives no warning', () => {
+    const r = lint(spec({ tasks: wide }));
+    expect(r.code, r.out).toBe(0);
+    expect(r.out).not.toContain('warning:');
+  });
+
+  it('warns on a dependency chain deeper than 2 (the tail not counted), and still exits 0', () => {
+    const deep = [t('1.1', 'Owns `a/1.js`.'), t('1.2', 'Depends on 1.1. Owns `a/2.js`.'), t('1.3', 'Lane: normal. Depends on 1.1 and 1.2. Owns `a/3.js`.'), t('1.T', 'Depends on 1.3. Owns `tail.ts`.')].join('\n');
+    const r = lint(spec({ tasks: deep }));
+    expect(r.code, r.out).toBe(0);
+    expect(r.out).toContain('warning: wave 1: dependency chain 1.1 -> 1.2 -> 1.3 is 3 tasks deep (more than 2)');
+    expect(r.out).toMatch(/one PR with stacked commits/);
+  });
+
+  it('warns on a wave of 2 or fewer tasks', () => {
+    const r = lint(spec({ tasks: GOOD_TASKS }));
+    expect(r.code, r.out).toBe(0);
+    expect(r.out).toContain('warning: wave 1: 2 tasks; a wave of 2 or fewer goes out as single PRs');
+  });
+
+  it('warns on a task owning more than 6 paths, counting only the Owns sentence', () => {
+    const owns = (n: number) => Array.from({ length: n }, (_, i) => `\`src/f${i}.ts\``).join(', ');
+    const big = [t('1.1', `Owns ${owns(7)}. Reads \`src/other.ts\` and \`src/more.ts\`.`), t('1.2', `Owns ${owns(6)} (and nothing else). Reads \`docs/x.md\`.`), t('1.3', 'Owns `a/3.js`.')].join('\n');
+    const r = lint(spec({ tasks: big }));
+    expect(r.code, r.out).toBe(0);
+    expect(r.out).toContain('warning: task 1.1: owns 7 paths (more than about 6)');
+    expect(r.out).not.toContain('task 1.2: owns');
+  });
+
+  it('warns on a task adding more than one migration', () => {
+    const mig = [t('1.1', 'Owns `migrations/0021_a.sql`, `migrations/0022_b.sql`, `src/a.ts`.'), t('1.2', 'Owns `migrations/0023_c.sql`.'), t('1.3', 'Owns `a/3.js`.')].join('\n');
+    const r = lint(spec({ tasks: mig }));
+    expect(r.out).toContain('warning: task 1.1: adds 2 migrations (migrations/0021_a.sql, migrations/0022_b.sql)');
+    expect(r.out).not.toContain('task 1.2: adds');
+  });
+});
