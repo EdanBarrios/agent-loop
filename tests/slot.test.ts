@@ -1,5 +1,5 @@
-import { execFile } from 'node:child_process';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { execFile, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -32,6 +32,23 @@ describe('slot.sh', { timeout: 120_000 }, () => {
       max = Math.max(max, now);
     }
     expect(max).toBe(2);
+  });
+
+  it('reclaims a slot whose holder is dead, and never one whose holder is alive', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'slot-'));
+    const dead = spawnSync('sh', ['-c', 'echo $$']).stdout.toString().trim();
+    mkdirSync(join(dir, 'slots', '0'), { recursive: true });
+    writeFileSync(join(dir, 'slots', '0', 'pid'), `${dead}\n`);
+    const { stdout } = await run(slot, ['echo', 'ok'], { env: env(dir, '1') });
+    expect(stdout.trim()).toBe('ok');
+
+    mkdirSync(join(dir, 'slots', '0'), { recursive: true });
+    writeFileSync(join(dir, 'slots', '0', 'pid'), `${process.pid}\n`);
+    const waiter = run(slot, ['echo', 'late'], { env: env(dir, '1') });
+    await new Promise((r) => setTimeout(r, 1000));
+    expect(existsSync(join(dir, 'slots', '0', 'pid'))).toBe(true);
+    rmSync(join(dir, 'slots', '0'), { recursive: true, force: true });
+    expect((await waiter).stdout.trim()).toBe('late');
   });
 
   it('passes the exit code through and frees the slot', async () => {
