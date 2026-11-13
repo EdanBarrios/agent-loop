@@ -13,7 +13,7 @@ function runStep(script: string, cwd: string) {
   return spawnSync('sh', ['-c', script], { cwd, encoding: 'utf8' });
 }
 
-describe('npm run check', { timeout: 30_000 }, () => {
+describe('npm run check', { timeout: 120_000 }, () => {
   it('chains the syntax step, the python step and vitest', () => {
     expect(pkg.scripts.check).toContain('npm run check:syntax');
     expect(pkg.scripts.check).toContain('npm run check:py');

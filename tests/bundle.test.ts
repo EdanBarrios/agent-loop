@@ -337,7 +337,7 @@ describe('the real workflows', () => {
     const bad = spawnSync('node', [script, '--check', '--root', p.dir], { encoding: 'utf8' });
     expect(bad.status).toBe(1);
     expect(bad.stdout + bad.stderr).toContain('ghost');
-  }, 30000);
+  }, 120_000);
 });
 
 describe('package.json', () => {

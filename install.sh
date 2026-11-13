@@ -21,6 +21,8 @@ link() {
 link "$here/claude/workflows" "$target/.claude/workflows"
 link "$here/claude/agents" "$target/.claude/agents"
 link "$here/scripts/slot.sh" "$target/.claude/slot.sh"
+# The CI and merge relays run wait-ci.js and merge-pr.js from here (project.loopScripts, default .claude/scripts).
+link "$here/scripts" "$target/.claude/scripts"
 for f in "$here"/claude/hookify.*.local.md; do
   link "$f" "$target/.claude/$(basename "$f")"
 done
@@ -39,7 +41,7 @@ if [ -d "$target/.git" ] || [ -f "$target/.git" ]; then
   exclude="$gitdir/info/exclude"
   mkdir -p "$(dirname "$exclude")"
   touch "$exclude"
-  for line in '.claude/workflows' '.claude/agents' '.claude/slot.sh' '.claude/hookify.*.local.md' '.claude/loop.local.json' 'CLAUDE.local.md'; do
+  for line in '.claude/workflows' '.claude/agents' '.claude/slot.sh' '.claude/scripts' '.claude/hookify.*.local.md' '.claude/loop.local.json' 'CLAUDE.local.md'; do
     grep -qxF "$line" "$exclude" || echo "$line" >> "$exclude"
   done
   echo "excluded the linked paths in $exclude"

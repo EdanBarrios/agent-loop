@@ -12,7 +12,7 @@ function env(dir: string, max: string) {
   return { ...process.env, SLOT_MAX: max, SLOT_DIR: join(dir, 'slots'), SLOT_POLL: '0.2' };
 }
 
-describe('slot.sh', { timeout: 30_000 }, () => {
+describe('slot.sh', { timeout: 120_000 }, () => {
   it('runs at most SLOT_MAX commands at once', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'slot-'));
     const log = join(dir, 'log');

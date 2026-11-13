@@ -112,6 +112,12 @@ Several result files for one wave (a relaunch after an escalation) merge into on
 | `mainCi` | name of the CI workflow that runs the check on pushes to main; when set, the merger waits for that run instead of running the check on this machine |
 | `syncPolicy` | `always` (merge main into the branch before every merge) or `conflict` (only when GitHub reports a conflict; needs branch protection without the up-to-date rule and `mainCi`) |
 | `loadWarnFactor` | the preflight warns when the 1-minute load average is above this many times the core count (default 4) |
+| `quickCheck` | a shell command with `{files}` (typecheck, lint, related tests) that workers run instead of the full check, through the slot wrapper; CI runs the full check. Empty by default: workers run `check` |
+| `loopScripts` | directory holding `wait-ci.js` and `merge-pr.js` (default `<repo>/.claude/scripts`, which `install.sh` links) |
+| `merger` | unset by default (merge through `scripts/merge-pr.js`); `"agent"` restores the v2 merger agent as a rollback |
+| `fastLane` | `{ "enabled": false, "maxPerWave": 3, "denyPaths": [], "testCountCommand": "" }` by default; off until a human turns it on per project, and nothing is eligible without `testCountCommand` |
+| `realityCheck` | `{ "command": "...", "readOnly": true }`: a read-only command run after the wave; a blocking gap it reports fails the gate |
+| `gates` | path to a JSON list of human steps (`id`, `what`, `before` wave, `status`); the session parses it and passes it as `args.gates`, and a step still open before this wave stops it |
 
 ## What is here
 
@@ -139,7 +145,8 @@ Several result files for one wave (a relaunch after an escalation) merge into on
 ~/dev/agent-loop/install.sh /path/to/repo
 ```
 
-Symlinks the workflow, the agents, the slot wrapper and the hookify rules into `.claude/`, copies the config
+Symlinks the workflow, the agents, the slot wrapper, the scripts directory (`.claude/scripts`, where the CI and merge
+relays find `wait-ci.js` and `merge-pr.js`) and the hookify rules into `.claude/`, copies the config
 template if there is none, and lists all of them plus `CLAUDE.local.md` in the repo's
 `.git/info/exclude`, so nothing the loop adds can be committed and no `.gitignore` line is needed.
 Claude Code and the hookify plugin read these from disk, so the loop runs exactly as if the files

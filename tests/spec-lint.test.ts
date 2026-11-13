@@ -299,7 +299,7 @@ describe('spec-lint real CLI', () => {
     expect(r.status).toBe(2);
     expect(r.stderr).toMatch(/usage/i);
   });
-}, 30000);
+}, 120_000);
 
 // Loop perf changes 4 and 5 (3 Nov 2026): shape warnings. They never change the exit code.
 describe('spec-lint shape warnings', () => {

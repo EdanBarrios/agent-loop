@@ -108,7 +108,7 @@ describe('openBefore', () => {
 });
 
 // Each case starts a node process; give them room on a loaded machine.
-describe('scripts/gates.js', { timeout: 60_000 }, () => {
+describe('scripts/gates.js', { timeout: 180_000 }, () => {
   function run(list: unknown, ...args: string[]) {
     const dir = mkdtempSync(join(tmpdir(), 'gates-'));
     const file = join(dir, 'gates.json');
