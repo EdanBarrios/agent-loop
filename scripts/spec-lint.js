@@ -45,7 +45,7 @@ const MIGRATION_PATH = /(?:^|\/)migrations?\/[^/\s]+\.\w+$/;
 // The value must follow the label directly and end at a delimiter; a quoted mention such as
 // "a `Reads or writes:` line" or "`Reads or writes: writes-db|paid-call|sends`" is not a value.
 // `Lane:` is case-sensitive and starts at a word boundary, so prose such as "the fast lane: skips" is not a label.
-const LANE_LINE = /\bLane:\s*`?([A-Za-z][A-Za-z-]*)(?=[`\s.,;)]|$)/;
+export const LANE_LINE = /\bLane:\s*`?([A-Za-z][A-Za-z-]*)(?=[`\s.,;)]|$)/;
 const READS_OR_WRITES_LINE = /Reads or writes:\s*`?([A-Za-z][A-Za-z-]*)(?=[`\s.,;)]|$)/i;
 
 /** Lines outside fenced code blocks, as { text, index }. */
@@ -100,14 +100,33 @@ function checklistProblem(body) {
   return 'is empty (list the items, or write "none" with a reason)';
 }
 
+/**
+ * The tasks of a spec, in order: { id, title, text, wave } where text is the bullet and its continuation lines and
+ * wave is the id of the `## Wave <id>` heading above it (null outside a wave). Used by scripts/wave-args.js.
+ * @param {string} text the spec markdown
+ */
+export function specTasks(text) {
+  return findTasks(proseLines(text));
+}
+
 /** Tasks: { id, title, text } where text is the bullet and its continuation lines. */
 function findTasks(lines) {
   const tasks = [];
   let cur = null;
   let wave = null;
+  let waveLevel = 0;
   for (const l of lines) {
-    const h = /^#{1,6}\s/.test(l.text) ? WAVE_HEADING.exec(l.text) : null;
-    if (/^#{1,6}\s/.test(l.text)) wave = h ? h[1] : null;
+    const heading = /^(#{1,6})\s/.exec(l.text);
+    if (heading) {
+      // A wave heading starts a wave; a deeper heading inside it ("### Tail" under "## Wave 1") stays in it.
+      const h = WAVE_HEADING.exec(l.text);
+      if (h) {
+        wave = h[1];
+        waveLevel = heading[1].length;
+      } else if (wave === null || heading[1].length <= waveLevel) {
+        wave = null;
+      }
+    }
     const m = TASK_BULLET.exec(l.text);
     if (m) {
       cur = { id: m[1], title: m[2], text: l.text, wave };

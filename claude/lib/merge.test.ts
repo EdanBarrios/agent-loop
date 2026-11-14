@@ -697,3 +697,33 @@ describe('scripts/merge-pr.js (spawned through a symlink with fake gh and git)',
     expect(w.calls()).toHaveLength(0);
   }, 120_000);
 });
+
+describe('mergePr: project.mergeMethod', () => {
+  it('squash: squash-merges the PR pinned to the green head', async () => {
+    const { result, cmds } = await go([], { project: { mergeMethod: 'squash' } });
+    expect(result).toMatchObject({ outcome: 'merged', exit: 0 });
+    expect(cmds).toContain(`gh pr merge 7 --squash --delete-branch --match-head-commit ${HEAD}`);
+    expect(count(cmds, /^gh pr merge 7 --merge/)).toBe(0);
+  });
+
+  it('squash and main red: the revert has no -m 1 and the revert PR is squash-merged too', async () => {
+    const mainRed: Rule = { when: new RegExp(`^gh run list --branch main --workflow check --commit ${MERGE_SHA} `), reply: out(RUN_FAILURE) };
+    const { result, cmds } = await go([mainRed, { when: (c, cwd) => cwd === REVERT_WT && /^git revert --no-commit /.test(c), reply: {} }], { project: { mergeMethod: 'squash' } });
+    expect(result).toMatchObject({ outcome: 'reverted', exit: 3 });
+    expect(cmds).toContain(`git revert --no-commit ${MERGE_SHA}`);
+    expect(cmds).toContain(`gh pr merge 8 --squash --delete-branch --match-head-commit ${REVERT_HEAD}`);
+  });
+
+  it('the default is a merge commit', async () => {
+    const { cmds } = await go();
+    expect(cmds).toContain(MERGE_CMD);
+  });
+
+  it('an unknown method is a config error before any command runs', async () => {
+    const { result, cmds } = await go([], { project: { mergeMethod: 'rebase' } });
+    expect(result).toMatchObject({ outcome: 'error', exit: 4 });
+    expect(result.message).toMatch(/^cannot read config: project.mergeMethod/);
+    expect(cmds).toEqual([]);
+  });
+});
+

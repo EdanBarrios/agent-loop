@@ -49,7 +49,16 @@ started in `~/dev/agent-loop` gets that repo's own pinned copy (`.claude/` there
 `LOOP_VERSION` with the version the project's linked scripts print and fails the wave when they
 differ; a wave-loop older than 2.2.0 has no such check, and its scorecard carries a LOOP VERSION flag.
 
-Read `.claude/loop.local.json` in the repo and pass it whole as `args.project`:
+Build the args from the spec instead of by hand:
+
+```
+node ~/dev/agent-loop/scripts/wave-args.js --repo <repo> --wave <id> [--tail <task id>] [--notes <text>] > args.json
+```
+
+It lints the spec, reads `.claude/loop.local.json` as `project`, copies each task of the wave verbatim (text, owned
+paths, same-wave dependencies, lane, a `task/<id>-<slug>` branch) and takes the wave's `.T` task as the tail.
+
+By hand: read `.claude/loop.local.json` in the repo and pass it whole as `args.project`:
 
 ```
 Workflow({ name: 'wave-loop', args: { project: <loop.local.json>, wave: '2', tasks: [...], tail: {...} } })
@@ -122,6 +131,7 @@ Several result files for one wave (a relaunch after an escalation) merge into on
 | `quickCheck` | a shell command with `{files}` (typecheck, lint, related tests) that workers run instead of the full check, through the slot wrapper; CI runs the full check. Empty by default: workers run `check` |
 | `loopScripts` | directory holding `wait-ci.js` and `merge-pr.js` (default `<repo>/.claude/scripts`, which `install.sh` links) |
 | `merger` | unset by default (merge through `scripts/merge-pr.js`); `"agent"` restores the v2 merger agent as a rollback |
+| `mergeMethod` | `"merge"` (default, a merge commit) or `"squash"` (one commit per PR, so a branch's intermediate commits, such as one that briefly held private data, never reach the default branch's history); script mode only, the v2 merger agent always merges. Another value fails the preflight |
 | `fastLane` | `{ "enabled": false, "maxPerWave": 3, "denyPaths": [], "testCountCommand": "" }` by default; off until a human turns it on per project, and nothing is eligible without `testCountCommand` |
 | `realityCheck` | `{ "command": "...", "readOnly": true }`: a read-only command run after the wave; a blocking gap it reports fails the gate |
 | `gates` | path to a JSON list of human steps (`id`, `what`, `before` wave, `status`); the session parses it and passes it as `args.gates`, and a step still open before this wave stops it |
