@@ -138,6 +138,9 @@ export async function mergePr(opts, deps) {
   const policy = project.syncPolicy || 'always'
   const mainCi = project.mainCi || ''
   const trailer = project.trailer || DEFAULT_TRAILER
+  // project.mergeMethod: 'merge' (default, a merge commit) or 'squash' (one commit per PR, so a branch's intermediate
+  // commits never reach the default branch's history). The revert of a squash commit needs no -m 1.
+  const method = project.mergeMethod === undefined ? 'merge' : project.mergeMethod
   const dry = Boolean(opts.dryRun)
   const tempDir = opts.tempDir || '/tmp'
   const now = deps.now || (() => 0)
@@ -170,6 +173,11 @@ export async function mergePr(opts, deps) {
   let fetched = false
   let tempWorktree = ''
   let revertWorktree = ''
+  if (method !== 'merge' && method !== 'squash') {
+    // "cannot read" makes wave-loop's preflight fail the wave before any worker starts.
+    result.message = `cannot read config: project.mergeMethod must be "merge" or "squash", not ${JSON.stringify(method)}`
+    return result
+  }
 
   /** Run one command; in a dry run a write call is recorded and not made. */
   const run = async (command, cwd = repo) => {
@@ -241,7 +249,7 @@ export async function mergePr(opts, deps) {
     }
 
     // 3. Merge, pinned to the head that was green.
-    const mergeCmd = `gh pr merge ${n} --merge --delete-branch --match-head-commit ${headSha}`
+    const mergeCmd = `gh pr merge ${n} --${method} --delete-branch --match-head-commit ${headSha}`
     if (dry) {
       wouldRun.push(mergeCmd)
       throw new Stop('dry-run', 'Dry run: CI is green; the merge was not made.')
@@ -463,7 +471,7 @@ export async function mergePr(opts, deps) {
     await must('git fetch origin', repo, 'git fetch origin')
     await must(`git worktree add ${sh(wt)} -b ${branch} origin/${base}`, repo, 'making the revert worktree')
     revertWorktree = wt
-    const rv = await run(`git revert -m 1 --no-commit ${mergeSha}`, wt)
+    const rv = await run(`git revert ${method === 'merge' ? '-m 1 ' : ''}--no-commit ${mergeSha}`, wt)
     if (rv.code !== 0) {
       await run('git revert --abort', wt)
       throw new Stop('error', `The revert of ${mergeSha} does not apply cleanly (${(rv.stderr || rv.stdout).trim().slice(0, 300)}); no revert PR was opened and the default branch is red.`)
@@ -486,7 +494,7 @@ export async function mergePr(opts, deps) {
     if (ci.state !== 'green') {
       throw new Stop('error', `The revert PR ${url} is ${ci.state}${ci.failing.length ? ` (${ci.failing.join(', ')})` : ''}; it was not merged and no second revert will be made. The default branch is red.`)
     }
-    const revertMerge = await mergeAndRead(num, `gh pr merge ${num} --merge --delete-branch --match-head-commit ${revertHead}`, 'error')
+    const revertMerge = await mergeAndRead(num, `gh pr merge ${num} --${method} --delete-branch --match-head-commit ${revertHead}`, 'error')
     await run(`git worktree remove ${sh(wt)}`)
     await run('git worktree prune')
     await run(`git branch -D ${branch}`)
