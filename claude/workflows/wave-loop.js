@@ -936,7 +936,7 @@ The commit-on-main hook blocks any git commit or git push command whose text nam
 ${PROJECT_NOTES}
 `
 
-const SYNC_STEP = `Sync before pushing (always, so the PR can get a CI run): git fetch origin && git merge origin/main -m "Sync branch with upstream before merge". ${SYNC_CONFLICTS} Commit the merge and push with a plain git push.`
+const SYNC_STEP = `Sync before pushing (always, so the PR can get a CI run): git fetch origin && git merge origin/main -m "Sync branch with upstream before merge" -m "${TRAILER}". ${SYNC_CONFLICTS} Commit the merge and push with a plain git push.`
 
 // Task 4.2: what a worker may decide alone. The spec's End goal, Budget and Decision envelope sections are read by the
 // worker itself (scripts have no filesystem), so a project spec without them still works.

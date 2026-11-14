@@ -68,6 +68,10 @@ def walk(o, out):
             walk(v, out)
 
 
+# wave-loop runs its command relays (labels ci:, preflight:, main:, delta:, facts:) on the merger's model (RELAY_MODEL).
+RELAY_ROLES = {"ci": "merger", "preflight": "merger", "main": "merger", "delta": "merger", "facts": "merger"}
+
+
 def role_of(label):
     """Role from the agent label prefix (`worker:1.2`, `critic:1.2 r1`, `merger:1.2`)."""
     return (label or "?").split(":")[0].strip().lower() or "?"
@@ -212,7 +216,7 @@ def role_rows(agents, models):
         r["runs"] += 1
         r["tokens"] += a.get("tokens") or 0
         r["minutes"] += (a.get("durationMs") or 0) / 60000
-        requested = a.get("requestedModel") or (models.get(role) or {}).get("model")
+        requested = a.get("requestedModel") or (models.get(role) or models.get(RELAY_ROLES.get(role, "")) or {}).get("model")
         served = a.get("servedModel") or a.get("model")
         if requested:
             r["requested"].add(requested)
