@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -140,4 +140,22 @@ describe('loop-scorecard.py', { timeout: 120_000 }, () => {
     expect(md).not.toContain('TOKEN FLAG');
     expect(md).toContain('no previous scorecards');
   });
+
+  it('flags a result with no loopVersion, and prints the version of a result that has one', async () => {
+    const old = await scorecard(['1', '2026-10-30', fixture('scorecard-v1-wave0.json')]);
+    expect(old).toContain('LOOP VERSION unknown in run 1');
+    expect(old).toContain('Loop: unknown.');
+
+    const dir = mkdtempSync(join(tmpdir(), 'scorecard-version-'));
+    const doc = JSON.parse(readFileSync(fixture('scorecard-v2-decisions.json'), 'utf8'));
+    // The Workflow tool may store the result as a JSON string.
+    const result = typeof doc.result === 'string' ? JSON.parse(doc.result) : doc.result;
+    doc.result = JSON.stringify({ ...result, loopVersion: '2.2.0' });
+    const path = join(dir, 'stamped.json');
+    writeFileSync(path, JSON.stringify(doc));
+    const stamped = await scorecard(['4', '2026-11-13', path]);
+    expect(stamped).toContain('Loop: 2.2.0.');
+    expect(stamped).not.toContain('LOOP VERSION');
+  });
 });
+
