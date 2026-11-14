@@ -5,7 +5,8 @@
 // { outcome: 'merged'|'refused'|'reverted'|'error'|'pending', exit, mergeSha, mainSha, ciState, failing, conflictFiles,
 //   revertPrUrl, message, logTail, ciWaitMs, mergeMs, mainCheckMs, revertMs, elapsedMs, mainCheck }
 // (--dry-run prints outcome 'dry-run', `wouldRun`: the write calls it did not make, and `load`: the machine-load
-// warning { load1, cores, threshold, high }, threshold = project.loadWarnFactor (default 4) x cores).
+// warning { load1, cores, threshold, high }, threshold = project.loadWarnFactor (default 4) x cores), and `loopVersion`:
+// the loop's package.json version, which wave-loop's preflight compares with its own).
 // mainCheck 'skipped:unchanged': the merged tree is the tree CI checked, so main's check is not waited for.
 // --defer-main (only with project.mainCi): merge, then return mainCheck 'deferred' without waiting for main's run; the
 // caller releases its merge lock and runs --verify-main <mergeSha>, which waits for that run and reverts once on red.
@@ -92,6 +93,7 @@ const result = await mergePr(
 if (dryRun) {
   const cores = typeof availableParallelism === 'function' ? availableParallelism() : cpus().length;
   result.load = machineLoad(loadavg()[0], cores, project.loadWarnFactor);
+  result.loopVersion = loopVersion();
 }
 console.log(JSON.stringify(result));
 process.exitCode = result.exit;
@@ -99,4 +101,14 @@ process.exitCode = result.exit;
 function fail(message) {
   console.log(JSON.stringify({ outcome: 'error', exit: 4, mergeSha: null, mainSha: null, ciState: null, failing: [], conflictFiles: [], revertPrUrl: null, message }));
   process.exit(4);
+}
+
+// The loop's version from its package.json, beside this script's real path (a linked scripts directory resolves to the
+// loop repo). null when it cannot be read; wave-loop's preflight treats that as a mismatch.
+function loopVersion() {
+  try {
+    return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version ?? null;
+  } catch {
+    return null;
+  }
 }

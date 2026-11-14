@@ -31,6 +31,9 @@ effort should move up or down a notch:
 - all:     tokens and minutes per role, the model each role requested and the model that served it
            (a difference prints a MODEL MISMATCH line; an unrecorded served model prints "unknown")
 
+`loopVersion` (wave-loop 2.2.0 and later) prints on the Date line; a run without it raises a LOOP VERSION flag,
+because an older wave-loop ran and the sections it does not record read as empty, not as zero.
+
 Also read from the result when present: `decisions` (the decision ledger: accepted, asked, reversed, reversal
 rate) and `reality` (the reality gate's gaps). Both are optional, so v1 outputs still render.
 
@@ -63,6 +66,10 @@ def walk(o, out):
     elif isinstance(o, list):
         for v in o:
             walk(v, out)
+
+
+# wave-loop runs its command relays (labels ci:, preflight:, main:, delta:, facts:) on the merger's model (RELAY_MODEL).
+RELAY_ROLES = {"ci": "merger", "preflight": "merger", "main": "merger", "delta": "merger", "facts": "merger"}
 
 
 def role_of(label):
@@ -156,7 +163,7 @@ def load(path):
 def merge_results(paths):
     """Merge several output files of one wave: agents accumulate, a task's later record replaces its earlier
     one (rounds accumulate), escalations and reality gaps from every run are kept, decisions are keyed by id."""
-    result = {"gate": "?", "models": {}, "tasks": {}, "escalations": [], "decisions": [], "reality": None, "timings": {}}
+    result = {"gate": "?", "models": {}, "tasks": {}, "escalations": [], "decisions": [], "reality": None, "timings": {}, "loopVersions": []}
     agents = []
     decisions = {}
     anon = 0
@@ -164,6 +171,7 @@ def merge_results(paths):
         r, a = load(path)
         agents.extend(a)
         result["gate"] = r.get("gate", "?")
+        result["loopVersions"].append(r.get("loopVersion"))
         if r.get("models"):
             result["models"] = r["models"]
         for tid, t in r.get("tasks", {}).items():
@@ -208,7 +216,7 @@ def role_rows(agents, models):
         r["runs"] += 1
         r["tokens"] += a.get("tokens") or 0
         r["minutes"] += (a.get("durationMs") or 0) / 60000
-        requested = a.get("requestedModel") or (models.get(role) or {}).get("model")
+        requested = a.get("requestedModel") or (models.get(role) or models.get(RELAY_ROLES.get(role, "")) or {}).get("model")
         served = a.get("servedModel") or a.get("model")
         if requested:
             r["requested"].add(requested)
@@ -241,6 +249,14 @@ def main(wave, date, paths, out_path=None):
     total_minutes = sum(r["minutes"] for r in by_role.values())
 
     flags = [f"MODEL MISMATCH {role} requested {req} served {srv}" for role, req, srv in mismatches]
+    versions = result["loopVersions"]
+    for i, v in enumerate(versions, 1):
+        if not v:
+            flags.append(f"LOOP VERSION unknown in run {i}: the result has no loopVersion, so a wave-loop older than 2.2.0 ran (the session resolved another copy of the loop). Its timings, decision ledger and reality gate are not recorded; this wave is not a baseline for the current loop.")
+    known = sorted({v for v in versions if v})
+    if len(known) > 1:
+        flags.append(f"LOOP VERSION differs between runs: {', '.join(known)}")
+    loop_line = ", ".join(v or "unknown" for v in versions) or "unknown"
     token_line = None
     if out_path:
         history = previous_tokens(out_path)
@@ -280,7 +296,7 @@ def main(wave, date, paths, out_path=None):
     out = []
     out.append(f"# Wave {wave} loop scorecard")
     out.append("")
-    out.append(f"Date: {date}. Gate: **{result.get('gate', '?')}** after {runs} run(s). Source: Workflow run output; requested models from the result, served models from the agent records.")
+    out.append(f"Date: {date}. Gate: **{result.get('gate', '?')}** after {runs} run(s). Loop: {loop_line}. Source: Workflow run output; requested models from the result, served models from the agent records.")
     out.append("")
     out.append("## Flags")
     out.append("")

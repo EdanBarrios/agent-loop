@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -140,4 +140,38 @@ describe('loop-scorecard.py', { timeout: 120_000 }, () => {
     expect(md).not.toContain('TOKEN FLAG');
     expect(md).toContain('no previous scorecards');
   });
+
+  it('flags a result with no loopVersion, and prints the version of a result that has one', async () => {
+    const old = await scorecard(['1', '2026-10-30', fixture('scorecard-v1-wave0.json')]);
+    expect(old).toContain('LOOP VERSION unknown in run 1');
+    expect(old).toContain('Loop: unknown.');
+
+    const dir = mkdtempSync(join(tmpdir(), 'scorecard-version-'));
+    const doc = JSON.parse(readFileSync(fixture('scorecard-v2-decisions.json'), 'utf8'));
+    // The Workflow tool may store the result as a JSON string.
+    const result = typeof doc.result === 'string' ? JSON.parse(doc.result) : doc.result;
+    doc.result = JSON.stringify({ ...result, loopVersion: '2.2.0' });
+    const path = join(dir, 'stamped.json');
+    writeFileSync(path, JSON.stringify(doc));
+    const stamped = await scorecard(['4', '2026-11-13', path]);
+    expect(stamped).toContain('Loop: 2.2.0.');
+    expect(stamped).not.toContain('LOOP VERSION');
+  });
+
+  it('reads a relay role (ci, preflight) as requesting the merger model, and flags a relay served another one', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'scorecard-relay-'));
+    const doc = JSON.parse(readFileSync(fixture('scorecard-v2-mismatch.json'), 'utf8'));
+    doc.workflowProgress.push(
+      { type: 'workflow_agent', index: 4, label: 'ci:1.1 r1', agentId: 'agent4', state: 'done', tokens: 5000, toolCalls: 2, durationMs: 60000, model: 'claude-haiku-5-5' },
+      { type: 'workflow_agent', index: 5, label: 'preflight:merge', agentId: 'agent5', state: 'done', tokens: 3000, toolCalls: 1, durationMs: 10000, model: 'claude-opus-5-5' },
+    );
+    const path = join(dir, 'relay.json');
+    writeFileSync(path, JSON.stringify(doc));
+    const md = await scorecard(['1', '2026-11-13', path]);
+    const merger = doc.result.models.merger.model;
+    expect(row(md, '## Roles', 'ci')?.[1]).toBe(merger);
+    expect(row(md, '## Roles', 'preflight')?.[1]).toBe(merger);
+    expect(md).toContain(`MODEL MISMATCH preflight requested ${merger} served claude-opus-5-5`);
+  });
 });
+

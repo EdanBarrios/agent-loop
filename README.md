@@ -42,6 +42,13 @@ operating manual. Read it fully before running a wave.
 
 ## Running a wave
 
+Start the session in the project repo. `Workflow({ name: 'wave-loop' })` resolves the name from the
+`.claude/workflows` of the directory the session started in, and the agents the same way. A session
+started in `~/dev/agent-loop` gets that repo's own pinned copy (`.claude/` there links to
+`~/dev/agent-loop-stable`), not the loop the project links. The preflight compares the workflow's
+`LOOP_VERSION` with the version the project's linked scripts print and fails the wave when they
+differ; a wave-loop older than 2.2.0 has no such check, and its scorecard carries a LOOP VERSION flag.
+
 Read `.claude/loop.local.json` in the repo and pass it whole as `args.project`:
 
 ```
@@ -53,7 +60,7 @@ verbatim from the spec. `tail` has the same shape or is `null`. A parked task is
 passing only the parked tasks again; a task whose draft PR should be continued after an escalation
 was answered gets `resume: { prNumber, prUrl, worktree, items: [what to do], notes }`.
 
-The result is `{ project, wave, gate, models, state, tasks, escalations }`. Save it as JSON in the
+The result is `{ project, wave, gate, models, state, tasks, escalations, reality, decisions, timings, loopVersion }`. Save it as JSON in the
 session scratchpad, then write the scorecard:
 
 ```
@@ -151,6 +158,11 @@ template if there is none, and lists all of them plus `CLAUDE.local.md` in the r
 `.git/info/exclude`, so nothing the loop adds can be committed and no `.gitignore` line is needed.
 Claude Code and the hookify plugin read these from disk, so the loop runs exactly as if the files
 were in the repo.
+
+npm 11.3 can crash in `npm install` with "Cannot read properties of null (reading 'edgesOut')" while
+it resolves optional peer dependencies (seen with Vitest 5 on a fresh Next.js repo). Each package
+installs alone; `legacy-peer-deps=true` in the project's `.npmrc` makes the full install and
+`npm ci` pass.
 
 ## Principles the loop encodes
 

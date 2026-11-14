@@ -17,7 +17,7 @@ type TaskArg = { id: string; title: string; branch: string; deps: string[]; text
 const task = (id: string, extra: Partial<TaskArg> = {}): TaskArg => ({ id, title: 'T', branch: `feat/${id}`, deps: [], text: 'x', owns: 'y', notes: '', ...extra });
 
 const ran = (line: unknown, exitCode = 0) => ({ status: 'ran', exitCode, stdout: `${JSON.stringify(line)}\n` });
-const preflight = (load?: Json) => ran({ outcome: 'error', exit: 4, mergeSha: null, message: 'could not read PR #0: no pull requests found', ...(load ? { load } : {}) }, 4);
+const preflight = (load?: Json) => ran({ outcome: 'error', exit: 4, mergeSha: null, message: 'could not read PR #0: no pull requests found', loopVersion: '2.2.0', ...(load ? { load } : {}) }, 4);
 
 async function runWave(answers: Record<string, Answer>, extra: { project?: Json; tasks?: TaskArg[] } = {}) {
   const calls: string[] = [];

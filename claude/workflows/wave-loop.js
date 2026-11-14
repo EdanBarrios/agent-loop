@@ -18,13 +18,17 @@
 // An open item with before <= this wave returns { gate: 'BLOCKED', blockedBy: [ids] } before any agent starts.
 // project.realityCheck: { command, readOnly: true, timeoutSec }: run after the machine gate through a small
 // haiku/low agent; a block gap (or a check that does not run cleanly) fails the gate with a reality_gap escalation.
-// Result: { project, wave, gate, models, state, tasks, escalations, reality, decisions, timings }. reality is null when no
+// Result: { project, wave, gate, models, state, tasks, escalations, reality, decisions, timings, loopVersion }. reality is null when no
 // check is configured, else { ok, gaps, error? }; decisions are the workers' `id | choice | reason | reversible` lines.
 // timings[taskId] = { ciWaitMs, mergeMs, mainCheckMs } copied from the scripts' JSON lines, plus localCheckMs from the
 // worker's structured result (this script has no clock). tasks[id].merge.script.mainCheck is 'skipped:unchanged' when
 // the check on main was skipped because the merged tree is the tree CI checked.
 // tasks[id].rounds[n].criticSkipped is 'ci-only' when a later round reused the previous MERGE (scripts/ci-only.js).
 // This script never calls workflow(): chain-loop calls it, and nesting is one level.
+// LOOP_VERSION equals package.json "version" (a test holds them equal). The preflight dry run prints the version of the
+// loop scripts it ran; a different or missing one fails the wave, because the Workflow tool resolves 'wave-loop' from the
+// session's own .claude/workflows, which can be another copy of the loop than the project's linked scripts. The result
+// carries loopVersion so a scorecard can tell which loop ran.
 
 export const meta = {
   name: 'wave-loop',
@@ -818,6 +822,7 @@ const REALITY_MODEL = { model: 'claude-haiku-5-5', effort: 'low', ...((P.models 
 const CRITIC_FALLBACK = { model: 'opus', effort: 'high' }
 
 const NAME = P.name
+const LOOP_VERSION = '2.2.0'
 const REPO = P.repo
 const WT = P.worktrees
 const SPEC = P.spec
@@ -931,7 +936,7 @@ The commit-on-main hook blocks any git commit or git push command whose text nam
 ${PROJECT_NOTES}
 `
 
-const SYNC_STEP = `Sync before pushing (always, so the PR can get a CI run): git fetch origin && git merge origin/main -m "Sync branch with upstream before merge". ${SYNC_CONFLICTS} Commit the merge and push with a plain git push.`
+const SYNC_STEP = `Sync before pushing (always, so the PR can get a CI run): git fetch origin && git merge origin/main -m "Sync branch with upstream before merge" -m "${TRAILER}". ${SYNC_CONFLICTS} Commit the merge and push with a plain git push.`
 
 // Task 4.2: what a worker may decide alone. The spec's End goal, Budget and Decision envelope sections are read by the
 // worker itself (scripts have no filesystem), so a project spec without them still works.
@@ -1778,6 +1783,9 @@ async function preflightMerge() {
     return fail(`${command} printed no JSON line (exit ${rr.exitCode}); the script is missing or does not run. Output tail: ${tailOf(rr.stdout, 200) || '(empty)'} ${rr.note}`.trim())
   }
   if (line.outcome === 'error' && /^(cannot read|usage:)/.test(String(line.message || ''))) return fail(String(line.message))
+  if (line.loopVersion !== LOOP_VERSION) {
+    return fail(`this wave-loop script is loop ${LOOP_VERSION}, but the loop scripts in ${SCRIPTS} report ${line.loopVersion ? `loop ${line.loopVersion}` : 'no version'}. The session resolved another copy of the loop: 'wave-loop' comes from the .claude/workflows of the directory the session started in. Start the session in the project repo (or relink that copy), then run the wave again`)
+  }
   warnLoad(line.load)
   return true
 }
@@ -1789,7 +1797,7 @@ function warnLoad(load) {
 }
 if (!MERGER_AGENT && !(await preflightMerge())) {
   log(`Wave ${WAVE} FAILED in preflight: ${escalations[escalations.length - 1].what}`)
-  return { project: NAME, wave: WAVE, gate: 'FAIL', models: MODELS, state: {}, tasks: {}, escalations, reality: null, decisions: [], timings: {} }
+  return { project: NAME, wave: WAVE, gate: 'FAIL', models: MODELS, state: {}, tasks: {}, escalations, reality: null, decisions: [], timings: {}, loopVersion: LOOP_VERSION }
 }
 
 phase('Build')
@@ -1904,4 +1912,4 @@ for (const r of Object.values(results)) {
 }
 
 const models = { ...MODELS, critic: criticModel, ...(realityModel ? { reality: realityModel } : {}) }
-return { project: NAME, wave: WAVE, gate: gate ? 'PASS' : 'FAIL', models, state, tasks: results, escalations, reality, decisions, timings }
+return { project: NAME, wave: WAVE, gate: gate ? 'PASS' : 'FAIL', models, state, tasks: results, escalations, reality, decisions, timings, loopVersion: LOOP_VERSION }
