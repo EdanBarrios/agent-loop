@@ -105,7 +105,7 @@ const mergeRan = (over: Json = {}) => {
   return ran(line, line.exit);
 };
 const blocked = (note = 'Permission to run this command was denied.') => ({ status: 'blocked', note });
-const preflightOk = ran({ outcome: 'error', exit: 4, mergeSha: null, message: 'could not read PR #0: no pull requests found', loopVersion: '2.2.0' }, 4);
+const preflightOk = ran({ outcome: 'error', exit: 4, mergeSha: null, message: 'could not read PR #0: no pull requests found', loopVersion: '2.2.1' }, 4);
 
 const green = ciOf('green');
 // Chunked CI wait: chunk 1 keeps the base label, later chunks add ' c<n>'.
@@ -152,11 +152,20 @@ describe('2.1 script mode: CI and merge are commands run by relay agents', () =>
     expect(prompts['ci:9.1 r1'][0]).toContain('node /opt/loop/scripts/wait-ci.js 7 --repo /tmp/sim');
   });
 
-  it('relays run on the merger model and effort', async () => {
-    const { optsSeen } = await runWave(happy);
+  it('relays run on Haiku/low by default, and the result reports it as relay and merger', async () => {
+    const { optsSeen, out } = await runWave(happy);
     for (const label of ['preflight:merge', 'ci:9.1 r1', 'merger:9.1']) {
       const o = optsSeen.find((x) => x.label === label)!;
-      expect([o.model, o.effort], label).toEqual(['claude-sonnet-5-5', 'low']);
+      expect([o.model, o.effort], label).toEqual(['claude-haiku-5-5', 'low']);
+    }
+    expect(out.models.relay).toEqual({ model: 'claude-haiku-5-5', effort: 'low' });
+    expect(out.models.merger).toEqual({ model: 'claude-haiku-5-5', effort: 'low' });
+  });
+
+  it('project.models.relay overrides the relay model; project.models.merger does not move it', async () => {
+    const { optsSeen } = await runWave(happy, { project: { models: { relay: { model: 'claude-sonnet-5-5', effort: 'low' }, merger: { model: 'opus', effort: 'high' } } } });
+    for (const label of ['preflight:merge', 'ci:9.1 r1', 'merger:9.1']) {
+      expect(optsSeen.find((x) => x.label === label)!.model, label).toBe('claude-sonnet-5-5');
     }
   });
 

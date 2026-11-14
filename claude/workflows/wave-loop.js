@@ -822,7 +822,7 @@ const REALITY_MODEL = { model: 'claude-haiku-5-5', effort: 'low', ...((P.models 
 const CRITIC_FALLBACK = { model: 'opus', effort: 'high' }
 
 const NAME = P.name
-const LOOP_VERSION = '2.2.0'
+const LOOP_VERSION = '2.2.1'
 const REPO = P.repo
 const WT = P.worktrees
 const SPEC = P.spec
@@ -1252,7 +1252,10 @@ function roundRecord(round, critic, ci) {
 
 // ---- Relays: one low-cost agent runs one command and hands back its stdout and exit code. ----
 // The workflow parses the JSON line itself and never trusts a summary typed by the relay.
-const RELAY_MODEL = MODELS.merger
+// Haiku/low by default (Edan, 2026-11-14): a relay copies stdout and an exit code, and the CI relays cost 16 to 17% of
+// a wave's tokens on Sonnet. project.models.relay overrides it; project.models.merger now only sets the v2 merger agent.
+// In script mode the 'merger:' labels are relays, so the result reports models.merger as the relay model too.
+const RELAY_MODEL = { model: 'claude-haiku-5-5', effort: 'low', ...((P.models || {}).relay || {}) }
 
 function relayPrompt(command) {
   return `You are a relay for the ${NAME} repository. You run exactly one shell command and report what it printed. You do not interpret, summarise, repair or retry anything.
@@ -1911,5 +1914,5 @@ for (const r of Object.values(results)) {
   }
 }
 
-const models = { ...MODELS, critic: criticModel, ...(realityModel ? { reality: realityModel } : {}) }
+const models = { ...MODELS, ...(MERGER_AGENT ? {} : { merger: RELAY_MODEL }), relay: RELAY_MODEL, critic: criticModel, ...(realityModel ? { reality: realityModel } : {}) }
 return { project: NAME, wave: WAVE, gate: gate ? 'PASS' : 'FAIL', models, state, tasks: results, escalations, reality, decisions, timings, loopVersion: LOOP_VERSION }

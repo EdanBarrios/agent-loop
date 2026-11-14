@@ -131,6 +131,7 @@ Several result files for one wave (a relaunch after an escalation) merge into on
 | `quickCheck` | a shell command with `{files}` (typecheck, lint, related tests) that workers run instead of the full check, through the slot wrapper; CI runs the full check. Empty by default: workers run `check` |
 | `loopScripts` | directory holding `wait-ci.js` and `merge-pr.js` (default `<repo>/.claude/scripts`, which `install.sh` links) |
 | `merger` | unset by default (merge through `scripts/merge-pr.js`); `"agent"` restores the v2 merger agent as a rollback |
+| `models.relay` | the model of the command relays (CI wait, merge script, preflight, PR facts); default Haiku/low since 2.2.1. `models.merger` only sets the v2 merger agent |
 | `mergeMethod` | `"merge"` (default, a merge commit) or `"squash"` (one commit per PR, so a branch's intermediate commits, such as one that briefly held private data, never reach the default branch's history); script mode only, the v2 merger agent always merges. Another value fails the preflight |
 | `fastLane` | `{ "enabled": false, "maxPerWave": 3, "denyPaths": [], "testCountCommand": "" }` by default; off until a human turns it on per project, and nothing is eligible without `testCountCommand` |
 | `realityCheck` | `{ "command": "...", "readOnly": true }`: a read-only command run after the wave; a blocking gap it reports fails the gate |
