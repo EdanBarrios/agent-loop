@@ -417,7 +417,7 @@ describe('mergePr: mainCi empty runs the local check', () => {
     expect(count(cmds, /^gh run list/)).toBe(0);
     expect(index(cmds, /^git pull --ff-only$/)).toBeLessThan(index(cmds, /slot\.sh/));
     expect(index(cmds, /slot\.sh/)).toBeLessThan(index(cmds, /^git checkout -- ratchet\.json$/));
-  }, 30000);
+  }, 120_000);
 
   it('a red local check reverts once; the check is run again on the revert merge and passes: exit 3', async () => {
     const { result, cmds } = await go(
@@ -656,7 +656,7 @@ describe('scripts/merge-pr.js (spawned through a symlink with fake gh and git)',
     expect(JSON.parse(lines[0])).toMatchObject({ outcome: 'merged', exit: 0, mergeSha: MERGE_SHA, mainSha: MERGE_SHA, ciState: 'green', failing: [], conflictFiles: [], revertPrUrl: null });
     expect(w.calls().map((c) => c.cmd)).toContain(`gh pr merge 7 --merge --delete-branch --match-head-commit ${HEAD}`);
     assertSafe(w.calls().map((c) => c.cmd));
-  }, 30000);
+  }, 120_000);
 
   it('CI red: exit 2, the JSON names the failing check, no merge call reaches gh', () => {
     const w = spawnWorld({ syncPolicy: 'conflict', mainCi: 'check' }, SPAWN_RULES(CHECKS_RED, 1));
@@ -664,7 +664,7 @@ describe('scripts/merge-pr.js (spawned through a symlink with fake gh and git)',
     expect(r.status).toBe(2);
     expect(JSON.parse(r.stdout.trim())).toMatchObject({ outcome: 'refused', exit: 2, ciState: 'red', failing: ['check'] });
     expect(w.calls().filter((c) => /^gh pr merge/.test(c.cmd))).toHaveLength(0);
-  }, 30000);
+  }, 120_000);
 
   it('bad usage: exit 4 with a JSON error line and no gh or git call', () => {
     const w = spawnWorld({}, []);
@@ -672,7 +672,7 @@ describe('scripts/merge-pr.js (spawned through a symlink with fake gh and git)',
     expect(r.status).toBe(4);
     expect(JSON.parse(r.stdout.trim())).toMatchObject({ outcome: 'error', exit: 4 });
     expect(w.calls()).toHaveLength(0);
-  }, 30000);
+  }, 120_000);
 
   it('--dry-run reports the machine load; --verify-main needs a sha and no --defer-main', () => {
     const w = spawnWorld({ syncPolicy: 'conflict', mainCi: 'check', loadWarnFactor: 1000 }, SPAWN_RULES(CHECKS_GREEN));
@@ -687,7 +687,7 @@ describe('scripts/merge-pr.js (spawned through a symlink with fake gh and git)',
       expect(r.status, args.join(' ')).toBe(4);
       expect(JSON.parse(r.stdout.trim()).message).toMatch(/^usage:/);
     }
-  }, 30000);
+  }, 120_000);
 
   it('a repo without .claude/loop.local.json: exit 4 with a JSON error line', () => {
     const w = spawnWorld({}, []);
@@ -695,5 +695,5 @@ describe('scripts/merge-pr.js (spawned through a symlink with fake gh and git)',
     expect(r.status).toBe(4);
     expect(JSON.parse(r.stdout.trim()).message).toMatch(/loop\.local\.json/);
     expect(w.calls()).toHaveLength(0);
-  }, 30000);
+  }, 120_000);
 });

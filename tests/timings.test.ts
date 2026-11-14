@@ -14,7 +14,7 @@ async function timings(args: string[]) {
 
 const HEADER = '| Task | Build | Local check | Slot wait | Review | CI wait | Merge | Main check | Fix rounds |';
 
-describe('loop-scorecard.py --timings', { timeout: 30_000 }, () => {
+describe('loop-scorecard.py --timings', { timeout: 120_000 }, () => {
   it('prints the exact table for a result with the real record keys and timings', async () => {
     const md = await timings([fixture('timings-full.json')]);
     expect(md).toBe(

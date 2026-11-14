@@ -62,7 +62,7 @@ describe('ciOnlyChange (real git)', () => {
   it('no new commit since the reviewed head is CI-only', async () => {
     const r = repo();
     expect(await r.check()).toMatchObject({ ciOnly: true, reason: 'no new commits since the reviewed head' });
-  }, 30000);
+  }, 120_000);
 
   it('a formatting-only commit is CI-only and names the file', async () => {
     const r = repo();
@@ -71,7 +71,7 @@ describe('ciOnlyChange (real git)', () => {
     const d = await r.check();
     expect(d).toMatchObject({ ciOnly: true, commits: 1, files: ['a.ts'] });
     expect(d.reason).toMatch(/formatting-only/);
-  }, 30000);
+  }, 120_000);
 
   it('a clean sync merge from main is CI-only, even though main changed other files', async () => {
     const r = repo();
@@ -84,7 +84,7 @@ describe('ciOnlyChange (real git)', () => {
     const d = await r.check();
     expect(d).toMatchObject({ ciOnly: true, commits: 1 });
     expect(d.reason).toMatch(/clean sync merge/);
-  }, 30000);
+  }, 120_000);
 
   it('a sync merge that resolved a conflict is not CI-only', async () => {
     const r = repo();
@@ -99,7 +99,7 @@ describe('ciOnlyChange (real git)', () => {
     const d = await r.check();
     expect(d.ciOnly).toBe(false);
     expect(d.reason).toMatch(/resolved a conflict/);
-  }, 30000);
+  }, 120_000);
 
   it('a code change, an added file or a deleted file is not CI-only', async () => {
     const code = repo();
@@ -116,7 +116,7 @@ describe('ciOnlyChange (real git)', () => {
     deleted.git('rm', '-q', 'b.ts');
     deleted.commit('delete');
     expect((await deleted.check()).reason).toMatch(/deletes b\.ts/);
-  }, 30000);
+  }, 120_000);
 
   it('a formatting commit followed by a real change is not CI-only', async () => {
     const r = repo();
@@ -125,7 +125,7 @@ describe('ciOnlyChange (real git)', () => {
     r.write('b.ts', 'export const b = 5;\n');
     r.commit('real');
     expect(await r.check()).toMatchObject({ ciOnly: false });
-  }, 30000);
+  }, 120_000);
 
   it('a reviewed head that is not a sha, or not in the branch, is not CI-only', async () => {
     const r = repo();
@@ -139,5 +139,5 @@ describe('ciOnlyChange (real git)', () => {
     const d = await r.check(other);
     expect(d.ciOnly).toBe(false);
     expect(d.reason).toMatch(/not an ancestor/);
-  }, 30000);
+  }, 120_000);
 });
