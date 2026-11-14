@@ -49,7 +49,16 @@ started in `~/dev/agent-loop` gets that repo's own pinned copy (`.claude/` there
 `LOOP_VERSION` with the version the project's linked scripts print and fails the wave when they
 differ; a wave-loop older than 2.2.0 has no such check, and its scorecard carries a LOOP VERSION flag.
 
-Read `.claude/loop.local.json` in the repo and pass it whole as `args.project`:
+Build the args from the spec instead of by hand:
+
+```
+node ~/dev/agent-loop/scripts/wave-args.js --repo <repo> --wave <id> [--tail <task id>] [--notes <text>] > args.json
+```
+
+It lints the spec, reads `.claude/loop.local.json` as `project`, copies each task of the wave verbatim (text, owned
+paths, same-wave dependencies, lane, a `task/<id>-<slug>` branch) and takes the wave's `.T` task as the tail.
+
+By hand: read `.claude/loop.local.json` in the repo and pass it whole as `args.project`:
 
 ```
 Workflow({ name: 'wave-loop', args: { project: <loop.local.json>, wave: '2', tasks: [...], tail: {...} } })
