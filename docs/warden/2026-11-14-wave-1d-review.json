@@ -1,0 +1,875 @@
+{
+  "project": "Warden",
+  "wave": "1d",
+  "accepted": [
+    {
+      "id": "R2",
+      "kind": "defect",
+      "task": "1.14",
+      "category": "classifier",
+      "touches": [],
+      "dependsOn": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR on the spec text and the classifier.",
+      "text": "1.14 does not say what text a reference covers when a negation 'directly follows' it. \"accessory dwelling unit under separate permit\" has \"unit\" between the reference and \"under\", and \"accessory dwelling unit (ADU) under separate permit\" holds two references of which only the last is adjacent. Read literally, both stay true, which is wrong. Recommend: the cancelled reference includes a following \"unit\"/\"units\" and a following parenthesised \"(ADU)\", and the pair cancels together. Add the two cases and a \"mother-in-law unit\" true case so \"mother-in-law visits\" is not the only in-law probe.",
+      "evidence": "Prototype of the task as literally written, run read-only in the scratchpad against src/lib/adu.ts: 'DIFF true <- new accessory dwelling unit (adu) under separate permit'. Live query of Building Permits (i98e-djp9) for \"accessory dwelling unit under/on separate permit\" and similar: count_distinct_permit_number 4. For 'ADU or accessory dwelling' plus 'separate permit': 237 permits, only 35 with the reference directly before the phrase.",
+      "wouldBeWrongIf": "Edan wants a bare \"accessory dwelling unit under separate permit\" to stay true; nothing in the data suggests that.",
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "directly followed by \"on separate permit\", \"under separate permit\" or \"to be under separate permit\" (with or without \"a\" before \"separate\"). A permit is true when",
+          "replace": "directly followed by \"on separate permit\", \"under separate permit\" or \"to be under separate permit\" (with or without \"a\" before \"separate\"). A reference covers a following \"unit\" or \"units\" and a following parenthesised \"(ADU)\" or \"(ADUs)\", so \"accessory dwelling unit (ADU) under separate permit\" is cancelled whole. A permit is true when"
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "\"mother-in-law visits\"; every earlier case",
+          "replace": "\"mother-in-law visits\", \"new accessory dwelling unit under separate permit\", \"new accessory dwelling unit (ADU) under separate permit\"; and true for \"add mother-in-law unit at ground floor\"; every earlier case"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category classifier is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Prototype of 1.14 as written returns true for 'new accessory dwelling unit under separate permit' and for the '(ADU)' form; with the proposed span rule both are false and every other listed 1.14 case is unchanged. Live counts on i98e-djp9 reproduced: 4 permits for the 'accessory dwelling unit under/on separate permit' forms, 237 for ADU wording plus 'separate permit'. On the site's own datasets (213 permits with ADU wording and 'separate permit' in 5bat-azvb and gzxm-jz5j) the span rule flips 3 permits to false (202111303297, 201012317683, 201906062742); all 3 say the ADU is on another permit. On Housing Production it flips none.",
+        "reason": "Holds up: three real permits corrected, no wrong flip found. Decision 5 says 'followed by', not 'directly followed by', so this refines the task inside the decision rather than changing it. Note the city check cannot see this rule (0 flips on Housing Production), so only the unit tests guard it."
+      }
+    },
+    {
+      "id": "R5",
+      "kind": "defect",
+      "task": "1.15",
+      "category": "source",
+      "touches": [],
+      "dependsOn": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR on the spec text.",
+      "text": "1.15's join to Building Permits is unnecessary and the cause of several undefined cases. Housing Production already carries `description`, and it equals Building Permits' description after case and whitespace. Dropping the join removes 25 of 32 requests and the batching, and fixes: `permit_number` is not unique in Building Permits (several rows per permit, so 'joined with a space' duplicates text); 7 Housing Production permits have no Building Permits row (their 'bpa' is a project name or has '_' and '%'); and a `$where ... in ('...')` built from external strings needs quote escaping. Recommend reading `description` from xdht-4php alone.",
+      "evidence": "Command output: Housing Production 6,168 rows, 6,168 distinct bpa; Building Permits 1,298,381 rows, 1,152,228 distinct permit_number; 6,161 of 6,161 joinable permits have equal description after lower-casing and collapsing whitespace; isAdu on Housing Production's own description gives the same result as on the joined text ('oursYes 808, agree 802' both ways); a 100-permit sample of the review dataset 5bat-azvb matches Housing Production's description 100 of 100.",
+      "wouldBeWrongIf": "Housing Production's description is truncated or edited for permits outside the 6,168 now listed, or differs from the review dataset's text for permits outside the 100 sampled.",
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "reads Housing Production (`xdht-4php`: `bpa`, `adu_legalization_units`) and the descriptions of those permits from Building Permits (`i98e-djp9`: `permit_number`, `description`), joins them, and prints the result of `compareWithCity`.",
+          "replace": "reads Housing Production (`xdht-4php`: `bpa`, `adu_legalization_units`, `description`; one row per `bpa`, and its description is the permit's own, equal to Building Permits' after case and whitespace) and prints the result of `compareWithCity`; no join."
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "Reads or writes: reads (two public DataSF datasets; no database, no file written, no key).",
+          "replace": "Reads or writes: reads (one public DataSF dataset; no database, no file written, no key)."
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "it requests only the columns named here, pages with `$order` and pauses 300 ms between requests; permit numbers are sent in batches of at most 250 in a `$where ... in (...)`.",
+          "replace": "it requests only the columns named here, pages 1,000 rows at a time with `$order=bpa` and pauses 300 ms between requests."
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "(descriptions of one permit joined with a space)",
+          "replace": "(one row per `bpa`)"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category source is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Full join rerun, read-only: Housing Production 6,168 rows and 6,168 distinct bpa; Building Permits 1,298,381 rows and 1,152,228 distinct permit_number; 25 batched requests matched 6,161 permits, 1,197 of them with more than one Building Permits row, 7 unmatched; 6,161 of 6,161 descriptions equal after lower-casing and collapsing whitespace (both cap at 300 characters). Wave 1c isAdu on Housing Production's own description: oursYes 808, agree 802. Against the datasets the site reads: 1,016 of 1,016 shared permits equal in 5bat-azvb and 460 of 460 in gzxm-jz5j. The dataset's column list includes description; the pull took 7 requests.",
+        "reason": "Verified in full, not sampled. The join adds 25 requests, duplicated text for 1,197 permits and 7 undefined rows, and buys nothing. One side effect to know: cityYes becomes 1,853 rather than the header's 1,850, because the 7 unmatched rows are now included."
+      }
+    },
+    {
+      "id": "R7",
+      "kind": "defect",
+      "task": "1.15",
+      "category": "classifier",
+      "touches": [],
+      "dependsOn": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR on the spec text.",
+      "text": "`recallWithoutLegalization` is ambiguous: 'leaves out city rows whose description matches legali[sz]' does not say whether an agreeing row that mentions 'legalize' leaves the numerator too. The two readings differ by 9 points, so two correct workers would print different numbers. Recommend: remove those rows before counting, from numerator and denominator.",
+      "evidence": "Housing Production on 14 Nov 2026 with the wave 1c isAdu: cityYes 1,853, agree 802, city-yes rows saying legaliz 785 of which 95 agree. Rows removed first: (802-95)/(1,853-785) = 66.2%. Rows left out of the denominator only: 802/1,068 = 75.1%.",
+      "wouldBeWrongIf": "Edan has a different meaning in mind, such as excluding only rows that are legalization and not ADU wording; then the regex needs a second term.",
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "leaves out city rows whose description matches `/legali[sz]/i`;",
+          "replace": "is `agreeYes / cityYes` over the rows whose description does not match `/legali[sz]/i` (those rows are removed first from numerator and denominator, whether or not `isAdu` says yes);"
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "a legalization-only miss counts in `recall` but not in `recallWithoutLegalization`;",
+          "replace": "a legalization-only miss counts in `recall` but not in `recallWithoutLegalization`; an agreeing row that says \"legalize\" counts in `recall` and in neither part of `recallWithoutLegalization`;"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category classifier is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Recomputed on Housing Production with the merged isAdu: cityYes 1,853, agree 802, city-yes rows matching /legali[sz]/i 785, of which 95 agree. Rows removed first: 707 / 1,068 = 66.2%. Denominator only: 802 / 1,068 = 75.1%.",
+        "reason": "The two readings differ by 9 points, exactly as stated, and the spec text allows both. Removing the rows from both parts is the cleaner definition and matches the existing test wording."
+      }
+    },
+    {
+      "id": "R8",
+      "kind": "question",
+      "task": "1.15",
+      "category": "classifier",
+      "touches": [],
+      "dependsOn": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "No action to reverse; an answer only.",
+      "text": "Edan's question: is a precision-only gate enough? The check cannot show what the page needs. (a) Recall is 43% today and about 45% after 1.14 as written; 351 city permits that do not mention legalization still miss, mostly plain 'add dwelling unit' wording with no ADU term. (b) The key adu_legalization_units lumps ADU and legalization, so a legalization permit the classifier wrongly counts as an ADU still scores as agreement. (c) Housing Production lists finished permits only, so the open permits that make up most of the 6-month and 12-month windows are never checked. (d) The rules were fitted to the same 6 wrong calls the check then scores, so 99.2% is in-sample. Recommended default: keep the 98% precision gate, record recall in the wave scorecard, and have the About page (human step 6) say that ADU permits are text-matched and understate the city's count.",
+      "evidence": "Spec header: 'caught 802 of the city's 1,850 ADU-or-legalization permits (43.4%)' and 'every finished permit since 2005 that changed the unit count'. Prototype of 1.14 on 14 Nov 2026: recall 45.5%, 'non-legalization misses 351 { dwelling unit: 162, add unit/new unit: 282, garage/basement conversion: 127, granny/cottage/studio: 42, none: 27 }' (families overlap). Housing Production columns include adu_legalization_units and no separate ADU column.",
+      "wouldBeWrongIf": "Edan wants only a classifier that never over-counts and accepts under-counting with a stated caveat, which is the recommended default.",
+      "edits": [],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category classifier is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Prototype of 1.14: recall 45.5%, 1,009 misses of which 351 do not say legaliz. Dataset columns hold adu_legalization_units and no separate ADU column. All 6,168 rows have a first_completion_date (2005-01-03 to 2026-10-30) and the dataset's own summary says 'completed and partially completed building permits'. Of the 844 agreeing permits, 127 say legaliz and 41 cite ordinance 43-14, so some agreement is legalization the key cannot tell from an ADU.",
+        "reason": "Each of the four limits is real. Point (b) is larger than the recommendation states: up to 127 of the 844 agreements may be legalization permits that decision 5 says should not count, so the 99.2% is an upper bound against the decision's own definition. The default changes nothing in the spec; the About wording stays Edan's to write."
+      }
+    },
+    {
+      "id": "R9",
+      "kind": "defect",
+      "task": "1.15",
+      "category": "classifier",
+      "touches": [],
+      "dependsOn": [
+        "F2"
+      ],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR on the spec text.",
+      "text": "Nobody owns running the check or recording its result. 1.14 changes what the classifier returns, and the only evidence it did not regress is the live run of 1.15, which needs both merged; the wave has no tail and the script is not part of `npm run check`. Recommend: after both merge, the session runs the script once and pastes the counts (no descriptions) into the wave scorecard, and a precision below 98 or a fall of more than 1 point from 99.3 stops for Edan. The run makes about 7 anonymous requests.",
+      "evidence": "Spec: 'Two tasks, no tail; a two-task wave is fine here.' and 1.15 'no `package.json` change'. CLAUDE.md of the loop: scorecard goes to ~/dev/agent-loop/docs/<project>/. Prototype after 1.14 gave 99.2% precision, so the stop would not fire, but nothing records it.",
+      "wouldBeWrongIf": "The loop already runs scripts under scripts/ after a wave by habit; the wave scorecards in ~/dev/agent-loop/docs/warden/ show no such step for 1c.",
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "Two tasks, no tail; a two-task wave is fine here.",
+          "replace": "Two tasks, no tail; a two-task wave is fine here. After both merge, the session runs `npx tsx scripts/check-adu.ts` once and records its counts (no descriptions) in the wave scorecard; a precision below 98, or a fall of more than 1 point from 99.3, is a stop for Edan. Both figures cover finished permits only."
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category classifier is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Spec line 141 'Two tasks, no tail'; line 144 'no package.json change'; package.json has no script for it. The wave 1c scorecard says 'No reality check recorded.' spec-lint on the spec warns 'wave 1d: 2 tasks; a wave of 2 or fewer goes out as single PRs, not through the wave loop', so no loop step would run it. Prototype precision after 1.14 is 99.2%, above the proposed 98.3 stop. The pull took 7 requests.",
+        "reason": "Nothing else records the only live evidence that 1.14 did not regress. The 7-request figure assumes R5; without it the run is 32 requests. The loop's realityCheck setting could do the same job later, but that is a config change outside this review."
+      }
+    },
+    {
+      "id": "R10",
+      "kind": "defect",
+      "task": "1.15",
+      "category": "dependency",
+      "touches": [],
+      "dependsOn": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR on the spec text.",
+      "text": "Neither wave 1d task lists its dependencies, although 1.12 and 1.5 do. 1.14 builds on 1.6's junior wording in the same file; 1.15 imports `isAllowed` (1.1, 1.8) and `datasetUrl` (1.10) and calls `isAdu` from 1.14's file. All are merged, so this only matters for the worker brief and for a rerun on a clean branch.",
+      "evidence": "git log: '5f328c1 Merge pull request #17 from EdanBarrios/task/1.10-datasf-reader'; src/lib/adu.ts holds JUNIOR_ADU; src/lib/sources/allowlist.ts holds the 1.8 checks. Spec 1.14 and 1.15 have no 'Depends on'.",
+      "wouldBeWrongIf": "The workers' brief is built from CONTRACT.md and the merged tree rather than from the task text, so a missing 'Depends on' never reaches them.",
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "- **1.14 In-law units and negations.** Owns",
+          "replace": "- **1.14 In-law units and negations.** Depends on 1.6 (junior wording, merged). Owns"
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "- **1.15 City check of the classifier.** Owns",
+          "replace": "- **1.15 City check of the classifier.** Depends on 1.1 and 1.8 (`isAllowed`) and 1.10 (`datasetUrl`), all merged; the script imports `isAdu` as merged at run time. Owns"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category dependency is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "git log shows the merges of 1.1 (#3), 1.6 (#11), 1.8 (#12) and 1.10 (#17). src/lib/adu.ts holds JUNIOR_ADU. Ran spec-lint on a scratch copy of the spec with both edits applied: 'spec-lint: OK (25 tasks)', same warnings as the original. scripts/wave-args.js keeps only dependencies inside the same wave, so the new lines add no ordering.",
+        "reason": "Accurate and harmless. The lint parser reads only '1.1 and 1.8' from the 1.15 line and then drops both as out of wave, so the edit cannot stall or reorder the wave."
+      }
+    }
+  ],
+  "asked": [
+    {
+      "id": "R1",
+      "kind": "defect",
+      "task": "1.14",
+      "category": "classifier",
+      "touches": [
+        "fixed_decision"
+      ],
+      "dependsOn": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR on the spec text.",
+      "text": "Fixed decision 5 and task 1.14 disagree on the negation rule, so a worker cannot tell which wins. Decision 5 cancels on \"not\", \"not an\", \"no\" and on \"on separate permit\" / \"under separate permit\", and names only \"in-law unit\". Task 1.14 adds \"not a\", \"to be under separate permit\", an optional \"a\" before \"separate\", and in-law followed by \"units\", \"apartment\" or \"suite\" (with \"in law\" and \"inlaw\" spellings). The test list also has no upper-case case, although the real descriptions are mostly upper case, and no whole-word case for \"no\". Recommend: make decision 5 carry the full rule and add the two test cases.",
+      "evidence": "Decision 5: 'a reference negated by \"not\", \"not an\" or \"no\", or followed by \"on separate permit\" or \"under separate permit\", is cancelled'. Task 1.14: 'directly preceded by \"not\", \"not a\", \"not an\" or \"no\", or directly followed by \"on separate permit\", \"under separate permit\" or \"to be under separate permit\" (with or without \"a\" before \"separate\")'. Housing Production descriptions are upper case, e.g. 'REMOVE (2) EXISTING ILLEGAL IN-LAW UNITS INTO STORAGE'.",
+      "wouldBeWrongIf": "Edan meant decision 5 to be the narrower rule and 1.14 to be the one that over-reaches; the 6 wrong calls named in the wave 1d header include 'adu to be under separate permit', which only the wider rule cancels, so this is unlikely.",
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "\"in-law unit\" (SF's everyday name for an ADU) is a regular reference; a reference negated by \"not\", \"not an\" or \"no\", or followed by \"on separate permit\" or \"under separate permit\", is cancelled;",
+          "replace": "\"in-law unit\" (SF's everyday name for an ADU; also \"in law\" and \"inlaw\", and \"apartment\" or \"suite\" in place of \"unit\") is a regular reference; a reference negated by \"not\", \"not a\", \"not an\" or \"no\" (a whole word), or followed by \"on separate permit\", \"under separate permit\" or \"to be under separate permit\" (with or without \"a\" before \"separate\"), is cancelled;"
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "\"new adu, not a jadu\";",
+          "replace": "\"new adu, not a jadu\", \"UNIT 1 IS NOT AN ADU; NEW ADU IN GARAGE\", \"casino adu\";"
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: touches fixed_decision",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Spec line 46 (decision 5) vs line 143 (task 1.14): the quoted texts differ as stated; both find strings occur exactly once. Scratch prototype of 1.14 over a fresh pull of Housing Production (xdht-4php, 6,168 rows): 5,561 descriptions are all upper case; the 6 wrong calls include '(WITH ADU TO BE UNDER SEPARATE PERMIT)' twice, which only the wider rule cancels. Both new cases ('UNIT 1 IS NOT AN ADU; NEW ADU IN GARAGE', 'casino adu') come out true under the prototype. Live query of 5bat-azvb and gzxm-jz5j found real whole-word negations ('no adu on project', 'permit scope reduced: no adu', '(no adu)').",
+        "reason": "The mismatch is real and the wider rule is the one the data needs. Small leftover: the new decision text names 'apartment' and 'suite' but not the plural 'units' that 1.14 has. There is still no false case for 'no adu'; the added case only guards the whole-word side. Touches decision 5, so Edan sees it anyway."
+      }
+    },
+    {
+      "id": "R3",
+      "kind": "question",
+      "task": "1.14",
+      "category": "classifier",
+      "touches": [
+        "fixed_decision"
+      ],
+      "dependsOn": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR on the spec text and the classifier.",
+      "text": "Counting \"in-law unit\" as an ADU creates new false positives on removal permits (\"remove illegal in-law unit\"), and the 1.14 test list has no removal case. Edan's call, because it changes fixed decision 5. Recommended default: an in-law reference is cancelled when \"remove\", \"removal\", \"demolish\", \"demolition\", \"take out\" or \"eliminate\" appears earlier in the same sentence (no period or semicolon between). On Housing Production this cancels 5 in-law references on permits the city does not count and 0 on permits it does.",
+      "evidence": "Prototype of 1.14 as written, checked against Housing Production (xdht-4php, 6,168 permits): 851 permits true, 844 agree with the city (precision 99.2%), 7 wrong; the wrong ones include '200010314480 REMOVE (2) EXISTING ILLEGAL IN-LAW UNITS INTO STORAGE', '201208096929 ... REMOVE LOWER UNWARRANTED IN-LAW UNIT IN GARAGE', '201505277192 REMOVAL OF IN LAW UNIT AT 1ST FLOOR', '201510099384 TAKE OUT ILLEGAL IN-LAW UNIT'. Clause rule: 'inlawRefs: 54, cancelledInCityYesPermits: 0, cancelledInCityNoPermits: 5'. The 98% gate in 1.15 would not catch this (99.2% passes).",
+      "wouldBeWrongIf": "Edan wants permits that remove an in-law unit counted as ADU permits, or a larger sample shows removal wording on city-counted permits; Housing Production shows none in 54 in-law references.",
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "legalization wording alone (\"legalize unit\") is not a reference,",
+          "replace": "an in-law reference is also cancelled when \"remove\", \"removal\", \"demolish\", \"demolition\", \"take out\" or \"eliminate\" appears earlier in the same sentence (no period or semicolon between); legalization wording alone (\"legalize unit\") is not a reference,"
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "false for \"this is not an adu unit\",",
+          "replace": "false for \"remove illegal in-law unit at garage\", \"REMOVAL OF IN LAW UNIT AT 1ST FLOOR\", \"demolish kitchen and illegal inlaw unit\", \"this is not an adu unit\","
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: touches fixed_decision",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Reproduced on Housing Production: 1.14 as written gives 851 true, 844 agree, 7 wrong (99.2%); 54 in-law references; the removal rule cancels 5, all on city-no permits (the four quoted plus 201507030642), 0 on city-yes; precision becomes 844 of 846 (99.8%). Checked further on the datasets the site reads: 117 in-law references in 5bat-azvb and gzxm-jz5j, the rule cancels 10, and all 10 read as removals ('demolish existing illegal in-law unit', 'remove illegal inlaw unit per code violation', 'remove kitchen from in-law unit'). No 'remove X and add in-law unit' case was cancelled in either set.",
+        "reason": "The false positives are real and the rule cancels only genuine removals in 171 references across three datasets. It is a change to decision 5 and is flagged so; Edan decides. Known limit: a single sentence that removes one thing and adds an in-law unit would be cancelled; none exists in the data today."
+      }
+    },
+    {
+      "id": "R4",
+      "kind": "question",
+      "task": "1.14",
+      "category": "classifier",
+      "touches": [
+        "fixed_decision"
+      ],
+      "dependsOn": [
+        "F1"
+      ],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR on the spec text and the classifier.",
+      "text": "Edan's question: should ADU ordinance numbers cited in a description count as ADU references? Permits that cite 162-16, 162-17 or 95-17 (titled Construction of Accessory Dwelling Units) are all in the city's count, and the classifier misses about 160 of them today; 1.14 does not touch this, so recall stays near 45%. Recommended default: add 162-16, 162-17 and 95-17 now, as whole tokens with \"ord\" or \"ordinance\" earlier in the same sentence; hold 30-15 and 49-14 until F1 is settled (30-15 is titled as a density exception for seismic retrofits, not as an ADU ordinance; 49-14 is unread); never count 43-14 (legalization). Caveat: the answer key (adu_legalization_units) lumps legalization with ADUs, so 'in the city's count' alone does not prove a permit is an ADU; the titles do.",
+      "evidence": "Housing Production permits whose description cites each ordinance (cited as a whole token): 30-15: 94 permits, 94 city yes, 9 already caught; 49-14: 2, 2, 0; 162-16: 458, 458, 323; 162-17: 30, 30, 23; 95-17: 128, 128, 103; 43-14: 507, 507, 18, of which 503 say 'legaliz'. Adding 162-16|162-17|95-17 with 'ord' context makes 139 more permits true, all 139 city yes (162 with the number alone, 164 of 164 city yes). Spike F1: 162-16 '[Planning, Administrative Codes - Construction of Accessory Dwelling Units]'; 30-15 '[Planning Code - Exceptions from Dwelling Unit Density Limits and from Other Specified Code Requirements]'; 43-14 '[... Legalization of Dwelling Units Installed Without a Permit]'.",
+      "wouldBeWrongIf": "A permit citing one of these ordinances is a junior-only or non-ADU permit outside Housing Production (the check universe cannot see them: 1,601 Building Permits rows contain one of the five numbers as a substring), or Edan decides the page counts only wording the permit itself uses.",
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "The classifier is checked against the Planning Department's own ADU count by",
+          "replace": "**ADU ordinances** (proposed, for Edan): an ordinance number \"162-16\", \"162-17\" or \"95-17\", as a whole token (no digit or hyphen before or after) with \"ord\" or \"ordinance\" earlier in the same sentence, is a regular reference; \"30-15\" and \"49-14\" join the list only once Edan confirms they are ADU ordinances; \"43-14\" (legalization) never counts. The classifier is checked against the Planning Department's own ADU count by"
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "true for \"convert basement into new in-law unit\",",
+          "replace": "true for \"convert basement into new in-law unit\", \"convert garage per ordinance no. 162-16\", \"per ord# 95-17 and 162-17\",  and false for \"apt 162-16\", \"legalization per ordinance 43-14\"; true for"
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: touches fixed_decision; adversary block: The question for Edan is fair, but the edit cannot be applied as written. (1) Its test case contradicts its own rule under the only sentence definition in the review, and its '139' figure appears to come from that same definition. (2) It calls the number 'a regular reference', and 1.14 cancels a regular reference directly preceded by 'no'; 'ordinance no. 162-16' is the common form, and nothing says 'no.' is exempt. (3) It writes '(proposed, for Edan)' into a fixed decision while adding mandatory test cases to 1.14, so a worker cannot tell whether to build it. Rework: define the context rule so 'no.' and '#' forms count, state how negation treats ordinance numbers, and make the text conditional on Edan's answer rather than half in force. (Counts reproduced on Housing Production (162-16: 458 permits, 458 city yes; 162-17: 30; 95-17: 128; 43-14: 507, 503 say legaliz). Forms of the 632 citations of the three numbers: 72 have 'ord' only before a period ('ORDINANCE NO. 162-16') and 80 are directly preceded by 'NO' or 'NO.'. Under the sentence definition R3 gives (no period or semicolon between), the edit's own true case 'convert garage per ordinance no. 162-16' is false: the text after 'no.' holds no 'ord'. Permits added: 141 with that sentence rule (the recommendation reports 139), 162 with 'ord' anywhere before, 136 if the 'no' negation of 1.14 applies to the number.)",
+      "adversary": {
+        "verdict": "block",
+        "evidence": "Counts reproduced on Housing Production (162-16: 458 permits, 458 city yes; 162-17: 30; 95-17: 128; 43-14: 507, 503 say legaliz). Forms of the 632 citations of the three numbers: 72 have 'ord' only before a period ('ORDINANCE NO. 162-16') and 80 are directly preceded by 'NO' or 'NO.'. Under the sentence definition R3 gives (no period or semicolon between), the edit's own true case 'convert garage per ordinance no. 162-16' is false: the text after 'no.' holds no 'ord'. Permits added: 141 with that sentence rule (the recommendation reports 139), 162 with 'ord' anywhere before, 136 if the 'no' negation of 1.14 applies to the number.",
+        "reason": "The question for Edan is fair, but the edit cannot be applied as written. (1) Its test case contradicts its own rule under the only sentence definition in the review, and its '139' figure appears to come from that same definition. (2) It calls the number 'a regular reference', and 1.14 cancels a regular reference directly preceded by 'no'; 'ordinance no. 162-16' is the common form, and nothing says 'no.' is exempt. (3) It writes '(proposed, for Edan)' into a fixed decision while adding mandatory test cases to 1.14, so a worker cannot tell whether to build it. Rework: define the context rule so 'no.' and '#' forms count, state how negation treats ordinance numbers, and make the text conditional on Edan's answer rather than half in force."
+      },
+      "revision": {
+        "id": "R4",
+        "kind": "question",
+        "task": "1.14",
+        "category": "classifier",
+        "costCents": 0,
+        "reversible": true,
+        "touches": [
+          "fixed_decision"
+        ],
+        "dependsOn": [
+          "F1"
+        ],
+        "text": "Edan's question: should an ordinance number cited in a permit description count as an ADU reference? Permits that cite 162-16, 162-17 or 95-17 (titled Construction of Accessory Dwelling Units) are in the city's count and the classifier misses 163 of them today (about 15% of its 1,048 misses; recall stays near 43% after 1.14 unless these are added). Nothing is decided yet: this edit adds a clearly marked open question to wave 1d, outside fixed decision 5 and outside task 1.14's text, so a worker builds nothing from it. If Edan answers yes, a follow-up edit moves the rule below into fixed decision 5 and its tests into 1.14. If no, delete the paragraph. Proposed rule if yes (one definition, no sentence logic): the description contains \"162-16\", \"162-17\" or \"95-17\" as a whole token (no digit or hyphen directly before or after) and the letters \"ord\" at the start of a word anywhere earlier in the description (this takes ORDINANCE, ORD, ORD#, ORDINACE and ORDIANCE; a permit citing \"PLANNING CODE# 95-17\" with no \"ord\" does not count). Such a number is a regular ADU reference. Negation: \"no\", \"no.\", \"nos.\" and \"#\" before the number are labels, not negation; only \"not\", \"not a\" or \"not an\" directly before the number, or \"on/under separate permit\" directly after it, cancel it, as for any regular reference. This keeps the common form \"ORDINANCE NO. 162-16\" true (24 of the 163 permits cite it only that way; treating \"no\" as negation would drop them to 140). Hold 30-15 (titled a density exception for seismic retrofits, not an ADU ordinance; 94 permits) and 49-14 (2 permits, title unread) until Edan confirms they are ADU ordinances; never count 43-14 (legalization; 503 of its 507 permits say \"legaliz\"), which fixed decision 5 already excludes. Tests to add to 1.14 on yes: true for \"convert garage per ordinance no. 162-16\", \"per ord# 95-17 and 162-17\", \"per ordinace 162-16\"; false for \"apt 162-16\", \"legalization per ordinance 43-14\", \"per ordinance 162-16 on separate permit\". Caveat: the answer key (adu_legalization_units) lumps legalization with ADUs, so 'in the city's count' alone does not prove a permit is an ADU; the ordinance titles do. Known soft spot: \"ord\" at a word start also matches \"order\" (\"work order 162-16\"); no such case appears in the data checked.",
+        "evidence": "Counts from the Housing Production permits joined to Building Permits descriptions (6,168 rows, data fetched 14 Nov 2026), over permits the current src/lib/adu.ts calls false. The whole token is (?<![\\d-])(?:162-16|162-17|95-17)(?![\\d-]), run case-insensitive: 164 permits cite one of the three, all 164 city yes. With /\\bord/i matching anywhere earlier in the description: 163, all 163 city yes (the one excluded says \"PLANNING CODE# 95-17\"). With \"no\"/\"no.\" directly before the number treated as negation (the 1.14 rule applied literally): 140, all city yes; 24 of the 163 are the \"no.\" form. 0 permits have \"not\" directly before the number and 0 have \"on/under separate permit\" after it. Shapes before the number (digits masked) in the 163: \"ordinance \" 178 occurrences, \"per ord \" 88, \"ord# \" 62, \"ordinance# \" 53, \"ord #\" 42, \"ordinance no. \" 38, \"ordinance no \" 11. Whole-token counts across all Housing Production permits: 162-16 458 permits (323 already caught), 162-17 30 (23), 95-17 128 (103), 30-15 94 (9 caught), 49-14 2 (0), 43-14 507 (18 caught, 503 say 'legaliz'). Spike F1 titles: 162-16 '[Planning, Administrative Codes - Construction of Accessory Dwelling Units]'; 30-15 '[Planning Code - Exceptions from Dwelling Unit Density Limits and from Other Specified Code Requirements]'; 43-14 '[... Legalization of Dwelling Units Installed Without a Permit]'. Spec 1d section: \"caught 802 of the city's 1,850 ADU-or-legalization permits (43.4%)\".",
+        "reverseCost": "One revert PR deleting the open-question paragraph; nothing in force changes until Edan answers.",
+        "wouldBeWrongIf": "A permit citing one of the three ordinances is a non-ADU permit outside Housing Production (the check universe cannot see them; 1,601 Building Permits rows contain one of the five numbers as a substring, so the real false-positive rate is unmeasured), or Edan decides the page counts only wording the permit itself uses, or the title of 95-17 or 162-17 turns out not to be ADU construction on a read of the ordinance.",
+        "edits": [
+          {
+            "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+            "find": "- **1.14 In-law units and negations.** Owns",
+            "replace": "**Open question for Edan (not in force; task 1.14 does not build it until he answers).** Should an ordinance number in a description count as an ADU reference? 163 of the city's ADU permits that `isAdu` misses cite \"162-16\", \"162-17\" or \"95-17\" (titled Construction of Accessory Dwelling Units) with \"ord\" earlier in the description. If yes, the rule is: one of those numbers as a whole token (no digit or hyphen directly before or after) with the letters \"ord\" at the start of a word anywhere earlier in the description is a regular reference; \"no\", \"no.\" and \"#\" before the number are labels, not negation; \"30-15\" and \"49-14\" stay out until Edan confirms they are ADU ordinances; \"43-14\" (legalization) never counts. On a yes, the rule moves into fixed decision 5 and its tests into 1.14. On a no, delete this paragraph.\n\n- **1.14 In-law units and negations.** Owns"
+          }
+        ]
+      }
+    },
+    {
+      "id": "R6",
+      "kind": "defect",
+      "task": "1.15",
+      "category": "quota",
+      "touches": [],
+      "dependsOn": [
+        "F2"
+      ],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR on the spec text.",
+      "text": "The script's paging, request failures and exit decision are untested and underspecified. Only `compareWithCity` has a test; the script can neither reuse 1.10's `readPages` (it throws for any dataset but the two in DATASETS) nor does the spec say what a 429 or 500 does. Exit 1 also collides with Node's exit code for an uncaught error, so a failed fetch looks like a precision failure. Recommend: put the paging and the exit decision in `src/lib/adu-check.ts` with an injected fetcher so the test covers them; no retry on 429 (Socrata's anonymous rate is unpublished, see F2): exit 2 with the status and re-run later.",
+      "evidence": "src/lib/datasf.ts: 'throw new Error(`readPages: unknown dataset ${id}`)' with DATASETS holding only 5bat-azvb and gzxm-jz5j. Spec 1.15: 'exits 1 when `precision` is below 98 or `null`, else 0' and 'Test (hand-built rows, no network, no real description)' covers only compareWithCity. Probe: 25 anonymous Socrata requests with 300 ms pauses all returned 200, no rate-limit headers.",
+      "wouldBeWrongIf": "The loop's workers already split I/O from logic by habit and a thin script is acceptable to Edan; it would not matter if the check were run once and never again.",
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "The script prints the counts and percentages and the two `bpa` lists, never a description, and exits 1 when `precision` is below 98 or `null`, else 0.",
+          "replace": "The script prints the counts and percentages and the two `bpa` lists, never a description, and exits 1 when `precision` is below 98 or `null`, 0 otherwise, and 2 when any request fails (a 429 included, with no retry: the message names the status and says to rerun later). Paging and the exit decision live in `adu-check.ts` as `readHousingProduction(fetcher, { sleep, isAllowed })` and `exitCodeFor(result)` so the test covers them; `readPages` is not used, because it knows only the two wave 1c datasets."
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "Test (hand-built rows, no network, no real description): the counts and the three percentages for a mixed set;",
+          "replace": "Test (hand-built rows, no network, no real description): 2,500 rows from a fake fetcher at page size 1,000 make 3 requests and 2 sleeps of 300 ms; a 429 or a 500 throws with its status; a URL `isAllowed` rejects throws with no request; `exitCodeFor` gives 1 for precision 97.9, 0 for 98 and 1 for `null`; the counts and the three percentages for a mixed set;"
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: category quota is human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "src/lib/datasf.ts line 142 throws 'readPages: unknown dataset' and DATASETS holds only 5bat-azvb and gzxm-jz5j. Spec line 144 tests only compareWithCity and says 'exits 1 when precision is below 98 or null'. `node -e \"throw new Error('x')\"` exits 1. My own runs today: about 45 anonymous DataSF requests at 300 ms spacing, all 200, no rate-limit or Retry-After headers.",
+        "reason": "All three claims check out, and exit 2 for a failed request removes a real ambiguity. The edit names readHousingProduction only, so it assumes R5 is applied; if R5 is not, the batched Building Permits requests stay untested. No retry on 429 differs from the 1.10 reader's policy, which is acceptable for a one-off check. Category quota, so Edan sees it."
+      }
+    },
+    {
+      "id": "R11",
+      "kind": "defect",
+      "task": "1.14",
+      "category": "classifier",
+      "touches": [
+        "fixed_decision"
+      ],
+      "dependsOn": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR on the spec text.",
+      "text": "Fixed decision 5 still requires agreement with 'every labeled row of Edan's gold set (human step 3)', but step 3 is retired and no row is labeled. The requirement is stale and tells a worker to stop for a label that cannot exist. Recommend: keep the gold file as an optional hook and say so.",
+      "evidence": "Decision 5: 'It must agree with every labeled row of Edan's gold set (`test/fixtures/adu-gold.json`, human step 3)'. Human checklist step 3: 'Retired 14 Nov 2026'. test/fixtures/adu-gold.json rows all have \"is_adu\": null.",
+      "wouldBeWrongIf": "Edan still plans to label rows by hand later; the edit keeps the hook, so nothing is lost.",
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "It must agree with every labeled row of Edan's gold set (`test/fixtures/adu-gold.json`, human step 3); a label that disagrees is a change to this decision for Edan.",
+          "replace": "It must also agree with every labeled row of `test/fixtures/adu-gold.json` (an optional hook: human step 3 is retired and no row is labeled today); a label that disagrees is a change to this decision for Edan."
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: touches fixed_decision",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Spec line 46 still requires agreement with the gold set 'human step 3'; line 164 says step 3 is 'Retired 14 Nov 2026' and keeps the file 'as an optional hook'. test/fixtures/adu-gold.json: 30 rows, 30 with is_adu null. src/lib/adu.test.ts already skips null rows.",
+        "reason": "The requirement is stale and the edit keeps the hook, matching step 3's own wording and the existing test. Touches decision 5, so Edan sees it."
+      }
+    },
+    {
+      "id": "R12",
+      "kind": "defect",
+      "task": "1.15",
+      "category": "source",
+      "touches": [],
+      "dependsOn": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR on the spec text.",
+      "text": "Fixed decision 4 misnames the issuance dataset and does not list Housing Production, which 1.15 now reads. Data sources are the one place a reader checks where facts come from. Recommend: use the dataset's real title and add one sentence that xdht-4php is an answer key for the classifier check only and feeds no fact on the site. Licences give no obstacle: both are open data.",
+      "evidence": "api/views of gzxm-jz5j: name 'Building Permit Application Issuance Metrics' (spec: 'Building Permit time to issuance'). xdht-4php: name 'Housing Production - 2005-present', license 'Public Domain U.S. Government', attribution 'City and County of San Francisco Planning Department'. 5bat-azvb, gzxm-jz5j and i98e-djp9: 'Open Data Commons Public Domain Dedication and License'.",
+      "wouldBeWrongIf": "The title in the spec is a deliberate plain-English label rather than the dataset's name; the id next to it would still identify it.",
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "DataSF \"Building Permit time to issuance\" (`gzxm-jz5j`)",
+          "replace": "DataSF \"Building Permit Application Issuance Metrics\" (`gzxm-jz5j`)"
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "Both datasets are read through the Socrata JSON API at `https://data.sf.gov/resource/<id>.json`.",
+          "replace": "Both datasets are read through the Socrata JSON API at `https://data.sf.gov/resource/<id>.json`. Housing Production (`xdht-4php`, Planning Department) is read only by `scripts/check-adu.ts` as an answer key for the classifier; no fact on the site comes from it."
+        }
+      ],
+      "decision": "ask",
+      "reason": "adversary disagree: The facts are right, and Edan can approve this quickly. The objection is routing: it edits the text of a fixed decision but is labelled as touching none, so it would be applied without him, unlike R11, which makes the same kind of fix and is flagged. It also says Housing Production is the only extra dataset read, which is true only if R5 is applied; that dependency is not declared. (Fetched api/views metadata: gzxm-jz5j is 'Building Permit Application Issuance Metrics'; xdht-4php is 'Housing Production - 2005-present', licence 'Public Domain U.S. Government', attribution 'City and County of San Francisco Planning Department'; the other three are under the Open Data Commons PDDL. Both find strings sit on spec line 45, which is fixed decision 4, while the recommendation declares touches: []. Task 1.15 as written (line 144) also reads Building Permits (i98e-djp9).)",
+      "adversary": {
+        "verdict": "disagree",
+        "evidence": "Fetched api/views metadata: gzxm-jz5j is 'Building Permit Application Issuance Metrics'; xdht-4php is 'Housing Production - 2005-present', licence 'Public Domain U.S. Government', attribution 'City and County of San Francisco Planning Department'; the other three are under the Open Data Commons PDDL. Both find strings sit on spec line 45, which is fixed decision 4, while the recommendation declares touches: []. Task 1.15 as written (line 144) also reads Building Permits (i98e-djp9).",
+        "reason": "The facts are right, and Edan can approve this quickly. The objection is routing: it edits the text of a fixed decision but is labelled as touching none, so it would be applied without him, unlike R11, which makes the same kind of fix and is flagged. It also says Housing Production is the only extra dataset read, which is true only if R5 is applied; that dependency is not declared."
+      }
+    },
+    {
+      "id": "R13",
+      "kind": "defect",
+      "task": "2.5",
+      "category": "quota",
+      "touches": [],
+      "dependsOn": [
+        "F5"
+      ],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR on the spec text.",
+      "text": "The Budget's Keenable figures are not what Keenable's docs say, and the Retry-After format is unstated. Docs: '100,000 requests a month, free', resetting monthly; the 99,999 figure appears nowhere, and whether unused allowance expires is not documented. 429 carries Retry-After but the docs do not give its format (seconds vs date). Wave 1d needs no credits; 2.5 and human step 5 do (under 200 calls, so the allowance is not at risk). Recommend: restate the Budget as documented and name the non-number fallback that task 1.4 already implements.",
+      "evidence": "Spike F5: 'The credits page says \"100,000 requests a month, free.\" ... \"resets each month.\" It does not say whether unused allowance expires'; 'Going over a limit returns 429 with a Retry-After header' with no format given; 402 'insufficient_credits'. Spec Budget: 'Keenable: 99,999 free credits as of 13 Nov 2026; one search costs 1 credit.'",
+      "wouldBeWrongIf": "The account has a different grant than the public docs (a signup credit of 99,999 as an extra on top of the monthly allowance); the dashboard would show it.",
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "Keenable: 99,999 free credits as of 13 Nov 2026; one search costs 1 credit.",
+          "replace": "Keenable: a free allowance of 100,000 requests a month per its docs (docs.keenable.ai/credits, read 14 Nov 2026; it resets monthly, and whether unused requests expire is not documented); one search is one request."
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "on 429 wait `Retry-After` seconds (at most 60; a longer wait is a stop), then retry (Keenable's documented rules).",
+          "replace": "on 429 wait the `Retry-After` seconds (at most 60; a longer wait is a stop; the docs do not state the header's format, so a value that is not a plain number waits 5 seconds, as task 1.4 does), then retry (Keenable's documented rules)."
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: category quota is human-only; adversary disagree: The second edit would put a false statement in the spec: the docs do give the format, a number of seconds, in two places. Keep the 5-second fallback if wanted, but not the claim. The first edit is sound on the allowance, but 99,999 is 100,000 minus one call and reads as a dated account balance, not a misquote of the docs; replacing it drops an observed figure. Keep both: the documented allowance and the balance seen on 13 Nov. (Fetched docs.keenable.ai/credits: '100,000 requests a month, free', 'resets each month', 'search and fetch each cost one credit', and 'On 429, wait the number of seconds in Retry-After, then retry.' Fetched docs.keenable.ai/rate-limits: the 429 body has 'retry_after_seconds, which matches Retry-After'. Neither page mentions a date format. Spec line 30: '99,999 free credits as of 13 Nov 2026'.)",
+      "adversary": {
+        "verdict": "disagree",
+        "evidence": "Fetched docs.keenable.ai/credits: '100,000 requests a month, free', 'resets each month', 'search and fetch each cost one credit', and 'On 429, wait the number of seconds in Retry-After, then retry.' Fetched docs.keenable.ai/rate-limits: the 429 body has 'retry_after_seconds, which matches Retry-After'. Neither page mentions a date format. Spec line 30: '99,999 free credits as of 13 Nov 2026'.",
+        "reason": "The second edit would put a false statement in the spec: the docs do give the format, a number of seconds, in two places. Keep the 5-second fallback if wanted, but not the claim. The first edit is sound on the allowance, but 99,999 is 100,000 minus one call and reads as a dated account balance, not a misquote of the docs; replacing it drops an observed figure. Keep both: the documented allowance and the balance seen on 13 Nov."
+      }
+    },
+    {
+      "id": "R14",
+      "kind": "defect",
+      "task": "2.5",
+      "category": "legal",
+      "touches": [
+        "invariant"
+      ],
+      "dependsOn": [
+        "F6"
+      ],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR on the spec text.",
+      "text": "The state-deadline statute has no owner that gives it a `source` row. Invariant 1 requires every shown claim to cite a saved, hashed copy, and decision 7 requires the statute quoted verbatim, but human step 4 only records 'the URL and the exact sentence' and no wave 2 task fetches, archives or quote-checks it (2.5 does this for heads only). leginfo.legislature.ca.gov also refused automated GETs, so the plain fetcher cannot do it. Step 4 says 'before the tail merges' although there are two tails (1.T, 2.T). Recommend: Edan records `data/state-deadline.json` and the heads loader (2.5) verifies it the same way; step 4 names 2.T. Edan still has to read the sentence in a browser (F6): schema-prep.md's 66317 text could not be re-checked.",
+      "evidence": "Decision 7: 'State deadline = the statute text from an official California source, quoted verbatim (human step 4)'. Step 4: 'record the URL and the exact sentence. | Before the tail merges'. Spike F6: 'leginfo.legislature.ca.gov returned HTTP 403 Forbidden ... Could not read the section text'. docs/schema-prep.md quotes Government Code 66317 'fetched 13 Nov 2026'.",
+      "wouldBeWrongIf": "The statute is meant to be shown as plain copy with a link and not as a quoted fact, which would waive the quote check but not invariant 1.",
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "State deadline = the statute text from an official California source, quoted verbatim (human step 4); until then the page shows it as pending.",
+          "replace": "State deadline = the statute text from an official California source, quoted verbatim (human step 4); until then the page shows it as pending. Edan records it in `data/state-deadline.json` as `{ url, sentence }`, and the loader of task 2.5 keeps it only when the sentence appears verbatim in the saved, hashed copy, otherwise it goes to quarantine. `leginfo.legislature.ca.gov` answered automated GETs with HTTP 403 on 14 Nov 2026, so the loader fetches it through Keenable fetch, or Edan saves the page by hand and the loader reads that file."
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "Before the tail merges, or the page shows \"Pending source\"",
+          "replace": "Before 2.T merges, or the page shows \"Pending source\""
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "Owns `src/importers/heads.ts`, `src/importers/heads.test.ts`, `scripts/suggest-heads.ts`, `data/heads.example.json`.",
+          "replace": "Owns `src/importers/heads.ts`, `src/importers/heads.test.ts`, `scripts/suggest-heads.ts`, `data/heads.example.json`, `data/state-deadline.example.json`."
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: touches invariant; category legal is human-only; adversary disagree: The gap is real and the '2.T' fix is right. The edit, though, writes two unsettled mechanisms into a fixed decision. Fetching through Keenable is the choice line 148 leaves open for the wave 2 revision, and nothing shows Keenable gets past the 403. A page Edan saves by hand is a kind of source that invariant 1 and decision 3 do not define: no fetch, and nothing ties the file to the URL, so the quote check would compare Edan's sentence with Edan's file. Assign the owner now; let Edan choose the fetch path when wave 2 is revised. (Spec line 48 (decision 7), line 165 (step 4: 'record the URL and the exact sentence', 'Before the tail merges'), line 154 (2.5 covers heads only): no task gives the statute a source row, and there are two tails, 1.T and 2.T. A plain fetch of the leginfo section page returned HTTP 403 today. Spec line 148: 'Keenable fetch returns extracted markdown, so a hash of a fetched page covers the markdown, not the page as served (decide in the revision whether allowlisted pages are fetched directly instead)'. docs/schema-prep.md lines 34 to 44 quote section 66317.); depends on open fact F6",
+      "adversary": {
+        "verdict": "disagree",
+        "evidence": "Spec line 48 (decision 7), line 165 (step 4: 'record the URL and the exact sentence', 'Before the tail merges'), line 154 (2.5 covers heads only): no task gives the statute a source row, and there are two tails, 1.T and 2.T. A plain fetch of the leginfo section page returned HTTP 403 today. Spec line 148: 'Keenable fetch returns extracted markdown, so a hash of a fetched page covers the markdown, not the page as served (decide in the revision whether allowlisted pages are fetched directly instead)'. docs/schema-prep.md lines 34 to 44 quote section 66317.",
+        "reason": "The gap is real and the '2.T' fix is right. The edit, though, writes two unsettled mechanisms into a fixed decision. Fetching through Keenable is the choice line 148 leaves open for the wave 2 revision, and nothing shows Keenable gets past the 403. A page Edan saves by hand is a kind of source that invariant 1 and decision 3 do not define: no fetch, and nothing ties the file to the URL, so the quote check would compare Edan's sentence with Edan's file. Assign the owner now; let Edan choose the fetch path when wave 2 is revised."
+      }
+    },
+    {
+      "id": "R15",
+      "kind": "question",
+      "task": "2.2",
+      "category": "quota",
+      "touches": [],
+      "dependsOn": [
+        "F2"
+      ],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR on the spec text.",
+      "text": "Edan's question: is 'free, no key needed' safe for the importers? Socrata says anonymous requests share a pool by IP and may be throttled with a 429, at a rate it does not publish. Wave 1d adds about 7 anonymous requests; wave 2 importers about 34 or more. A key would be a new secret (invariant 6), so a worker cannot add it. Recommended default: keep no key, and decide now that if a 429 persists Edan registers a free app token sent as `X-App-Token` from env `SOCRATA_APP_TOKEN`; the 1.10 reader needs a small follow-up then.",
+      "evidence": "Spike F2: 'requests without an application token \"come from a shared pool via IP address\"' and 'IP addresses that make too many requests during a given period may be subject to throttling'; the docs give no number. Probe on 14 Nov 2026: 25 anonymous requests with 300 ms pauses and 7 more for xdht-4php, no 429 and no rate-limit headers. Spec Budget: 'DataSF (Socrata): free, no key needed.'",
+      "wouldBeWrongIf": "A 429 never appears over a full wave 2 import; a 429 at 1.15's 7 requests would show the limit is lower than the importers need.",
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "DataSF (Socrata): free, no key needed.",
+          "replace": "DataSF (Socrata): free, no key needed. Socrata documents that anonymous requests share a pool by IP address and may be throttled with a 429 at an unpublished rate (dev.socrata.com/docs/app-tokens.html). If a 429 persists, Edan registers a free app token and the reader sends it as `X-App-Token` from `SOCRATA_APP_TOKEN` (invariant 6)."
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: category quota is human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Fetched dev.socrata.com/docs/app-tokens.html: 'requests that aren't using an application token come from a shared pool via IP address', 'IP addresses that make too many requests during a given period may be subject to throttling', 'Use the X-App-Token HTTP header'; no numeric limit is published. My runs today: about 45 anonymous requests to data.sf.gov at 300 ms spacing, no 429 and no rate-limit headers. Spec line 31: 'free, no key needed'.",
+        "reason": "The quotes and the probe both hold. Keeping no key and naming the fallback in advance is the cheap choice. The edit introduces a third environment variable name alongside the two that invariant 6 lists; that is Edan's call, and the quota category sends it to him."
+      }
+    },
+    {
+      "id": "R16",
+      "kind": "question",
+      "task": "2.T",
+      "category": "vendor_plan",
+      "touches": [],
+      "dependsOn": [
+        "F3"
+      ],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "A plan change on Vercel (upgrade) and a one-line spec edit.",
+      "text": "Edan's question: is Warden non-commercial for Vercel Hobby? Hobby is limited to personal, non-commercial use, and the public launch is the first moment it matters. Not settled by the sources: whether a civic grading site with a stance page counts, and whether traffic would pass the 100 GB a month of Fast Data Transfer. Recommended default: stay on Hobby while the site takes no money, ads or sponsorship, and note the limit in the Budget so a later sponsor or donate button triggers the plan question.",
+      "evidence": "Spike F3: 'Vercel's Terms of Service (Section 4, Hobby Plan) restrict Hobby use to personal or non-commercial purposes' (WebFetch summary, not a verbatim read); 'Hobby plan lists monthly limits: 100 GB Fast Data Transfer ... 1,000,000 CDN requests and function invocations'; 'No source settles whether this site counts as non-commercial'. Spec Budget: 'Hosting: Vercel hobby (free).'",
+      "wouldBeWrongIf": "Vercel's terms, read verbatim, allow a free civic site that takes no revenue; or Edan plans revenue, in which case the paid plan is the right default.",
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "Hosting: Vercel hobby (free).",
+          "replace": "Hosting: Vercel Hobby (free), which Vercel's terms limit to personal, non-commercial use and about 100 GB of data transfer a month (read 14 Nov 2026 from a summary; confirm the terms before launch); a site that takes money, ads or sponsorship moves to a paid plan."
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: category vendor_plan is human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Fetched vercel.com/legal/terms, section 4 (Hobby Plan): 'You shall only use the Services under a Hobby plan for your personal or non-commercial use.' Fetched vercel.com/docs/limits/fair-use-guidelines: Hobby 'First 100 GB' Fast Data Transfer and 'First 1,000,000' function invocations. Spec line 32: 'Hosting: Vercel hobby (free).'",
+        "reason": "The terms sentence and the limits are as stated, now read from the terms page rather than a summary. Whether a civic grading site counts as non-commercial is not settled by the text, so it stays Edan's question. The 100 GB figure is a usage guideline, not a hard cap."
+      }
+    },
+    {
+      "id": "R17",
+      "kind": "question",
+      "task": "2.2",
+      "category": "vendor_plan",
+      "touches": [],
+      "dependsOn": [
+        "F4"
+      ],
+      "reversible": false,
+      "costCents": 0,
+      "reverseCost": "Changing host after a live import means a new database, DATABASE_URL in .env and Vercel, `npm run migrate` and a re-import of the archive.",
+      "text": "Edan's question for human step 2: Neon or Supabase? Both free tiers should hold the data, which is small (about 34,000 review rows, 2,200 issuance rows, 3,000 ADU permits, descriptions stored once), but the sources give no row sizes so fit is an estimate. They differ on idling: Supabase Free pauses the project after 1 week of inactivity, which would take a low-traffic public site down until someone restores it; Neon suspends compute after 5 minutes and wakes on the next query. Recommended default: Neon Free (1 GB per project, against 500 MB).",
+      "evidence": "Spike F4: Neon Free '1 GB Postgres storage per project', 'computes auto-suspend after 5 minutes of inactivity'; Supabase Free '500 MB database size', 'Free projects are paused after 1 week of inactivity'; 'Fit for ~34,000 review rows plus issuance: not settled'. docs/schema-prep.md: 'read 34,129 candidate review rows and 2,216 issuance rows ... found 3,029 ADU permits'.",
+      "wouldBeWrongIf": "The stored size is well under 500 MB (likely) and Edan cares more about Supabase's extras than idling; or Neon's 100 CU-hours a month is exceeded by the live site.",
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "Pick the Postgres host (Neon or Supabase free tier), create the database",
+          "replace": "Pick the Postgres host (recommended: Neon Free, 1 GB of storage and a compute that suspends after 5 idle minutes and wakes on the next query; Supabase Free holds 500 MB and pauses the project after 1 week of inactivity), create the database"
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: not reversible by one revert PR or one config edit; category vendor_plan is human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Fetched neon.com/pricing: Free plan '1 GB/project', '100 CU-hours/project', 'suspends after 5 min, cannot be turned off'. Fetched supabase.com/pricing: '500 MB database size per project included', 'Free projects are paused after 1 week of inactivity.' docs/schema-prep.md line 85: 34,129 review rows, 2,216 issuance rows, 3,029 ADU permits.",
+        "reason": "Every figure matches today's pricing pages, and the idling difference is the one that matters for a low-traffic public site. Fit is still an estimate, as the recommendation says. Not reversible and a vendor plan, so Edan decides."
+      }
+    },
+    {
+      "id": "R18",
+      "kind": "question",
+      "task": "2.T",
+      "category": "legal",
+      "touches": [
+        "fixed_decision"
+      ],
+      "dependsOn": [
+        "F6"
+      ],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR on the page copy.",
+      "text": "Edan's question: how is the 60-day state deadline shown next to the actual clocks? The statute applies only when a home already exists on the lot; a new house built with an ADU is not covered, and v1 cannot split permits that way. Setting 60 days against all ADU permits without that condition would overstate the gap. Recommended default: the state-deadline clock quotes the statute sentence verbatim with its condition and the page offers no 'late by X days' figure.",
+      "evidence": "docs/schema-prep.md: 'The 60 days applies only when a home already exists on the lot. A new house built together with an ADU is not covered.' Decision 7: 'State deadline = the statute text ... quoted verbatim'; 'v1 does not split city time from applicant time'. The sentence itself could not be re-read (spike F6, HTTP 403).",
+      "wouldBeWrongIf": "The sentence, once read, carries no such condition, or Edan wants the bare number with the quote below it.",
+      "edits": [],
+      "decision": "ask",
+      "reason": "envelope: touches fixed_decision; category legal is human-only; depends on open fact F6",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "docs/schema-prep.md lines 38 to 44 quote section 66317: 'within 60 days from the date the permitting agency receives a completed application if there is an existing' dwelling on the lot, and note that a new house built with an ADU is not covered. Spec line 48: state deadline 'quoted verbatim' and 'v1 does not split city time from applicant time'. The statute page itself returned HTTP 403 to a plain fetch today, so the quote could not be re-read.",
+        "reason": "The condition is in the only copy of the sentence the project holds, and v1 cannot tell which permits it covers, so a 'late by X days' figure would overstate. Quoting the sentence with its condition follows decision 7 as written. It rests on Edan reading the sentence in a browser first."
+      }
+    }
+  ],
+  "spikes": [
+    {
+      "id": "F1",
+      "fact": "Are San Francisco Board of Supervisors ordinances 30-15, 49-14, 162-16, 162-17 and 95-17 all ADU ordinances, and is 43-14 the legalization ordinance? The city-check data says so (every permit citing the five is in the city's count; 467 citing 43-14 say legalization), but I have not read the ordinance titles.",
+      "status": "answered",
+      "answer": "Partly settled. 162-16, 162-17 and 95-17 are ADU ordinances by title (\"[Planning, Administrative Codes - Construction of Accessory Dwelling Units]\" for 162-16; \"[Planning Code - Construction of Accessory Dwelling Units]\" for 162-17 and 95-17). 43-14 is the legalization ordinance: title \"[Planning, Building, Administrative, and Subdivision Codes - Legalization of Dwelling Units Installed Without a Permit]\", providing a process for legal status for existing units built without permits. 30-15 is not titled as an ADU ordinance: its title is \"[Planning Code - Exceptions from Dwelling Unit Density Limits and from Other Specified Code Requirements]\", permitting density-limit exceptions when adding Dwelling Units to existing buildings undergoing seismic retrofitting, and deleting the 750 sq ft limit on a new In-Law Unit near Castro Street. Whether it counts as an ADU ordinance depends on how the city's count classifies it; the title alone does not say. 49-14 is NOT settled: searches returned nothing and I did not fetch it.",
+      "source": "https://sfbos.archive.sf.gov/ftp/uploadedfiles/bdsupvrs/ordinances14/o0043-14.pdf; https://sfbos.archive.sf.gov/sites/default/files/o0162-17.pdf; https://sfbos.archive.sf.gov/sites/default/files/o0095-17.pdf; https://sfbos.archive.sf.gov/sites/default/files/o0162-16.pdf; https://sfbos.archive.sf.gov/ftp/uploadedfiles/bdsupvrs/ordinances15/o0030-15.pdf (sfbos.org URLs 301-redirect to sfbos.archive.sf.gov; downloaded with curl -sL and read with pdftotext -l 2)",
+      "retrieved": "2026-11-14",
+      "error": ""
+    },
+    {
+      "id": "F2",
+      "fact": "Does data.sf.gov throttle anonymous (no app token) Socrata requests, and at what rate? 1.15 makes about 7 plus 25 requests with 300 ms pauses and wave 2 importers about 34 or more. Spec Budget says 'free, no key needed'. The batch I ran got no 429.",
+      "status": "answered",
+      "answer": "Not settled for data.sf.gov specifically. Socrata's official app-token doc says requests without an application token \"come from a shared pool via IP address\" and that \"IP addresses that make too many requests during a given period may be subject to throttling.\" It does not define the period or give a numeric anonymous rate. It says simple unauthenticated queries are possible but that \"you'll get much higher limits with one\" (an app token). The official response-codes doc says HTTP 429 means \"Your client is currently being rate limited. Make sure you're using an app token.\" A third-party directory claims an unauthenticated limit of 1,000 requests per rolling hour, but I could not confirm that from Socrata documentation, so treat it as unverified. The SODA3 support article returned 403 when fetched, so I could not confirm whether SODA3 requires authentication. The docs do not say whether the 1.15 batch's request volume is within any anonymous limit. I did not probe data.sf.gov itself.",
+      "source": "https://dev.socrata.com/docs/app-tokens.html ; https://dev.socrata.com/docs/response-codes",
+      "retrieved": "2026-11-14",
+      "error": ""
+    },
+    {
+      "id": "F3",
+      "fact": "Do Vercel Hobby terms allow this site (a public civic grading site; is a non-commercial restriction or a bandwidth or build limit a problem)?",
+      "status": "answered",
+      "answer": "Partly settled. Vercel's Terms of Service (Section 4, Hobby Plan) restrict Hobby use to personal or non-commercial purposes, per a WebFetch summary rather than a verbatim read. The Hobby plan lists monthly limits: 100 GB Fast Data Transfer, 10 GB Fast Origin Transfer, 1,000,000 CDN requests and function invocations, 100 deployments per day, and builds with 2 vCPUs, 8 GB memory, and 64 GB disk. If limits are exceeded, the feature is generally unavailable for 30 days. The fair-use page calls these guidelines and says Vercel will notify users with outlier usage. No source settles whether this site counts as non-commercial, or whether its traffic would exceed the limits.",
+      "source": "https://vercel.com/legal/terms ; https://vercel.com/docs/plans/hobby ; https://vercel.com/docs/limits/fair-use-guidelines",
+      "retrieved": "2026-11-14",
+      "error": ""
+    },
+    {
+      "id": "F4",
+      "fact": "Which Postgres free tier (Neon or Supabase) fits: storage and compute caps, pausing of idle projects, and whether it holds the archive-free row counts of waves 2 (about 34,000 review rows plus issuance)?",
+      "status": "answered",
+      "answer": "Neon Free (per https://neon.com/docs/introduction/plans, page dated 2026-11-12): 1 GB Postgres storage per project, 20 GB across all Free projects; 100 CU-hours per project per month (0.25 CU for 400 hours); autoscaling up to 2 CU (8 GB RAM); computes auto-suspend after 5 minutes of inactivity, not disableable on Free; 100 projects; 10 branches per project; 5 GB public network transfer per project per month; 5 GB Object Storage per project; 1 manual snapshot.\n\nSupabase Free (per https://supabase.com/pricing): 500 MB database size; 5 GB egress and 5 GB cached egress; \"Shared CPU, 500 MB RAM\" compute (the page does not name Micro for Free; Micro is a paid add-on with 1 GB RAM); 50,000 monthly active users; \"Free projects are paused after 1 week of inactivity\" (7 days). The org-billing doc (https://supabase.com/docs/guides/platform/org-based-billing) states \"500 MB per project\" for Free database size and says paused projects do not count toward the free project limit, but gives no inactivity threshold.\n\nFit for ~34,000 review rows plus issuance: not settled. Neither source gives per-row size or any row-count cap, so I cannot confirm whether the data fits. On the stated caps alone, Neon's 1 GB per project is double Supabase's 500 MB. Supabase's 500 MB is the tighter limit for storage. Neon's 100 CU-hours and 5-minute suspend are compute and idle-behavior terms, not row limits.\n\nNote: the Supabase org-billing page contained an embedded instruction asking AI agents to file feedback with Supabase. I ignored it.",
+      "source": "https://neon.com/docs/introduction/plans ; https://supabase.com/pricing ; https://supabase.com/docs/guides/platform/org-based-billing",
+      "retrieved": "2026-11-14",
+      "error": ""
+    },
+    {
+      "id": "F5",
+      "fact": "Do Keenable's 99,999 free credits expire, and are the 402 and 429 plus Retry-After behaviours the spec relies on still as documented? The wave 1d tasks need no credits, but 2.5 and human step 5 do.",
+      "status": "answered",
+      "answer": "Partly settled. (1) The 99,999 figure does not appear in Keenable's docs. The credits page says \"100,000 requests a month, free.\" It says the allowance \"resets each month.\" It does not say whether unused allowance expires or carries over, so expiry is unsettled. (2) 402: the credits page says that when the allowance is spent and no purchased credits remain, /v1/search and /v1/fetch return 402 with code insufficient_credits, and the body links to where credits can be bought in billing_url. The agent instructions say: \"On 402 with an API key (code insufficient_credits), stop and ask a human to add credits.\" (3) 429: the rate-limits page says \"Going over a limit returns 429 with a Retry-After header.\" It does not give the header's format. The limit object's retry_after_seconds \"matches Retry-After,\" which suggests seconds but is not stated. The agent instructions say: \"On 429, wait the number of seconds in Retry-After, then retry.\" Authenticated use gets 10 requests per second per organization with no hourly cap. Unauthenticated use gets 1,000 per hour and max 10 per second per IP. X-RateLimit headers are not described on the rate-limits page; the credits page does not mention 429. The docs say credits cap volume and rate limits cap speed, so 402 and 429 are different conditions. A search snippet claimed 429 responses carry X-RateLimit headers, but the fetched page only points to a separate 429 errors page, which I did not retrieve.",
+      "source": "https://docs.keenable.ai/credits.md and https://docs.keenable.ai/rate-limits.md (both fetched 2026-11-14). Also consulted: https://docs.keenable.ai/credits, https://docs.keenable.ai/api-reference. The quotes come from a model-summarised fetch, so verify exact wording on the live pages.",
+      "retrieved": "2026-11-14",
+      "error": ""
+    },
+    {
+      "id": "F6",
+      "fact": "Is Government Code section 66317 still the section and its 60-day sentence still the text on leginfo.legislature.ca.gov? docs/schema-prep.md quotes it as fetched 13 Nov 2026, and human step 4 needs Edan to confirm the exact sentence.",
+      "status": "open",
+      "answer": "Not settled. Could not read the section text. leginfo.legislature.ca.gov returned HTTP 403 Forbidden for the section page both to WebFetch and to a read-only curl GET with a browser-style User-Agent, so the page body was not retrieved. I could not confirm whether 66317 is still the section number, its heading, or whether the 60-day sentence still reads as quoted. Edan will need to check it in a browser (human step 4). The 403 is an access block on that host, not evidence of any change to the statute.",
+      "source": "",
+      "retrieved": "",
+      "error": "no source recorded, so the answer cannot be checked"
+    }
+  ],
+  "gates": [
+    {
+      "id": "G-2.T-irreversible",
+      "what": "Final tier cutoffs in src/lib/tiers.ts and the first public deployment with the sample banner removed (human step 8)",
+      "why": "The cutoffs are placeholders. Once deployed, the site publishes grades (S to F) for named city departments, which is hard to take back. Invariant 1 bars a public deploy while the sample shows.",
+      "owner": "human",
+      "before": "2",
+      "leadTime": "days",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-2.2-account",
+      "what": "Postgres host account (Neon or Supabase free tier) and a created database (human step 2)",
+      "why": "Live imports (2.2, 2.3) and the deployed site need a database; the tests use pglite and need none.",
+      "owner": "human",
+      "before": "2",
+      "leadTime": "hours",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-2.2-plan",
+      "what": "Free-tier Postgres plan limits (storage, compute, idle pausing)",
+      "why": "Wave 2 stores about 34,000 review rows plus issuance and facts. A paused or full free database stops the importers and the live page. See F4.",
+      "owner": "human",
+      "before": "2",
+      "leadTime": "hours",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-2.5-quota",
+      "what": "Keenable credit balance (99,999 free as of 13 Nov; HTTP 402 means stop and ask)",
+      "why": "Budget section: v1 needs under 200 calls, human step 5 under 20 credits. A 402 is a stop, so a top-up or plan change is Edan's. See F5.",
+      "owner": "human",
+      "before": "2",
+      "leadTime": "hours",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-2.T-legal",
+      "what": "The California ADU approval deadline sentence and its leginfo.legislature.ca.gov URL (human step 4)",
+      "why": "Fixed decision 7 needs the statute text quoted verbatim from an official source; until then the page shows 'Pending source'. Confirm Government Code 66317 (F6).",
+      "owner": "human",
+      "before": "2",
+      "leadTime": "hours",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-2.T-plan",
+      "what": "Vercel project on the Hobby plan (human step 7)",
+      "why": "Fixed decision 1 and Budget: deployment is on Vercel hobby. See F3 on whether Hobby terms suit a public grading site.",
+      "owner": "human",
+      "before": "2",
+      "leadTime": "hours",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-2.1-irreversible",
+      "what": "Committing archive/<sha256>.<ext> copies of fetched official pages (under 1 MB) into git",
+      "why": "Fixed decision 3: once committed they stay in history even if later removed, and the repo goes private to public if that is ever changed.",
+      "owner": "human",
+      "before": "2",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-2.2-quota",
+      "what": "Optional Socrata app token (SOCRATA_APP_TOKEN), only if a 429 persists",
+      "why": "Anonymous Socrata requests share an IP pool and may be throttled at an unpublished rate (F2); a token is a new secret so a worker cannot add it.",
+      "owner": "human",
+      "before": "2",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-2.2-secret",
+      "what": "DATABASE_URL in .env and in Vercel settings",
+      "why": "Invariant 6: the connection string never goes in code, fixtures or logs. Wave 2 importers and npm run migrate read it.",
+      "owner": "human",
+      "before": "2",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-2.5-plan",
+      "what": "Keenable allowance and the 402 stop: 100,000 free requests a month, and any purchase of credits after an HTTP 402",
+      "why": "Budget: 'On HTTP 402 stop and ask Edan'. v1 needs under 200 calls; a purchase is Edan's decision and money. Expiry of unused allowance is undocumented (F5).",
+      "owner": "human",
+      "before": "2",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-2.5-secret",
+      "what": "KEENABLE_API_KEY in .env and Vercel settings",
+      "why": "Invariant 6 and fixed decision 9: Keenable search and fetch for department heads need the key. Wave 1d and the offline tests need none.",
+      "owner": "human",
+      "before": "2",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-2.T-account",
+      "what": "Vercel account and project, with KEENABLE_API_KEY and DATABASE_URL set as project environment variables",
+      "why": "Human step 7: the deploy and the page that reads the database (2.T) need it before launch.",
+      "owner": "human",
+      "before": "2",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    }
+  ],
+  "specEdits": [
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "directly followed by \"on separate permit\", \"under separate permit\" or \"to be under separate permit\" (with or without \"a\" before \"separate\"). A permit is true when",
+      "replace": "directly followed by \"on separate permit\", \"under separate permit\" or \"to be under separate permit\" (with or without \"a\" before \"separate\"). A reference covers a following \"unit\" or \"units\" and a following parenthesised \"(ADU)\" or \"(ADUs)\", so \"accessory dwelling unit (ADU) under separate permit\" is cancelled whole. A permit is true when",
+      "recId": "R2"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "\"mother-in-law visits\"; every earlier case",
+      "replace": "\"mother-in-law visits\", \"new accessory dwelling unit under separate permit\", \"new accessory dwelling unit (ADU) under separate permit\"; and true for \"add mother-in-law unit at ground floor\"; every earlier case",
+      "recId": "R2"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "reads Housing Production (`xdht-4php`: `bpa`, `adu_legalization_units`) and the descriptions of those permits from Building Permits (`i98e-djp9`: `permit_number`, `description`), joins them, and prints the result of `compareWithCity`.",
+      "replace": "reads Housing Production (`xdht-4php`: `bpa`, `adu_legalization_units`, `description`; one row per `bpa`, and its description is the permit's own, equal to Building Permits' after case and whitespace) and prints the result of `compareWithCity`; no join.",
+      "recId": "R5"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "Reads or writes: reads (two public DataSF datasets; no database, no file written, no key).",
+      "replace": "Reads or writes: reads (one public DataSF dataset; no database, no file written, no key).",
+      "recId": "R5"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "it requests only the columns named here, pages with `$order` and pauses 300 ms between requests; permit numbers are sent in batches of at most 250 in a `$where ... in (...)`.",
+      "replace": "it requests only the columns named here, pages 1,000 rows at a time with `$order=bpa` and pauses 300 ms between requests.",
+      "recId": "R5"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "(descriptions of one permit joined with a space)",
+      "replace": "(one row per `bpa`)",
+      "recId": "R5"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "leaves out city rows whose description matches `/legali[sz]/i`;",
+      "replace": "is `agreeYes / cityYes` over the rows whose description does not match `/legali[sz]/i` (those rows are removed first from numerator and denominator, whether or not `isAdu` says yes);",
+      "recId": "R7"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "a legalization-only miss counts in `recall` but not in `recallWithoutLegalization`;",
+      "replace": "a legalization-only miss counts in `recall` but not in `recallWithoutLegalization`; an agreeing row that says \"legalize\" counts in `recall` and in neither part of `recallWithoutLegalization`;",
+      "recId": "R7"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "Two tasks, no tail; a two-task wave is fine here.",
+      "replace": "Two tasks, no tail; a two-task wave is fine here. After both merge, the session runs `npx tsx scripts/check-adu.ts` once and records its counts (no descriptions) in the wave scorecard; a precision below 98, or a fall of more than 1 point from 99.3, is a stop for Edan. Both figures cover finished permits only.",
+      "recId": "R9"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "- **1.14 In-law units and negations.** Owns",
+      "replace": "- **1.14 In-law units and negations.** Depends on 1.6 (junior wording, merged). Owns",
+      "recId": "R10"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "- **1.15 City check of the classifier.** Owns",
+      "replace": "- **1.15 City check of the classifier.** Depends on 1.1 and 1.8 (`isAllowed`) and 1.10 (`datasetUrl`), all merged; the script imports `isAdu` as merged at run time. Owns",
+      "recId": "R10"
+    }
+  ],
+  "needsSecondRound": true,
+  "skipped": false,
+  "skipReason": "",
+  "reviewPath": "~/dev/agent-loop/docs/warden/2026-11-14-wave-1d-review.json"
+}
