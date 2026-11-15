@@ -1,0 +1,1208 @@
+{
+  "project": "Warden",
+  "wave": "2",
+  "accepted": [
+    {
+      "id": "R1",
+      "kind": "defect",
+      "task": "2.T",
+      "category": "ownership",
+      "touches": [],
+      "dependsOn": [],
+      "text": "2.T makes `getProcessView` async but owns only its body in `src/lib/view.ts`. Every caller and its test is another task's file and calls it synchronously, so typecheck fails and a worker must edit files it does not own. 2.T also has no 'Depends on' line, unlike 1.T. Resolution: 2.T owns the callers and their tests and depends on 2.1 to 2.7.",
+      "evidence": "grep getProcessView src test: src/app/page.tsx:12 `const view = getProcessView(slug, '12m');`; src/app/processes/[slug]/page.tsx:14; src/app/departments/[slug]/page.tsx:19 `const view = getProcessView(PROCESS_SLUG, ...)` then `view?.departments`; src/app/processes/[slug]/page.test.tsx:129 `expect(getProcessView('sf-adu-permit', w)).toBe(SAMPLE_ADU_VIEWS[w])`; test/wave1.test.ts mocks it synchronously. Spec 2.T: 'Owns ... the body of `getProcessView` in `src/lib/view.ts`'.",
+      "reverseCost": "Revert the spec edit; no code changed.",
+      "wouldBeWrongIf": "The callers already `await` it or the signature stays sync (for example a separate async loader is added and `getProcessView` is untouched).",
+      "reversible": true,
+      "costCents": 0,
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "- **2.T Wave 2 end to end.** Owns",
+          "replace": "- **2.T Wave 2 end to end.** Depends on 2.1 to 2.7. Owns"
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "the body of `getProcessView` in `src/lib/view.ts`, and the `scripts` entries of `package.json`",
+          "replace": "`getProcessView` in `src/lib/view.ts` together with its callers and their tests (`src/app/page.tsx`, `src/app/processes/[slug]/page.tsx`, `src/app/processes/[slug]/page.test.tsx`, `src/app/departments/[slug]/page.tsx`, `src/app/departments/[slug]/page.test.tsx`, `test/wave1.test.ts`), which `await` it once it is async, and the `scripts` entries of `package.json`"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category ownership is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "grep getProcessView in /Users/edan/dev/warden src and test: sync callers at src/app/page.tsx:12, src/app/processes/[slug]/page.tsx:14, src/app/departments/[slug]/page.tsx:19, sync assertions at processes page.test.tsx:129-130, sync mocks at departments page.test.tsx:14 and test/wave1.test.ts:55,70,85; src/lib/view.ts:181 is a sync signature. CONTRACT.md: 'A task edits only the paths it owns; anything else is a stop'. I applied the edits to a scratch copy of the spec and ran agent-loop scripts/spec-lint.js and wave-args.js: lint OK, 2.T parsed with deps ['2.1'] only and 13 owned paths (lint warning).",
+        "reason": "Holds up: the async change breaks typecheck in files 2.T does not own. Three notes for whoever applies it. (1) spec-lint's DEPENDS regex does not read a range, so 'Depends on 2.1 to 2.7' parses as 2.1 alone; harmless because the tail waits for every task, but write the ids as a list. (2) '2.7' exists only if R3 is applied; otherwise it is 2.6. (3) CONTRACT.md's wave 2 row for 2.T needs the same paths."
+      }
+    },
+    {
+      "id": "R3",
+      "kind": "defect",
+      "task": "2.6",
+      "category": "ownership",
+      "touches": [],
+      "dependsOn": [],
+      "text": "No wave 2 task loads or reads the city target or state deadline. The schema has `fact` kinds `process_target` and `state_deadline`, and human step 4 produces the statute sentence. 2.5 imports only `department_head`. 2.6 returns 1.12's view, whose `cityTarget` and `stateDeadline` are always `null`. After the tail both clocks would show 'Pending source' forever even once Edan has done step 4. Resolution: add a loader task 2.7 (same shape as 2.5, reusing its page fetch), have 2.6 read the two facts, and add `import:clocks` to 2.T's scripts.",
+      "evidence": "1.12: '`cityTarget` and `stateDeadline` are `null`'. 2.5: 'inserts a `department_head` fact'. Schema: `kind text not null check (kind in ('department_head', 'process_target', 'state_deadline'))`. Human step 4: 'record the URL and the exact sentence' with no task that stores it. Fixed decision 7: 'State deadline = the statute text ... quoted verbatim (human step 4)'.",
+      "reverseCost": "Revert the spec edit; nothing is built from it yet.",
+      "wouldBeWrongIf": "Edan wants both clocks left as 'Pending source' in v1, or a task outside this wave loads them.",
+      "reversible": true,
+      "costCents": 0,
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "- **2.6 Process stats.** Owns",
+          "replace": "- **2.7 Clock facts.** Depends on 2.1 and 2.5 (its exported `fetchOfficialPage`). Owns `src/importers/clocks.ts`, `src/importers/clocks.test.ts`, `scripts/import-clocks.ts`, `data/clocks.example.json`. `data/clocks.json` (Edan's, human step 4) lists `{ kind, url, sentence, days }` with `kind` `process_target` or `state_deadline`, `sentence` the verbatim sentence and `days` the whole number of days it states, or `null`. `importClocks(db, stores, entries, { jurisdiction, process, fetch, keenable, now })` fetches each page with `fetchOfficialPage`, saves it, and inserts a `fact` of that kind for `process` (`value` `{ days }` or `{}`, `quote` the sentence) when `containsQuote(pageText(...), sentence)`, else quarantines the entry as `'unstored'` with `quote_not_found`. A rerun adds nothing. Reads or writes: paid-call (scripts only; tests use fakes). Test: a found sentence yields one fact with its days; a missing one a quarantine row; a rerun adds nothing; an empty `data/clocks.json` imports nothing. Lane: normal.\n- **2.6 Process stats.** Owns"
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "takes heads from `fact_ok` (the latest `department_head` fact per department),",
+          "replace": "takes heads from `fact_ok` (the latest `department_head` fact per department) and the clocks (the latest `process_target` and `state_deadline` fact of the process, as `{ quote, sourceUrl }` set on the returned view's `clocks` over 1.12's `null`s, or `null` without one),"
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "the newest head wins. Lane: normal.",
+          "replace": "the newest head wins; the clocks come from the newest `process_target` and `state_deadline` facts and stay `null` without one. Lane: normal."
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "(`import:reviews`, `import:issuance`, `provenance`, `suggest:heads`, `import:heads`)",
+          "replace": "(`import:reviews`, `import:issuance`, `provenance`, `suggest:heads`, `import:heads`, `import:clocks`)"
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "and record the URL and the exact sentence.",
+          "replace": "and record the URL, the exact sentence and its days in `data/clocks.json` (task 2.7)."
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category ownership is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Spec 1.12: 'cityTarget and stateDeadline are null'; 2.5 inserts only department_head; migrations/0001_init.sql fact.kind check lists process_target and state_deadline with value {days} or {}; src/lib/view.ts QuotedClock is { quote, sourceUrl }, matching the edit; human step 4 says 'Before the tail merges, or the page shows Pending source', so the spec expects the sentence to reach the page. Scratch copy through spec-lint: OK, with a new warning 'wave 2: dependency chain 2.1 -> 2.5 -> 2.7 is 3 tasks deep'. grep fetchOfficialPage in the current spec: 0 matches.",
+        "reason": "The gap is real and the fix fits the schema and the view type. Two conditions. (1) 2.7 depends on `fetchOfficialPage`, which only R12's edit defines; apply R3 only together with R12, or 2.7 names an export that does not exist. (2) It makes the wave's chain 3 deep, past the loop's limit of 2; folding the clock entries into 2.5's loader would avoid the extra hop."
+      }
+    },
+    {
+      "id": "R12",
+      "kind": "defect",
+      "task": "2.5",
+      "category": "security",
+      "touches": [],
+      "dependsOn": [
+        "F4"
+      ],
+      "text": "2.5 checks the allowlist 'on the final URL after redirects', so a page that redirects to an unlisted host is still requested before it is refused. It also does not say which URL goes into `source.url` (requested or final), and it hardcodes `storedIn: 'git'` although fixed decision 3 commits a page only when under 1 MiB (`shouldCommitBody` exists for this). Resolution: follow redirects by hand (`redirect: 'manual'`, at most 5 hops), check each hop before requesting it, save under the final URL, and choose `storedIn` by size. Keenable's `url` field is documented as the final address after redirects.",
+      "evidence": "Spec 2.5: 'fetches each `url` directly (allowlist checked before the request and on the final URL after redirects) ... saves the page with `storedIn: 'git'`'. src/lib/sources/hash.ts: `shouldCommitBody(byteLength)` is true below 1,048,576. F4 spike: 'The page's final address after redirects. It can differ from the url you sent ... Cite this one.'",
+      "reverseCost": "Revert the spec edit; nothing built from it yet.",
+      "wouldBeWrongIf": "A request to an unlisted host is acceptable because its body is discarded, and every head page is under 1 MiB.",
+      "reversible": true,
+      "costCents": 0,
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "fetches each `url` directly (allowlist checked before the request and on the final URL after redirects), falling back to 1.4's `fetchPage` when the direct fetch fails; saves the page with `storedIn: 'git'` and the matching `fetchedVia`;",
+          "replace": "fetches each `url` through the exported `fetchOfficialPage(url, { fetch, keenable, isAllowed })`: directly with `redirect: 'manual'`, following at most 5 redirects and checking each hop with `isAllowed` before requesting it (an unlisted hop is refused with no request to it), falling back to 1.4's `fetchPage` when the direct fetch fails (its `page.url` is the final URL, checked again); saves the page under its final URL with `storedIn` `'git'` when `shouldCommitBody(byteLength)` and `'storage'` otherwise, and the matching `fetchedVia`;"
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "a redirect off the allowlist is refused; a rerun adds nothing.",
+          "replace": "a redirect to an unlisted host is refused and the fake fetch sees no request to it; a redirect between allowed hosts saves the page under the final URL; a rerun adds nothing."
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category security is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Spec 2.5 checks the allowlist 'on the final URL after redirects' and hardcodes storedIn 'git'; src/lib/sources/hash.ts shouldCommitBody is true below 1,048,576. Local Node test: fetch with redirect 'manual' returns status 302 with a readable Location header, so checking each hop before requesting it is implementable. node_modules/keenable/dist/index.d.ts: Page has `readonly url`.",
+        "reason": "Holds up: the current text lets a request reach an unlisted host and ignores the 1 MiB rule of fixed decision 3. Detail for the worker: resolve a relative Location against the current URL before the allowlist check. R3's task 2.7 depends on the `fetchOfficialPage` export this edit introduces."
+      }
+    },
+    {
+      "id": "R13",
+      "kind": "defect",
+      "task": "2.2",
+      "category": "data",
+      "touches": [],
+      "dependsOn": [],
+      "text": "2.2 classifies permits only 'after the last page'. A run that fails midway (a 429 beyond the cap, a network drop) leaves new permits and reviews stored with no `permit_process` row. 2.6 keeps only `member` true, so those reviews silently drop out of the figures until a rerun completes. Resolution: classify each page's touched permits right after that page's rows, from the stored description, which is idempotent and cheap. The same rule applies to 2.3.",
+      "evidence": "Spec 2.2: 'After the last page every permit it touched gets a `permit_process` row'. 2.6: 'reads `review_ok` and `issuance_ok` rows of permits whose `permit_process` row for the process has `member` true'. Schema: 'A permit with no row has not been classified for that process.'",
+      "reverseCost": "Revert the spec edit.",
+      "wouldBeWrongIf": "Each import runs in one transaction that rolls back whole on failure.",
+      "reversible": true,
+      "costCents": 0,
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "After the last page every permit it touched gets a `permit_process` row for `process` with `member = isAdu({ description })` and `classified_at = now`.",
+          "replace": "After each page's rows are stored, every permit that page touched gets a `permit_process` row for `process` with `member = isAdu({ description })` of the permit's stored description and `classified_at = now`, so a run that fails midway leaves no unclassified permit behind."
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category data is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Spec 2.2: 'After the last page every permit it touched gets a permit_process row'; 2.6 keeps only member true; migration comment: 'A permit with no row has not been classified for that process'. Spec 1.10 makes readPages throw on a third 429 or a Retry-After above 60, so a run that stops midway is a designed path.",
+        "reason": "Holds up. The edit's claim that no unclassified permit is left behind is strictly true only if a page's rows and their classification commit together; say 'one transaction per page' so the worker does not leave that gap."
+      }
+    },
+    {
+      "id": "R15",
+      "kind": "defect",
+      "task": "2.6",
+      "category": "data",
+      "touches": [],
+      "dependsOn": [],
+      "text": "2.6 maps stored dates back to ISO text, but `pg` and PGlite return a `date` column differently. `pg` builds a local-midnight `Date`, so `toISOString()` gives the previous day on a machine east of UTC. PGlite gives UTC midnight, so the PGlite tests cannot catch this. A window boundary would then move a day, against 1.12's rule of no time zone conversion. Resolution: select every date as `::text`.",
+      "evidence": "`TZ=Asia/Tokyo node -e \"require('pg-types').getTypeParser(1082)('2026-10-29').toISOString()\"` prints 2026-10-28T15:00:00.000Z (UTC prints 2026-10-29T00:00:00.000Z). PGlite under TZ=Asia/Tokyo, America/Los_Angeles and UTC returns 2026-10-29T00:00:00.000Z. Schema: `start_date date`, `issued_date date`.",
+      "reverseCost": "Revert the spec edit.",
+      "wouldBeWrongIf": "The site and scripts only ever run with TZ=UTC.",
+      "reversible": true,
+      "costCents": 0,
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "reads `review_ok` and `issuance_ok` rows of permits whose `permit_process` row for the process has `member` true,",
+          "replace": "reads `review_ok` and `issuance_ok` rows of permits whose `permit_process` row for the process has `member` true (every date selected as `::text`, because `pg` returns a `date` as a local-time `Date` and PGlite as a UTC one),"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category data is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Reran in /Users/edan/dev/warden: pg-types parser 1082 on '2026-10-29' gives 2026-10-28T15:00:00.000Z under TZ=Asia/Tokyo, 2026-10-29T00:00:00.000Z under UTC and 2026-10-29T07:00:00.000Z under America/Los_Angeles. PGlite 0.5.13 under TZ=Asia/Tokyo returns 2026-10-29T00:00:00.000Z, and `::text` returns '2026-10-29'.",
+        "reason": "Holds up as stated: the two drivers differ, the PGlite tests cannot catch it, and selecting dates as text removes the difference."
+      }
+    },
+    {
+      "id": "R20",
+      "kind": "defect",
+      "task": "2.5",
+      "category": "process",
+      "touches": [],
+      "dependsOn": [],
+      "text": "Git-stored copies are written into whichever working tree runs `import:heads`, while the `source` row goes into the shared database. Until those files are merged by PR (invariant 7: nothing goes to main directly), a provenance run on any other checkout, such as the scheduled one, finds the copy missing and quarantines the head. No step says who commits `archive/` or in what order. Resolution: add it to human step 5.",
+      "evidence": "2.5: 'saves the page with `storedIn: 'git'`'. 2.4: 'whose saved copy is missing (`missing_source`)'. Invariant 7: 'Never commit to main'. Step 5 stops at 'write `data/heads.json`'.",
+      "reverseCost": "Revert one spec edit.",
+      "wouldBeWrongIf": "Provenance only ever runs in the checkout that ran the import.",
+      "reversible": true,
+      "costCents": 0,
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "write `data/heads.json` with the name, title and exact sentence.",
+          "replace": "write `data/heads.json` with the name, title and exact sentence; then run `npm run import:heads` (and `npm run import:clocks`) and merge the new `archive/` files in a PR before any `npm run provenance` run, since a saved copy missing from the repository is quarantined as `missing_source`."
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category process is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Spec 2.5 saves with storedIn 'git' into the working tree; 2.4 quarantines a missing copy as missing_source; invariant 7 forbids commits to main; .gitignore ignores neither archive/ nor data/. migrations/0001_init.sql: an open quarantine hides the row until released_at is set.",
+        "reason": "Holds up. Two notes: `npm run import:clocks` exists only if R3 is applied; and a missing_source quarantine does not clear by itself when the files merge later, so with any scheduled provenance run there is a race between import:heads and the PR merge. The step should say to release the quarantine if that happens."
+      }
+    },
+    {
+      "id": "R21",
+      "kind": "defect",
+      "task": "2.3",
+      "category": "data",
+      "touches": [],
+      "dependsOn": [],
+      "text": "2.2 overwrites a permit's `description` and `source_id` on every row, while 2.3 says 'same rules as 2.2' but keeps a stored description unless empty. Neither says what 2.3 does with `source_id`, which drives the quarantine cascade, or which description classifies a permit. Today it rarely matters, since descriptions agree across the datasets, but 737 of 1,942 candidate permits exist only in issuance, so 2.3 creates many permits itself. Resolution: an existing permit keeps its description and `source_id`; a new permit takes both from the issuance page; 2.2 then overwrites them, so reviews win.",
+      "evidence": "Spec 2.2: 'upserts its `permit` (... `description`, `source_id`, `updated_at`)'; 2.3: 'its description is replaced only when the stored one is empty'. DataSF read 15 Nov 2026 with the wide ADU filter: 2,600 review permits, 1,942 issuance permits, 1,205 in both with 0 whose `isAdu` answer differs, 737 issuance-only (687 ADU), 0 permits with more than one description.",
+      "reverseCost": "Revert the spec edit.",
+      "wouldBeWrongIf": "Descriptions start to differ between the datasets, which would make the importer order matter.",
+      "reversible": true,
+      "costCents": 0,
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "upserts the permit (its description is replaced only when the stored one is empty)",
+          "replace": "upserts the permit (an existing permit keeps its `description` and `source_id`; a new one takes both from this page, and 2.2 later overwrites them)"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category data is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Spec 2.2 overwrites description and source_id on every row; 2.3 says 'replaced only when the stored one is empty' and is silent on source_id. Migration comment on permit.source_id: 'The dataset page the description was last read from'; permit_ok hides a permit whose source is quarantined, so source_id drives the cascade. The DataSF counts in the recommendation were not rechecked.",
+        "reason": "Holds up: it closes the ambiguity and makes reviews win whatever the importer order. One limit to record as a follow-up: an issuance-only permit never refreshes its description or source_id after the first import, so a later correction there never reclassifies it. The current text has the same limit."
+      }
+    },
+    {
+      "id": "R23",
+      "kind": "defect",
+      "task": "2.T",
+      "category": "ownership",
+      "touches": [],
+      "dependsOn": [],
+      "text": "2.T 'replays 2.2 to 2.6 on the recorded pages', but invariant 5 allows only recorded fixtures in `test/fixtures/`, no task owns recording any (recording needs the network), and 2.2, 2.3 and 2.5 use hand-built pages inside their own tests. 2.T lists no fixture path. Resolution: 2.T builds its own hand-built pages in `test/fixtures/wave2/`, with invented descriptions and no address key, and replays 2.2 to 2.7.",
+      "evidence": "2.T: 'Replays 2.2 to 2.6 on the recorded pages into PGlite.' 2.2: 'two hand-built pages with the real field names and invented descriptions'. `ls test/fixtures` shows only adu-gold.json and migrations/. Invariant 5: 'tests use recorded fixtures in `test/fixtures/`'.",
+      "reverseCost": "Revert the spec edit.",
+      "wouldBeWrongIf": "The earlier tasks export their page builders for 2.T to import.",
+      "reversible": true,
+      "costCents": 0,
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "Replays 2.2 to 2.6 on the recorded pages into PGlite.",
+          "replace": "Replays 2.2 to 2.7 into PGlite on hand-built pages kept in `test/fixtures/wave2/` (no real page is recorded; invented descriptions, no address key)."
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "`src/lib/db/pool.ts`,",
+          "replace": "`src/lib/db/pool.ts`, `test/fixtures/wave2/*`,"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category ownership is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "ls test/fixtures: adu-gold.json and migrations/ only, so no recorded pages exist. Spec 2.2, 2.3 and 2.5 tests use hand-built pages inside their own test files. Scratch copy through wave-args.js: `test/fixtures/wave2/*` parses as an owned path of 2.T.",
+        "reason": "Holds up. '2.2 to 2.7' needs R3; without it the range ends at 2.6."
+      }
+    }
+  ],
+  "asked": [
+    {
+      "id": "R2",
+      "kind": "defect",
+      "task": "2.T",
+      "category": "deploy",
+      "touches": [
+        "invariant"
+      ],
+      "dependsOn": [
+        "F7"
+      ],
+      "text": "Invariant 1 allows sample figures only 'until wave 2's tail' and says the site is not deployed publicly while it shows them. 2.T then keeps the fallback: with no `DATABASE_URL` it returns the sample. A production deploy with the variable missing or misspelled would silently serve unverified sample numbers. Resolution: fall back to the sample only when `VERCEL_ENV` is not `production`. In production with no `DATABASE_URL`, throw, which also fails the production build because the docs say VERCEL_ENV is set at build and runtime.",
+      "evidence": "Invariant 1: 'One exception, until wave 2's tail ... the site is not deployed publicly while it shows them.' 2.T: 'without it, it returns the sample with its banner as today, so local work and CI need no database.' F7: Vercel docs list VERCEL_ENV as 'Available at: Both build and runtime' with values production, preview or development; they do not state it is production for every production deployment.",
+      "reverseCost": "Revert the spec edit (or one config edit if the check is a single conditional in view.ts).",
+      "wouldBeWrongIf": "VERCEL_ENV is not reliably 'production' on production deployments (F7 unsettled), or Edan wants a public sample page after the tail.",
+      "reversible": true,
+      "costCents": 0,
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "without it, it returns the sample with its banner as today, so local work and CI need no database.",
+          "replace": "without it, it returns the sample with its banner as today when `VERCEL_ENV` is not `production`, so local work and CI need no database; with `VERCEL_ENV=production` and no `DATABASE_URL` it throws, so a public deployment never serves the sample (invariant 1)."
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "with no `DATABASE_URL` the page still shows the sample.",
+          "replace": "with no `DATABASE_URL` and `VERCEL_ENV` unset the page still shows the sample; with `VERCEL_ENV=production` and no `DATABASE_URL` `getProcessView` throws."
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: touches invariant; adversary disagree: The guard fails open. With no DATABASE_URL the sample is still served on a preview deployment (VERCEL_ENV=preview), on a project with system variables switched off (VERCEL_ENV unset), and on any host that is not Vercel. Those are the silent cases the recommendation says it closes. A fail-closed rule is available: sample only when NODE_ENV is not 'production' (vitest sets test, next dev sets development), or behind an explicit opt-in variable. Also, the text says a missing variable fails the production build, but R17 makes getProcessView never run at build, so it would surface as request-time errors instead. The direction is right; which guard to use changes invariant 1 and is Edan's call. (Fetched vercel.com/docs/environment-variables/system-environment-variables: VERCEL_ENV 'can be either production, preview, or development', and the system variables are present only when the project's 'Enable access to System Environment Variables' checkbox is on. Spec invariant 1 ends the sample exception at wave 2's tail and forbids a public deploy that shows the sample.)",
+      "adversary": {
+        "verdict": "disagree",
+        "evidence": "Fetched vercel.com/docs/environment-variables/system-environment-variables: VERCEL_ENV 'can be either production, preview, or development', and the system variables are present only when the project's 'Enable access to System Environment Variables' checkbox is on. Spec invariant 1 ends the sample exception at wave 2's tail and forbids a public deploy that shows the sample.",
+        "reason": "The guard fails open. With no DATABASE_URL the sample is still served on a preview deployment (VERCEL_ENV=preview), on a project with system variables switched off (VERCEL_ENV unset), and on any host that is not Vercel. Those are the silent cases the recommendation says it closes. A fail-closed rule is available: sample only when NODE_ENV is not 'production' (vitest sets test, next dev sets development), or behind an explicit opt-in variable. Also, the text says a missing variable fails the production build, but R17 makes getProcessView never run at build, so it would surface as request-time errors instead. The direction is right; which guard to use changes invariant 1 and is Edan's call."
+      }
+    },
+    {
+      "id": "R4",
+      "kind": "defect",
+      "task": "2.1",
+      "category": "secret",
+      "touches": [],
+      "dependsOn": [
+        "F1"
+      ],
+      "text": "`supabaseStore` authenticates with `Authorization: Bearer <key>` only. Supabase's current docs say its newer secret keys are short non-JWT strings that belong on the `apikey` header and can be rejected as 'Invalid JWT' when sent as Bearer. Which key type a new project issues, and whether Storage accepts both headers together, is not settled. Resolution: send `apikey` always and add `Authorization: Bearer` only when the key is a JWT (starts with `eyJ`). Settle the Storage behaviour with one read-only GET against Edan's real project before 2.1 merges (human step 2).",
+      "evidence": "Spec 2.1: '`Authorization: Bearer <key>`'. F1 spike: 'Send publishable and secret keys on the apikey header, not on Authorization: Bearer'; 'Publishable and secret keys are short strings, not JWTs'; Storage-specific header rule 'remains open'. No source recorded for the spike.",
+      "reverseCost": "Revert one spec edit before 2.1 runs; after 2.1 merges, a one-function change in store.ts.",
+      "wouldBeWrongIf": "A live probe shows the Storage API accepts a new secret key as Bearer, or the project issues a legacy service_role JWT.",
+      "reversible": true,
+      "costCents": 0,
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "never the key; `Authorization: Bearer <key>`)",
+          "replace": "never the key; header `apikey: <key>` always, plus `Authorization: Bearer <key>` only when the key starts with `eyJ`, a legacy service_role JWT: Supabase's newer secret keys are not JWTs and go on `apikey` alone)"
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "`supabaseStore` with a fake fetch sends the documented method, path and headers,",
+          "replace": "`supabaseStore` with a fake fetch sends the documented method, path and headers (`apikey` for both key shapes, `Authorization` only for a key starting `eyJ`),"
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: category secret is human-only; depends on open fact F1",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Fetched supabase.com/docs/guides/api/api-keys: 'Send publishable and secret keys on the apikey header, not on Authorization: Bearer'; 'Publishable and secret keys are short strings, not JWTs'; legacy anon and service_role are long-lived JWTs. Spec 2.1 sends only 'Authorization: Bearer <key>'.",
+        "reason": "Holds up. Sending apikey always and Bearer only for an eyJ key works for both key types. The page does not state the Storage API's behaviour specifically, so the one read-only GET against the real project should stay as a gate before the first live import."
+      }
+    },
+    {
+      "id": "R5",
+      "kind": "defect",
+      "task": "2.1",
+      "category": "secret",
+      "touches": [
+        "invariant"
+      ],
+      "dependsOn": [
+        "F1"
+      ],
+      "text": "Invariant 6 names two secrets, but wave 2 uses four: 2.1 reads `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. Human step 2 says to put 'the storage key' in Vercel, which gives the public site an admin key it never uses, since only importers write. The `service_role` name is the legacy one, which Supabase says it is deprecating by the end of 2026. Resolution: list all four in invariant 6, name the variable `SUPABASE_SECRET_KEY` (a legacy JWT or a new secret key both fit), and keep it out of Vercel. Only `DATABASE_URL` goes to Vercel.",
+      "evidence": "Invariant 6: '`KEENABLE_API_KEY` and `DATABASE_URL` live in `.env` locally ... and in Vercel settings.' 2.1: '`supabaseStoreFromEnv()` reads `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`'. Step 2: 'put `DATABASE_URL` and the storage key in `.env` and in Vercel.' `.env.example` holds only `KEENABLE_API_KEY=`. F1 spike: 'Supabase is deprecating the anon and service_role keys by the end of 2026.'",
+      "reverseCost": "Revert one spec edit; the variable name is a one-line rename if code already exists.",
+      "wouldBeWrongIf": "Edan wants the site to read private storage at request time, which would put the key in Vercel.",
+      "reversible": true,
+      "costCents": 0,
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "`KEENABLE_API_KEY` and `DATABASE_URL` live in `.env` locally (ignored by git) and in Vercel settings.",
+          "replace": "`KEENABLE_API_KEY`, `DATABASE_URL`, `SUPABASE_URL` and `SUPABASE_SECRET_KEY` live in `.env` locally (ignored by git); Vercel settings hold only `DATABASE_URL`, because the site never writes, and any scheduled run keeps the importer's in its own secret store."
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "`supabaseStoreFromEnv()` reads `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` and throws naming the missing variable.",
+          "replace": "`supabaseStoreFromEnv()` reads `SUPABASE_URL` and `SUPABASE_SECRET_KEY` and throws naming the missing variable."
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "put `DATABASE_URL` and the storage key in `.env` and in Vercel.",
+          "replace": "put `DATABASE_URL`, `SUPABASE_URL` and `SUPABASE_SECRET_KEY` in `.env`, and only `DATABASE_URL` in Vercel; then run one read-only GET against the Storage API with the key to confirm which header it takes (task 2.1)."
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: touches invariant; category secret is human-only; depends on open fact F1",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Spec invariant 6 names two secrets; 2.1 reads SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY; step 2 puts 'the storage key' in Vercel; .env.example holds only KEENABLE_API_KEY=. grep -i keenable in src/app and src/components: no match, so the site needs neither Keenable nor the storage key. Supabase API keys page: 'deprecating the anon and service_role keys by the end of 2026'.",
+        "reason": "Holds up. Notes: .env.example, CLAUDE.md invariant 6 and the loop config's extraRules repeat the two-secret wording and are session-owned, so they need the same change. It also conflicts with R7 and R16 if the site is later asked to serve private copies. DATABASE_URL in Vercel is still a full-rights role; a read-only role would be the same principle applied to the database."
+      }
+    },
+    {
+      "id": "R6",
+      "kind": "defect",
+      "task": "2.T",
+      "category": "privacy",
+      "touches": [
+        "fixed_decision"
+      ],
+      "dependsOn": [
+        "F8"
+      ],
+      "text": "The migration creates tables and views in `public` with no row level security and no revoke. Supabase serves `public` objects through its Data API, and the anon key is public by design. If new tables are exposed by default, anyone could read, or write, `fact`, `review` and `quarantine` through that API and fake sourced figures. The `*_ok` views run with the owner's rights, so they would bypass any table policy. Resolution, in the unapplied migration: enable RLS on every table with no policies, and make the four views `security_invoker`. Confirm the default exposure on the real project. Also confirm the role in `DATABASE_URL` bypasses RLS, or the site reads nothing.",
+      "evidence": "`grep -in 'row level|grant|revoke|security' migrations/0001_init.sql` returns nothing. Migration comment: 'Pages read the views.' F8 is not in the spike results, so the default exposure is unverified.",
+      "reverseCost": "Before the migration is applied, one edit of 0001_init.sql. After it is applied, a new migration, which is outside the decision envelope.",
+      "wouldBeWrongIf": "New Supabase projects no longer grant `anon` and `authenticated` access to tables created by SQL (F8), or the Data API is switched off for the project.",
+      "reversible": true,
+      "costCents": 0,
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "Every table is keyed by jurisdiction so a second city is rows, not a migration (Edan, 15 Nov 2026).",
+          "replace": "Every table is keyed by jurisdiction so a second city is rows, not a migration (Edan, 15 Nov 2026). Row level security is enabled on every table with no policy, and the four `*_ok` views are created `with (security_invoker = true)`, because Supabase serves `public` through its Data API and the anon key is public; the test checks `relrowsecurity` for every table."
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: touches fixed_decision; category privacy is human-only; adversary block: The risk is real and the mechanism works, but the edit only rewrites the spec's description of the schema. Nobody owns the change to 0001_init.sql or test/schema.test.ts, so the spec would claim row level security that does not exist. It also misses schema_migrations, which applyMigrations creates: with default grants an anon-key holder could add or remove rows there and make a migration skip or rerun. Rework: make the migration and test change an explicit human step 1 or session item, cover schema_migrations in applyMigrations, and consider switching off 'Automatically expose new tables' in step 2 as the simpler control. (Fetched supabase.com/docs/guides/api/securing-your-api: default privileges give anon and authenticated select, insert, update and delete on new public tables ('These grants make new objects reachable through the Data API'); RLS is on by default only for dashboard-created tables; the default is being changed to opt-in, no date given. PGlite run of migrations/0001_init.sql plus RLS on all 10 tables and security_invoker on the 4 views: the owner still reads permit_ok (1 row), a select-granted non-owner reads 0. src/lib/db/migrate.ts:26 creates schema_migrations outside the migration. CONTRACT.md: migrations/0001_init.sql and test/schema.test.ts are Edan's, and no wave 2 task owns them.)",
+      "adversary": {
+        "verdict": "block",
+        "evidence": "Fetched supabase.com/docs/guides/api/securing-your-api: default privileges give anon and authenticated select, insert, update and delete on new public tables ('These grants make new objects reachable through the Data API'); RLS is on by default only for dashboard-created tables; the default is being changed to opt-in, no date given. PGlite run of migrations/0001_init.sql plus RLS on all 10 tables and security_invoker on the 4 views: the owner still reads permit_ok (1 row), a select-granted non-owner reads 0. src/lib/db/migrate.ts:26 creates schema_migrations outside the migration. CONTRACT.md: migrations/0001_init.sql and test/schema.test.ts are Edan's, and no wave 2 task owns them.",
+        "reason": "The risk is real and the mechanism works, but the edit only rewrites the spec's description of the schema. Nobody owns the change to 0001_init.sql or test/schema.test.ts, so the spec would claim row level security that does not exist. It also misses schema_migrations, which applyMigrations creates: with default grants an anon-key holder could add or remove rows there and make a migration skip or rerun. Rework: make the migration and test change an explicit human step 1 or session item, cover schema_migrations in applyMigrations, and consider switching off 'Automatically expose new tables' in step 2 as the simpler control."
+      },
+      "revision": {
+        "id": "R6",
+        "kind": "defect",
+        "task": "2.T",
+        "category": "privacy",
+        "costCents": 0,
+        "reversible": true,
+        "touches": [],
+        "dependsOn": [
+          "F8"
+        ],
+        "text": "The migration creates ten tables and four views in `public` with no row level security, and the runner creates an eleventh table, `schema_migrations`, outside the migration. Supabase serves `public` through its Data API and gives `anon` and `authenticated` default grants on new tables, and the anon key is public, so anyone could read or write `fact`, `review`, `quarantine` or `schema_migrations` (and make a migration skip or rerun). No wave 2 task owns `migrations/0001_init.sql` or `test/schema.test.ts` (CONTRACT.md: Edan's, task 0.2), so the fix is a human and session step, not a task, and the spec must not claim RLS that the file lacks. Resolution, three edits: (1) human step 1 adds `enable row level security` on all ten tables with no policy, `security_invoker = true` on the four `*_ok` views, and a `relrowsecurity` check in `test/schema.test.ts`, before the migration is applied anywhere; (2) human step 2 turns off 'Automatically expose new tables' (or the Data API: the site and importers use `DATABASE_URL`, Storage is a separate service) before `npm run migrate`, and confirms the `DATABASE_URL` role bypasses RLS by counting `review_ok` after the first import; (3) the session, in its own `src/lib/db/migrate.ts` and `test/db.test.ts`, makes `applyMigrations` enable RLS on `schema_migrations` right after creating it. The spec text for fixed decision 2 is not changed, so no fixed decision is touched.",
+        "evidence": "`grep -in 'row level|grant|revoke|security' migrations/0001_init.sql` returns only the comment 'Pages read the views.' (line 12). `src/lib/db/migrate.ts` line 26: `create table if not exists schema_migrations (...)` runs outside the migration. Fetched supabase.com/docs/guides/api/securing-your-api on 15 Nov 2026: 'These grants make new objects reachable through the Data API, even when you don't intend to expose them.'; 'Tables created through the Supabase Dashboard have RLS enabled by default. Enable RLS explicitly for tables created in the SQL Editor or through another tool'; 'disable Automatically expose new tables to revoke the privileges the Data API uses'; 'With the Data API disabled, none of the auto-generated REST endpoints respond, regardless of grants or RLS.' CONTRACT.md: '`migrations/0001_init.sql` and `test/schema.test.ts`: Edan (wave 0, task 0.2). Waves 1 and 2 add no migration.' `src/lib/db/*` and `test/db.test.ts` are session-owned.",
+        "reverseCost": "Before the migration is applied to Supabase, one edit of 0001_init.sql plus a revert of the spec PR. After it is applied, a second migration.",
+        "wouldBeWrongIf": "The Supabase project's Data API is already off, or new tables are no longer granted to `anon` and `authenticated` by default (the setting is off at project creation); then (2) alone is enough and (1) and (3) are only a backstop. Also wrong if the `DATABASE_URL` role does not bypass RLS and nothing else is arranged: the site would then read zero rows, which step 2's count catches.",
+        "edits": [
+          {
+            "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+            "find": "you decide the tables, keys and relationships; the session explains trade-offs and reviews.",
+            "replace": "you decide the tables, keys and relationships; the session explains trade-offs and reviews. Before it is applied anywhere, add `alter table <name> enable row level security` for each of the ten tables with no policy, `with (security_invoker = true)` on the four `*_ok` views, and a check in `test/schema.test.ts` that `relrowsecurity` is true for every table of `public`: Supabase serves `public` through its Data API and the anon key is public. After it is applied, the fix is a second migration."
+          },
+          {
+            "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+            "find": "put `DATABASE_URL` and the storage key in `.env` and in Vercel.",
+            "replace": "put `DATABASE_URL` and the storage key in `.env` and in Vercel. Before `npm run migrate`, turn off \"Automatically expose new tables\" in the project's Data API settings (or turn the Data API off: the site and the importers use `DATABASE_URL`, and Storage is a separate service). After the first import, check that the role in `DATABASE_URL` bypasses row level security: `select count(*) from review_ok` through that string is not 0."
+          },
+          {
+            "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+            "find": "After the tail: human step 2 (Supabase), then the session runs",
+            "replace": "Before the first `npm run migrate` against Supabase, the session makes `applyMigrations` (`src/lib/db/migrate.ts`, session-owned) run `alter table schema_migrations enable row level security` right after it creates that table, with a check in `test/db.test.ts`; the migration cannot cover a table the runner creates itself.\n\nAfter the tail: human step 2 (Supabase), then the session runs"
+          }
+        ]
+      }
+    },
+    {
+      "id": "R7",
+      "kind": "question",
+      "task": "2.T",
+      "category": "privacy",
+      "touches": [
+        "invariant",
+        "fixed_decision"
+      ],
+      "dependsOn": [],
+      "text": "The end goal and invariant 1 promise 'a source link under every number, to a saved, hashed copy'. Dataset copies go to a private Supabase bucket, web-page copies to a private GitHub repo, and `/sources/<dataset>` lists only URL, time and hash. No visitor can open a saved copy. Edan, choose: (a) make the bucket public-read, since dataset copies hold no address and are open data, and link each copy by its object URL; the `archive/` pages then need the repo public or a route that serves them; or (b) keep it private and word the goal as 'hash shown, copy held privately'. Recommended default: (a) for storage copies.",
+      "evidence": "End goal: 'a source link under every number, to a saved, hashed copy of the page or dataset it came from.' Step 2: 'a private Storage bucket `sources`'. Step 7: 'Create the private GitHub repo `warden`'. 2.T: 'list the saved pages of the latest import (URL, fetch time, SHA-256)'.",
+      "reverseCost": "A bucket's visibility is one setting; copies already uploaded stay in place either way.",
+      "wouldBeWrongIf": "Edan accepts that the hash and original URL are the whole citation (option b).",
+      "reversible": true,
+      "costCents": 0,
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "a private Storage bucket `sources`",
+          "replace": "a public-read Storage bucket `sources` (the copies are open data and hold no address; the sources page links each saved copy)"
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: touches invariant; touches fixed_decision; category privacy is human-only; adversary disagree: The question is real: the end goal promises a link to a saved copy and no visitor can open one. But the default edit should not be applied without Edan. A public-read bucket republishes every raw permit description through Warden, against the recorded stance that descriptions never reach a page. It also solves only the dataset half; the archive/ pages stay in a private repo. This is a privacy and invariant choice, so it goes to Edan undecided, with option (b) or a link to the original URL plus hash as the alternatives. (migrations/0001_init.sql on permit.description: 'Read by the classifiers; never shown on a page'. Spec 1.10 FIELDS include `description` for both datasets, so every saved dataset page holds every description; 1.15 prints 'never a description'. 2.1 reads copies through /object/authenticated/. Step 7: the repo is private.)",
+      "adversary": {
+        "verdict": "disagree",
+        "evidence": "migrations/0001_init.sql on permit.description: 'Read by the classifiers; never shown on a page'. Spec 1.10 FIELDS include `description` for both datasets, so every saved dataset page holds every description; 1.15 prints 'never a description'. 2.1 reads copies through /object/authenticated/. Step 7: the repo is private.",
+        "reason": "The question is real: the end goal promises a link to a saved copy and no visitor can open one. But the default edit should not be applied without Edan. A public-read bucket republishes every raw permit description through Warden, against the recorded stance that descriptions never reach a page. It also solves only the dataset half; the archive/ pages stay in a private repo. This is a privacy and invariant choice, so it goes to Edan undecided, with option (b) or a link to the original URL plus hash as the alternatives."
+      }
+    },
+    {
+      "id": "R8",
+      "kind": "question",
+      "task": "2.7",
+      "category": "source",
+      "touches": [
+        "fixed_decision"
+      ],
+      "dependsOn": [
+        "F5"
+      ],
+      "text": "Fixed decision 7 sources the process target from `sf.gov/permitperformance`, quoted verbatim. That page states its current targets only inside Power BI dashboards, so there is no sentence to quote and the quote check would fail. Edan, choose: ship v1 with the process target 'Pending source' and fill it when an allowlisted text page with the sentence is found (recommended); or name another allowlisted text page. The other allowlisted domains (sfplanning.org, sfdbi.org) were not checked.",
+      "evidence": "F5 spike, sf.gov/permit-performance-metrics: 'The dashboard also includes the current review time target the City has set for each step'; the only day figure in the text is the past Planning Application target, 'shorter than the previous 30 day targets'. Spec fixed decision 7: 'Process target = the published figure on `sf.gov/permitperformance`, quoted verbatim.'",
+      "reverseCost": "Revert one spec edit.",
+      "wouldBeWrongIf": "A text page on an allowlisted domain states the current building or ADU permit review target in days as a sentence.",
+      "reversible": true,
+      "costCents": 0,
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "Process target = the published figure on `sf.gov/permitperformance`, quoted verbatim.",
+          "replace": "Process target = the published figure, quoted verbatim from an allowlisted text page. `sf.gov/permitperformance` shows its current targets only inside Power BI dashboards (checked 15 Nov 2026), so the target stays 'Pending source' until Edan names a text page that states it (`data/clocks.json`, task 2.7)."
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: touches fixed_decision",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Fetched sf.gov/permitperformance (title 'Permit performance metrics | SF.gov'): no sentence gives a current target in days. It says 'The dashboard also includes the current review time target the City has set for each step'; the only day figure is 'the previous 30 day targets'.",
+        "reason": "Holds up; leaving the target as 'Pending source' matches the voice rule of never guessing. Two wording notes: the page text never names Power BI, so write 'embedded dashboards'; and the edit cites task 2.7 and data/clocks.json, which exist only if R3 is applied."
+      }
+    },
+    {
+      "id": "R9",
+      "kind": "defect",
+      "task": "2.T",
+      "category": "account",
+      "touches": [],
+      "dependsOn": [
+        "F3"
+      ],
+      "text": "The spec says 'DATABASE_URL' but not which Supabase connection string. The free-tier direct host is IPv6-only, so it fails from IPv4-only networks. The shared pooler is IPv4 on every plan: session mode (port 5432) suits migrate and the importers, and transaction mode (port 6543) is documented for serverless and does not support prepared statements. Resolution: name the strings in step 2 and have `pool.ts` use `max: 1` and no named statements. Whether `pg` needs any flag, and whether a Vercel function needs the pooler at all, is not settled.",
+      "evidence": "F3 spike: 'Direct connections are on IPv6, or on IPv4 if the project has the IPv4 add-on'; 'The shared pooler ... is IPv4-only on every plan'; 'doesn't support prepared statements in transaction mode'; the pg-specific setting page was not fetched. scripts/migrate.ts uses a plain `pg.Client` on `DATABASE_URL`.",
+      "reverseCost": "One config edit (the connection string in `.env` and Vercel).",
+      "wouldBeWrongIf": "Vercel functions and Edan's network both have IPv6 egress, so the direct string works.",
+      "reversible": true,
+      "costCents": 0,
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "Create the Supabase project (free tier; chosen 15 Nov 2026)",
+          "replace": "Create the Supabase project (free tier; chosen 15 Nov 2026; `DATABASE_URL` is the pooler's session-mode string, port 5432, in `.env` and its transaction-mode string, port 6543, in Vercel, because the direct host is IPv6-only on the free tier)"
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: category account is human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Fetched supabase.com/docs/guides/database/connecting-to-postgres: 'Direct connections are on IPv6, or on IPv4 if the project has the IPv4 add-on'; 'The shared pooler is IPv4-only on every plan'; 'doesn't support prepared statements in transaction mode'; for a serverless function it recommends the shared pooler in transaction mode with a pool of 1, prepared statements off and SSL require. scripts/migrate.ts runs begin and commit as separate queries on one pg.Client, which needs session mode.",
+        "reason": "Holds up. The edit only names the two strings; the pool settings the text recommends (max 1, no named statements, SSL) are not written into 2.T, so add them there or the worker will not see them."
+      }
+    },
+    {
+      "id": "R10",
+      "kind": "question",
+      "task": "2.T",
+      "category": "vendor_plan",
+      "touches": [],
+      "dependsOn": [
+        "F2"
+      ],
+      "text": "Supabase pauses a free project after low database activity over 7 days. A paused database takes the whole site down, and with R2 the page throws. A weekly import is not documented as activity. Edan, choose: stay free and rely on site reads plus a scheduled run (R11) to keep it awake, accepting a pause if traffic is zero; or move to Pro (25 USD a month, never paused). Recommended: stay free for v1 and watch for the pause email, which arrives about a week early.",
+      "evidence": "F2 spike: 'Supabase pauses Free plan projects that show low database activity over a rolling 7-day period'; 'A few requests a day is usually enough ... though that isn't a guarantee'; a weekly import 'is not addressed by any source'; Pro is never paused. Budget: 'Imports run weekly.'",
+      "reverseCost": "Pro can be cancelled monthly. A paused free project restores for a limited time (the sources conflict: 90 days or 1 year).",
+      "wouldBeWrongIf": "The weekly import counts as activity, or the site gets daily traffic.",
+      "reversible": true,
+      "costCents": 2500,
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "500 MB database, 1 GB storage.",
+          "replace": "500 MB database, 1 GB storage. A free project is paused after low database activity over 7 days and a paused database takes the site down; the weekly import is not documented as activity, so the site's own reads and the scheduled run of task 2.8 are what keep it awake, and a pause email (about a week early) is a stop for Edan."
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: cost 2500 cents is over the cap of 0 cents; category vendor_plan is human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Fetched Supabase production checklist: 'We may pause applications on the Free Plan that exhibit low activity in a 7-day period'; 'Upgrade to Pro to guarantee that we won't pause your project for inactivity'. A search of supabase.com (docs/guides/platform/free-project-pausing) reports a warning email about a week before the pause and a restore window that is now one year, not 90 days.",
+        "reason": "Holds up, and the recommended default costs nothing. The edit names 'the scheduled run of task 2.8', which exists only if R11 is applied; R11 is blocked for rework, so word it as 'a scheduled run, if one exists'."
+      }
+    },
+    {
+      "id": "R11",
+      "kind": "question",
+      "task": "2.8",
+      "category": "quota",
+      "touches": [],
+      "dependsOn": [
+        "F10",
+        "F2"
+      ],
+      "text": "Budget says 'Imports run weekly', but no task, workflow or checklist step runs them, so after launch the data goes stale and the provenance check never runs. Edan, choose: run them by hand weekly, or a scheduled GitHub Actions workflow (recommended; repository secrets for the three importer variables, never committing). Whether data.sf.gov throttles unauthenticated requests from shared runner IPs enough to need a Socrata app token is unknown.",
+      "evidence": "Budget: 'Imports run weekly; a full SF ADU import saves about 1.4 MB gzipped'. Wave 2 tasks only write `scripts/*.ts`; the only workflow is .github/workflows/check.yml, which runs `npm ci && npm run check`. Spec: 'DataSF (Socrata): free, no key needed.'",
+      "reverseCost": "Delete the workflow file and its secrets.",
+      "wouldBeWrongIf": "Edan prefers to run imports by hand, or a scheduler outside the repository already exists.",
+      "reversible": true,
+      "costCents": 0,
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "After the tail: human step 2 (Supabase), then the session runs the importers live once, reports the counts, and",
+          "replace": "- **2.8 Weekly run.** Depends on 2.T. Owns `.github/workflows/weekly-import.yml`, `test/weekly-import.test.ts`. A workflow on a weekly `schedule` and on `workflow_dispatch` that checks out main, runs `npm ci`, `npm run import:reviews`, `npm run import:issuance` and `npm run provenance` with `DATABASE_URL` (session-mode string), `SUPABASE_URL` and `SUPABASE_SECRET_KEY` from repository secrets, and fails the job on a non-zero exit. It never commits and uses no other secret. Reads or writes: writes-db. Test: the test reads the YAML and checks the three scripts, the trigger and that no other secret is named. Lane: normal.\n\nAfter the tail: human step 2 (Supabase), then the session runs the importers live once, reports the counts, and"
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: category quota is human-only; adversary block: The missing schedule is a real gap, but the edit as written deadlocks wave 2: 2.8 waits on the tail, is parked, and the tail then never runs, so the gate fails. Rework: make it a single PR after the wave (or part of the tail) instead of a task that depends on 2.T; record the CONTRACT.md exception for the workflow file; test with string checks, since a YAML parser would be a new dependency. If R14 keeps its exit code 3, the job would also stop before issuance and provenance every week. (Scratch copy of the spec with the edit, through agent-loop scripts/wave-args.js: 2.8 gets deps ['2.T'] and stays among the parallel tasks while 2.T is the tail. claude/workflows/wave-loop.js line 1822 starts a task only when every dep is 'merged'; lines 1840-1845 park what is left as 'unschedulable'; lines 1856-1863 run the tail only if every parallel task merged. CONTRACT.md lists `.github/workflows/*` as session-owned ('no task edits these'). package.json has no YAML parser (js-yaml is only transitive).)",
+      "adversary": {
+        "verdict": "block",
+        "evidence": "Scratch copy of the spec with the edit, through agent-loop scripts/wave-args.js: 2.8 gets deps ['2.T'] and stays among the parallel tasks while 2.T is the tail. claude/workflows/wave-loop.js line 1822 starts a task only when every dep is 'merged'; lines 1840-1845 park what is left as 'unschedulable'; lines 1856-1863 run the tail only if every parallel task merged. CONTRACT.md lists `.github/workflows/*` as session-owned ('no task edits these'). package.json has no YAML parser (js-yaml is only transitive).",
+        "reason": "The missing schedule is a real gap, but the edit as written deadlocks wave 2: 2.8 waits on the tail, is parked, and the tail then never runs, so the gate fails. Rework: make it a single PR after the wave (or part of the tail) instead of a task that depends on 2.T; record the CONTRACT.md exception for the workflow file; test with string checks, since a YAML parser would be a new dependency. If R14 keeps its exit code 3, the job would also stop before issuance and provenance every week."
+      },
+      "revision": {
+        "id": "R11",
+        "kind": "question",
+        "task": "2.T",
+        "category": "quota",
+        "costCents": 0,
+        "reversible": true,
+        "touches": [],
+        "dependsOn": [],
+        "text": "Budget says 'Imports run weekly', but nothing runs them: no task, workflow or checklist step, so after launch the data goes stale and the provenance check never runs. Edan, choose: run `npm run import:reviews`, `import:issuance` and `provenance` by hand each week, or a scheduled GitHub Actions workflow (recommended). The workflow is not a wave 2 task: it is one session PR after the wave, because `.github/workflows/*` is session-owned in CONTRACT.md (so no ownership exception is needed) and a task that depended on the tail would be parked as unschedulable and block the tail. It uses the three variables the importers already read (`DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, from repository secrets), no other secret, commits nothing, and fails the job on a non-zero exit. With R14's `stale` printed and exit 0, a stale row no longer stops the job. Whether data.sf.gov throttles unauthenticated requests from GitHub's shared runner IPs is unknown; a third 429 fails the job visibly, and an app token would be a new variable, so a spec change for Edan.",
+        "evidence": "Budget: 'Imports run weekly; a full SF ADU import saves about 1.4 MB gzipped'. Wave 2 tasks own only `scripts/*.ts` and `src/**`; `.github/workflows/check.yml` is the only workflow and runs `npm ci && npm run check`. CONTRACT.md: `.github/workflows/*` is listed under 'Shared, owned by the session (no task edits these)'. `src/lib/sources/store.ts` (spec 2.1) reads `SUPABASE_SERVICE_ROLE_KEY`, not a `SUPABASE_SECRET_KEY`. Spec: 'DataSF (Socrata): free, no key needed.' The spec's own scripts are `import:reviews`, `import:issuance`, `provenance` (2.T).",
+        "reverseCost": "Delete the workflow file and the three repository secrets.",
+        "wouldBeWrongIf": "Edan prefers to run imports by hand, or a scheduler outside the repository already exists, or GitHub's runners cannot reach the database over the connection string (then use the Supabase pooler string, which Edan confirms on the project's connection page).",
+        "edits": [
+          {
+            "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+            "find": "(84.5% overall).",
+            "replace": "(84.5% overall).\n\nThen one session PR, outside the wave, adds `.github/workflows/weekly-import.yml` (session-owned): a weekly `schedule` and `workflow_dispatch` that checks out main, runs `npm ci`, then `npm run import:reviews`, `npm run import:issuance` and `npm run provenance`, with `DATABASE_URL`, `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` from repository secrets and no other secret. A non-zero exit fails the job; it commits nothing."
+          },
+          {
+            "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+            "find": "| 8 | Set the final tier cutoffs in `src/lib/tiers.ts`. | Any time | Edan | none |",
+            "replace": "| 8 | Set the final tier cutoffs in `src/lib/tiers.ts`. | Any time | Edan | none |\n| 9 | Decide how imports run after launch: by hand each week (`npm run import:reviews`, `import:issuance`, `provenance`), or the weekly GitHub Actions workflow above (recommended). For the workflow, add the three repository secrets (use the Supabase pooler connection string for `DATABASE_URL` if the direct host does not answer from GitHub's runners). | After the first live import | Edan | a few minutes a week of free Actions time |"
+          }
+        ]
+      }
+    },
+    {
+      "id": "R14",
+      "kind": "defect",
+      "task": "2.2",
+      "category": "data",
+      "touches": [],
+      "dependsOn": [
+        "F6"
+      ],
+      "text": "Importers only upsert by the dataset's key. A review or issuance row that DataSF later drops, withdraws or rekeys stays stored and in the `*_ok` views forever, and nothing counts or reports it. Whether DataSF ever does this is unsettled. Resolution: report it without deleting. Each importer returns `stale`, the stored rows of the jurisdiction that this run's pages did not hold, and the script exits 3 when it is not 0, so Edan decides.",
+      "evidence": "Schema header: 'Re-imports (weekly) upsert by the dataset's key and keep the latest row; history lives in `source`.' F6 spike: neither dataset's metadata 'say whether rows are deleted, withdrawn, corrected, or rewritten after publication'; `data_as_of` wording implies rows are updated in place.",
+      "reverseCost": "Revert the spec edit.",
+      "wouldBeWrongIf": "DataSF never removes rows from either dataset (F6), in which case `stale` is always 0 and costs only one query.",
+      "reversible": true,
+      "costCents": 0,
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "Returns `{ pages, rows, rejected, permits }`.",
+          "replace": "Returns `{ pages, rows, rejected, permits, stale }`, where `stale` counts the stored reviews of the jurisdiction whose `source_key` no page of this run held (rows DataSF dropped or rekeyed; nothing is deleted, they stay in the views until Edan decides). 2.3 does the same for issuance rows."
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "and prints the counts only.",
+          "replace": "and prints the counts only, exiting 3 when `stale` is not 0 so a scheduled run flags it."
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "every review's `source_id` exists.",
+          "replace": "every review's `source_id` exists; a review absent from a rerun's pages is counted in `stale` and not deleted."
+        }
+      ],
+      "decision": "ask",
+      "reason": "adversary block: Counting dropped rows is fine. The exit code is the problem: once one row is stale, every later run exits 3 with no way to resolve it inside the envelope, and a scheduled run stops before issuance and provenance. The count also changes meaning whenever the import filter changes (R22). Rework: return and print `stale` and exit 0, leaving the report to the session or scorecard, or define how Edan clears a stale row before making it a failure. (migrations/0001_init.sql: quarantine.reason allows only missing_source, hash_mismatch, domain_not_allowed, quote_not_found and parse_error, and the edit says nothing is deleted, so a stale row can never be cleared and `stale` never returns to 0. Spec decision envelope: a schema change is a stop. R11's job runs the three scripts in sequence and 'fails the job on a non-zero exit'.)",
+      "adversary": {
+        "verdict": "block",
+        "evidence": "migrations/0001_init.sql: quarantine.reason allows only missing_source, hash_mismatch, domain_not_allowed, quote_not_found and parse_error, and the edit says nothing is deleted, so a stale row can never be cleared and `stale` never returns to 0. Spec decision envelope: a schema change is a stop. R11's job runs the three scripts in sequence and 'fails the job on a non-zero exit'.",
+        "reason": "Counting dropped rows is fine. The exit code is the problem: once one row is stale, every later run exits 3 with no way to resolve it inside the envelope, and a scheduled run stops before issuance and provenance. The count also changes meaning whenever the import filter changes (R22). Rework: return and print `stale` and exit 0, leaving the report to the session or scorecard, or define how Edan clears a stale row before making it a failure."
+      },
+      "revision": {
+        "id": "R14",
+        "kind": "defect",
+        "task": "2.2",
+        "category": "data",
+        "costCents": 0,
+        "reversible": true,
+        "touches": [],
+        "dependsOn": [
+          "F6"
+        ],
+        "text": "Importers only upsert by the dataset's key. A review or issuance row that DataSF later drops, withdraws or rekeys stays stored and in the `*_ok` views, and nothing counts or reports it. Whether DataSF ever does this is unsettled. Resolution: report, never delete, never fail. Each importer returns `stale`, the stored rows of the jurisdiction whose key no page of this run held (reviews by `(permit number, source_key)`, issuance by `(permit number, addenda)`), counted only after the last page was read (a run that throws reports nothing), and the script prints it and exits 0. The scorecard or the live-run report carries the number for Edan. No exit code, because the schema gives no way to clear a stale row (quarantine reasons are fixed), so a non-zero exit would repeat every week and stop a scheduled job before the next importer and the provenance check. The count is only comparable between runs with the same `ADU_WHERE` (a narrower filter makes rows stale, a wider one adds rows), which the text states.",
+        "evidence": "Schema header: 'Re-imports (weekly) upsert by the dataset's key and keep the latest row; history lives in `source`.' F6 spike: neither dataset's metadata 'say whether rows are deleted, withdrawn, corrected, or rewritten after publication'. `migrations/0001_init.sql`: `review.source_key` unique with `permit_id`; `issuance` primary key `(permit_id, addenda)`; quarantine reasons are the fixed list missing_source, hash_mismatch, domain_not_allowed, quote_not_found, parse_error.",
+        "reverseCost": "Revert the spec edit; before 2.2 and 2.3 are built it costs nothing, after, one PR removing the count.",
+        "wouldBeWrongIf": "DataSF never removes or rekeys rows in either dataset (F6), in which case `stale` is always 0 and costs one query per importer; or Edan wants a stale row removed automatically, which is a delete and outside the envelope.",
+        "edits": [
+          {
+            "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+            "find": "Returns `{ pages, rows, rejected, permits }`.",
+            "replace": "Returns `{ pages, rows, rejected, permits, stale }`, where `stale`, computed only after the last page, counts the stored reviews of the jurisdiction whose `(permit number, source_key)` no page of this run held (rows DataSF dropped or rekeyed, or that this run's `ADU_WHERE` no longer selects); nothing is deleted and they stay in the views until Edan decides."
+          },
+          {
+            "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+            "find": "and prints the counts only.",
+            "replace": "and prints the counts only, `stale` included, and exits 0 whatever `stale` is."
+          },
+          {
+            "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+            "find": "every review's `source_id` exists.",
+            "replace": "every review's `source_id` exists; a stored review absent from a rerun's pages is counted in `stale` and not deleted, and `stale` is 0 when every stored review is in the pages."
+          },
+          {
+            "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+            "find": "touched permits are classified as in 2.2.",
+            "replace": "touched permits are classified as in 2.2; `stale` counts the stored issuance rows of the jurisdiction whose `(permit number, addenda)` no page held, reported as in 2.2."
+          }
+        ]
+      }
+    },
+    {
+      "id": "R16",
+      "kind": "defect",
+      "task": "2.T",
+      "category": "source",
+      "touches": [],
+      "dependsOn": [],
+      "text": "'The saved pages of the latest import' has no definition. The schema has no import id, and a weekly re-import changes only the pages whose rows changed, so 'latest' by `fetched_at` would list a partial set and omit pages still cited by stored rows. Resolution: list the distinct `source` rows cited by the stored rows themselves, each with a link to its saved copy (see R7).",
+      "evidence": "2.T: '`/sources/reviews` and `/sources/issuance` list the saved pages of the latest import (URL, fetch time, SHA-256)'. Schema: `review.source_id`, `issuance.source_id`; no import table. Invariant 1: every figure cites a `source` row.",
+      "reverseCost": "Revert the spec edit.",
+      "wouldBeWrongIf": "Every weekly import rewrites every page, so 'latest' would equal 'cited'.",
+      "reversible": true,
+      "costCents": 0,
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "`/sources/reviews` and `/sources/issuance` list the saved pages of the latest import (URL, fetch time, SHA-256).",
+          "replace": "`/sources/reviews` and `/sources/issuance` list the distinct `source` rows cited by `review.source_id` (reviews) or `issuance.source_id` (issuance), each with its URL, fetch time, SHA-256 and a link to its saved copy."
+        }
+      ],
+      "decision": "ask",
+      "reason": "adversary block: Defining the list as the sources cited by stored rows is the better definition, since the schema has no import id. But the edit bundles a link that depends on an unanswered question and leaves two sentences that contradict it. Rework: drop the link or make it conditional on R7, update line 158 and the Test sentence, and read through review_ok and issuance_ok so a quarantined source is not listed. (Spec line 158 still says '/sources/<dataset> lists every saved page of the latest import', and 2.T's Test still says 'the sources page lists every saved page'; the edit changes neither. Step 2 keeps the bucket private and R5 keeps the storage key out of Vercel, so 'a link to its saved copy' cannot be built unless Edan answers R7 with option (a). Fixed decision 3 says 'every DataSF page changes daily', which contradicts the rationale that a re-import rewrites only changed pages.)",
+      "adversary": {
+        "verdict": "block",
+        "evidence": "Spec line 158 still says '/sources/<dataset> lists every saved page of the latest import', and 2.T's Test still says 'the sources page lists every saved page'; the edit changes neither. Step 2 keeps the bucket private and R5 keeps the storage key out of Vercel, so 'a link to its saved copy' cannot be built unless Edan answers R7 with option (a). Fixed decision 3 says 'every DataSF page changes daily', which contradicts the rationale that a re-import rewrites only changed pages.",
+        "reason": "Defining the list as the sources cited by stored rows is the better definition, since the schema has no import id. But the edit bundles a link that depends on an unanswered question and leaves two sentences that contradict it. Rework: drop the link or make it conditional on R7, update line 158 and the Test sentence, and read through review_ok and issuance_ok so a quarantined source is not listed."
+      },
+      "revision": {
+        "id": "R16",
+        "kind": "defect",
+        "task": "2.T",
+        "category": "source",
+        "costCents": 0,
+        "reversible": true,
+        "touches": [],
+        "dependsOn": [],
+        "text": "'The saved pages of the latest import' has no definition: the schema has no import id. A stored row cites the `source` of the import that last wrote it, so a row DataSF dropped (R14's `stale`), or one left by an interrupted run, still cites an older page that a 'latest import' list would omit, while invariant 1 needs every figure to cite a `source` row. Resolution: `/sources/reviews` and `/sources/issuance` list the distinct sources cited by the `source_id` of `review_ok` (reviews) or `issuance_ok` (issuance), so a quarantined source is not listed and every cited page is. If every weekly page does change (fixed decision 3), this equals the latest import, and the difference is exactly the stale and interrupted cases. This edit also fixes the two other sentences that said 'every saved page'. It adds no link to the saved copy: the bucket is private and the storage key stays out of Vercel, so that link depends on R7 and is its own decision.",
+        "evidence": "2.T: '`/sources/reviews` and `/sources/issuance` list the saved pages of the latest import (URL, fetch time, SHA-256)', its Test: 'the sources page lists every saved page', and the wave 2 call: '`/sources/<dataset>` lists every saved page of the latest import'. Schema: `review.source_id`, `issuance.source_id`, no import table. Invariant 1: 'Every number or claim shown on the site cites a `source` row'. `review_ok` and `issuance_ok` hide rows citing a quarantined source (migrations/0001_init.sql).",
+        "reverseCost": "Revert the spec edit.",
+        "wouldBeWrongIf": "Every import rewrites every page and no run is ever interrupted or drops a row, so latest equals cited; the new wording is still correct then, only unneeded.",
+        "edits": [
+          {
+            "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+            "find": "`/sources/<dataset>` lists every saved page of the latest import (URL, fetch time, SHA-256).",
+            "replace": "`/sources/<dataset>` lists the distinct sources cited by the dataset's `*_ok` rows (`review_ok.source_id` or `issuance_ok.source_id`), each with its URL, fetch time and SHA-256, so a quarantined source is not listed and a row an import did not rewrite still shows its source."
+          },
+          {
+            "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+            "find": "list the saved pages of the latest import (URL, fetch time, SHA-256).",
+            "replace": "list the distinct sources cited by `review_ok.source_id` (reviews) or `issuance_ok.source_id` (issuance), each with its URL, fetch time and SHA-256."
+          },
+          {
+            "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+            "find": "the sources page lists every saved page;",
+            "replace": "the sources page lists exactly the distinct sources cited by the dataset's `*_ok` rows, each once, and not a quarantined one;"
+          }
+        ]
+      }
+    },
+    {
+      "id": "R17",
+      "kind": "defect",
+      "task": "2.T",
+      "category": "performance",
+      "touches": [],
+      "dependsOn": [],
+      "text": "2.T does not say when the database is read. A page with no request-time input, such as `/`, can be prerendered at build and then show a frozen figure until the next deploy, while the data changes weekly. The other pages read every member review of the process on each request, about 35,000 rows by the wave 1 sample, which is slow on a free function. Resolution: pages render on request, and `getProcessView` memoises each (slug, window) for at most an hour per server instance. Next in this repo has breaking changes, so the route option should be read from `node_modules/next/dist/docs/`.",
+      "evidence": "`grep -rn 'dynamic|revalidate' src` returns nothing; src/app/page.tsx has no request API. Wave 1 sample: 33,491 review rows for the all-time window. 2.6: 'reads `review_ok` and `issuance_ok` rows of permits whose ... `member` true'. AGENTS.md: 'This is NOT the Next.js you know'.",
+      "reverseCost": "Revert the spec edit.",
+      "wouldBeWrongIf": "The home page already renders per request in this Next version, and a request's query time stays well under a second.",
+      "reversible": true,
+      "costCents": 0,
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "`getProcessView` becomes async:",
+          "replace": "`getProcessView` becomes async, is never evaluated at build (every page that reads it renders on request; see `node_modules/next/dist/docs/` for the route option) and memoises each (slug, window) result for at most one hour per server instance:"
+        }
+      ],
+      "decision": "ask",
+      "reason": "adversary disagree: The render-on-request half holds up. The memo half does not belong in an auto-accepted edit: a one-hour cache per server instance keeps showing a row for up to an hour after the provenance check quarantines it, which touches invariant 3, and it is justified by a speed concern nobody measured. Edan should choose the lifetime, or none. It also contradicts R2's claim that a missing DATABASE_URL fails the production build. (Spec invariant 3: a quarantined fact 'is never shown publicly'; the loop config's critic check: 'Quarantined rows never reach a page'. The recommendation declares touches []. node_modules/next/dist/docs/01-app/02-guides/caching-without-cache-components.md: `dynamic` defaults to 'auto' ('cache as much as possible') and 'force-dynamic' exists; grep 'dynamic|revalidate' in src returns nothing; next.config.ts sets no cacheComponents.)",
+      "adversary": {
+        "verdict": "disagree",
+        "evidence": "Spec invariant 3: a quarantined fact 'is never shown publicly'; the loop config's critic check: 'Quarantined rows never reach a page'. The recommendation declares touches []. node_modules/next/dist/docs/01-app/02-guides/caching-without-cache-components.md: `dynamic` defaults to 'auto' ('cache as much as possible') and 'force-dynamic' exists; grep 'dynamic|revalidate' in src returns nothing; next.config.ts sets no cacheComponents.",
+        "reason": "The render-on-request half holds up. The memo half does not belong in an auto-accepted edit: a one-hour cache per server instance keeps showing a row for up to an hour after the provenance check quarantines it, which touches invariant 3, and it is justified by a speed concern nobody measured. Edan should choose the lifetime, or none. It also contradicts R2's claim that a missing DATABASE_URL fails the production build."
+      }
+    },
+    {
+      "id": "R18",
+      "kind": "question",
+      "task": "2.T",
+      "category": "acceptance",
+      "touches": [],
+      "dependsOn": [],
+      "text": "The closing check 'compares the page's 12-month figures with the local run of 13 Nov 2026 (84.5% overall)' has no pass criterion. The 84.5 appears nowhere else in the repo. The wave 1b table gives 82.5 for the same window, which divides by all rows, so 84.5 must be a decided-only figure. The live window ends on a later `data_as_of`, and the new filter also imports in-law permits, so the numbers cannot match exactly. Edan, set a tolerance. Proposed: overall within 2.0 points and every department within 3.0, otherwise stop and report both sets.",
+      "evidence": "Spec line 170: 'compares the page's 12-month figures with the local run of 13 Nov 2026 (84.5% overall).' `grep -rn '84\\.5' docs scripts test src` matches only that line. Wave 1b table, 12m All five: '5,630 / 4,642 / 82.5'.",
+      "reverseCost": "Revert one spec edit.",
+      "wouldBeWrongIf": "Edan wants the comparison reported only, with no pass or stop rule.",
+      "reversible": true,
+      "costCents": 0,
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "compares the page's 12-month figures with the local run of 13 Nov 2026 (84.5% overall).",
+          "replace": "compares the page's 12-month figures with the local run of 13 Nov 2026 (84.5% overall, decided reviews only). The windows end on different days and the import filter also takes in-law permits, so the figures will not match exactly: the check passes when the overall share is within 2.0 points of 84.5 and every department within 3.0 of its local figure, and otherwise stops for Edan with both sets of numbers."
+        }
+      ],
+      "decision": "ask",
+      "reason": "adversary disagree: The missing pass rule is real, but the edit would be auto-applied and has two problems. It writes 'decided reviews only' into the spec as fact when that is an inference. And 'every department within 3.0 of its local figure' has no baseline, so the check cannot be run. Edan should set the tolerance, after the local run's department figures are recorded or with the department clause dropped. (grep 84.5 across warden docs, scripts, test and src and across agent-loop docs/warden scorecards: only spec line 170. Wave 1b table: 4,642 / 5,630 = 82.5, dividing by all rows. No per-department figure of the 13 Nov local run is recorded anywhere.)",
+      "adversary": {
+        "verdict": "disagree",
+        "evidence": "grep 84.5 across warden docs, scripts, test and src and across agent-loop docs/warden scorecards: only spec line 170. Wave 1b table: 4,642 / 5,630 = 82.5, dividing by all rows. No per-department figure of the 13 Nov local run is recorded anywhere.",
+        "reason": "The missing pass rule is real, but the edit would be auto-applied and has two problems. It writes 'decided reviews only' into the spec as fact when that is an inference. And 'every department within 3.0 of its local figure' has no baseline, so the check cannot be run. Edan should set the tolerance, after the local run's department figures are recorded or with the department clause dropped."
+      }
+    },
+    {
+      "id": "R19",
+      "kind": "defect",
+      "task": "2.5",
+      "category": "quota",
+      "touches": [],
+      "dependsOn": [
+        "F4"
+      ],
+      "text": "The Budget says 'one search costs 1 credit' and is silent on fetch, yet 2.5 and 2.7 use fetch as the fallback. Keenable's credits page says search and fetch each cost one credit in the allowance context, and prices are per organization with the cost in each response's `usage.credits`. The budget stays safe (under 200 calls against 99,999 credits) but the sentence should say so.",
+      "evidence": "Spec Budget: 'one search costs 1 credit'. F4 spike, docs.keenable.ai/credits.md: 'The allowance is quoted in requests because search and fetch each cost one credit'; per-call credits for the fetch and fetch.live SKUs are not stated.",
+      "reverseCost": "Revert the spec edit.",
+      "wouldBeWrongIf": "A fetch costs far more than 1 credit for this organization, which `usage.credits` would show.",
+      "reversible": true,
+      "costCents": 0,
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "one search costs 1 credit.",
+          "replace": "a search and a fetch each cost about 1 credit (prices are per organization: read `usage.credits` in each response)."
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: category quota is human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Fetched docs.keenable.ai/credits.md: 'search and fetch each cost one credit'; 'Prices are set per organization, so read what a call actually cost from the response rather than assuming a flat rate'; `credits` in `usage` 'is what the call cost'; a separate fetch.live SKU may be priced differently.",
+        "reason": "Holds up; 'about 1 credit, read usage.credits' matches the source and the budget stays far inside the allowance."
+      }
+    },
+    {
+      "id": "R22",
+      "kind": "defect",
+      "task": "2.1",
+      "category": "data",
+      "touches": [],
+      "dependsOn": [],
+      "text": "The import filter is meant to be wider than the classifier, but 'ACCESSORY DWELLING' matches one space only, while `isAdu` accepts a double space, a hyphen or a line break there. No test ties the two together, and the latent gap would drop such permits silently. Resolution: use `ACCESSORY%DWELLING`; have `filter.ts` export the term list (`ADU_TERMS`, LIKE patterns) and build `ADU_WHERE` from it; give 2.1 the file `src/importers/filter.test.ts` (and add it to CONTRACT.md's 2.1 row) that reads a table of spellings `isAdu` accepts and checks each matches a term, with `%` as any text. The one documented gap is a tab or line break between 'in' and 'law' (`isAdu` accepts one `[\\s-]` there; a LIKE pattern cannot cover it without importing unrelated permits); the test lists these as expected misses so a change shows. A double space in 'in  law' is not accepted by `isAdu`, so it is no gap. Cost of the wider pattern is small.",
+      "evidence": "Ran the repo's `isAdu` (src/lib/adu.ts: ACCESSORY_DWELLING `accessory[\\s-]+dwelling`, IN_LAW `\\bin[\\s-]?law\\s+(?:units?|apartment|suite)`): 'new accessory  dwelling unit', 'new accessory-dwelling unit' and a line-break variant accept; 'add in\\tlaw apartment' accepts; 'add in  law unit' does not. Live DataSF count on 15 Nov 2026 of the whole planned filter, with 'ACCESSORY DWELLING' versus 'ACCESSORY%DWELLING': reviews 34,762 rows on 2,600 permits versus 34,900 on 2,612; issuance 2,076 on 1,942 versus 2,084 on 1,948. Spec 2.1 Owns lists `src/importers/filter.ts` and no test file; CONTRACT.md: 'A task edits only the paths it owns; anything else is a stop'.",
+      "reverseCost": "Revert the spec edit and the CONTRACT.md row; no code exists yet.",
+      "wouldBeWrongIf": "The extra 138 review rows and 8 issuance rows are unwanted noise (they come from permits where 'accessory' and 'dwelling' are far apart; the classifier would reject them anyway), or Socrata's LIKE does not let `%` cross a line break, which the first live run's counts would show.",
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "\"ADU\", \"ACCESSORY DWELLING\", \"IN-LAW\"",
+          "replace": "\"ADU\", \"ACCESSORY%DWELLING\" (`%` is any text, so a double space, a hyphen or a line break still matches), \"IN-LAW\""
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "`src/lib/sources/text.test.ts`, `src/importers/filter.ts`. `filter.ts` exports `ADU_WHERE`, the `$where` above (a constant, so 2.2 and 2.3 both build on it without depending on each other).",
+          "replace": "`src/lib/sources/text.test.ts`, `src/importers/filter.ts`, `src/importers/filter.test.ts`. `filter.ts` exports `ADU_TERMS`, the LIKE patterns above, and `ADU_WHERE`, the `$where` built from them (constants, so 2.2 and 2.3 both build on them without depending on each other)."
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "`pageText` on a small HTML page and `containsQuote` across a line break and a `&nbsp;`.",
+          "replace": "`pageText` on a small HTML page and `containsQuote` across a line break and a `&nbsp;`; `filter.test.ts` checks that every description in a table of spellings that `isAdu` accepts (\"accessory  dwelling\", \"accessory-dwelling\", \"accessory\\ndwelling\", \"in-law\", \"in law\", \"inlaw\", \"65852.2\", \"66323\") matches an `ADU_TERMS` pattern read against the upper-cased text, and lists \"in\\tlaw\" and \"in\\nlaw\" as expected misses."
+        },
+        {
+          "file": "CONTRACT.md",
+          "find": "`src/lib/sources/text.test.ts`, `src/importers/filter.ts` |",
+          "replace": "`src/lib/sources/text.test.ts`, `src/importers/filter.ts`, `src/importers/filter.test.ts` |"
+        }
+      ]
+    }
+  ],
+  "spikes": [
+    {
+      "id": "F1",
+      "fact": "Does a Supabase project created now issue a service key that works as 'Authorization: Bearer <key>' on the Storage REST API (legacy service_role JWT), or a newer non-JWT secret key that must be sent in an 'apikey' header, and does Storage accept both headers together?",
+      "status": "open",
+      "answer": "Not fully settled from sources. What the sources do say: (1) Supabase's API keys page describes legacy anon/service_role keys as \"Legacy version of publishable keys\" and \"Legacy version of secret keys\", says \"Publishable and secret keys are short strings, not JWTs\", and says \"Supabase is deprecating the anon and service_role keys by the end of 2026.\" (2) For the new publishable and secret keys, the docs say to \"Send publishable and secret keys on the apikey header, not on Authorization: Bearer\", and passing them as Bearer can be rejected with \"Invalid JWT\". The verify_jwt check \"accepts them on either header\" for migration compatibility, but \"passing that check doesn't authenticate the caller.\" (3) Not stated: whether a new project is issued legacy JWT service_role keys or only the new secret keys; the pages say only that \"Older projects don't have these keys yet\" and that creating a new key \"adds it alongside your existing anon and service_role keys.\" (4) Not stated: whether Storage accepts apikey and Authorization together, and no Storage-specific header rule was found. The one Storage-adjacent source (self-hosted gateway doc) says Storage handles its own authorization, but that is about the gateway, not the Storage REST API; a signing-keys doc says a separate apikey header is required for project APIs. The sources are inconsistent on this point, so the Storage-specific answer remains open. Confirming it needs the Storage API reference or a live probe of a project the user already owns (a read-only GET), which I did not run.",
+      "source": "",
+      "retrieved": "",
+      "error": "no source recorded, so the answer cannot be checked"
+    },
+    {
+      "id": "F2",
+      "fact": "Does the Supabase free tier pause a project after a period of inactivity (and after how many days), and does a weekly import plus occasional site reads count as activity?",
+      "status": "answered",
+      "answer": "Yes, but not after a fixed number of days. Supabase pauses Free plan projects that show low database activity over a rolling 7-day period. There is no published day count beyond that window. Paid plans (Pro, Team, Enterprise) are never paused for inactivity. Activity: the FAQ says \"Opening the project in the dashboard or sending real requests from your app both count as activity,\" and \"A few requests a day is usually enough to keep a project running, though that isn't a guarantee.\" So occasional site reads that hit the database likely count, and dashboard visits count. A weekly import is not addressed by any source: the FAQ and guide do not mention imports, so whether one import counts as \"sufficient user database activity\" is not settled. Warning: an email arrives about a week before a pause and another once paused. Restore: the current pausing guide says a paused project can be restored \"for up to 1 year after it was paused\"; a 2024 changelog says 90 days, and the guide is the newer source, so the 1-year figure is the one the current doc gives. Note: the fetched pages were summarized by a small model, so exact wording should be checked against the live pages.",
+      "source": "https://supabase.com/docs/guides/platform/free-project-pausing ; https://supabase.com/kb/faqs/platform/free-project-pausing ; https://supabase.com/docs/guides/platform/going-into-prod ; conflicting older restore figure: https://supabase.com/changelog/27497-paused-free-plan-projects-are-restorable-for-90-days",
+      "retrieved": "2026-11-15",
+      "error": ""
+    },
+    {
+      "id": "F3",
+      "fact": "Is the free-tier direct Postgres host of a new Supabase project IPv6-only, so that a Vercel serverless function must use the pooled connection string (and which pool mode works with the pg driver)?",
+      "status": "answered",
+      "answer": "Partly settled. Direct host: the docs say \"Direct connections are on IPv6, or on IPv4 if the project has the IPv4 add-on,\" listing the direct connection as IPv6 on Free and Pro; the IPv4 add-on is \"available on the Pro Plan and above.\" Pooler: the shared pooler \"is IPv4-only on every plan, in both session and transaction mode.\" Transaction mode (port 6543) is described as \"for serverless and edge functions.\" Prepared statements: \"The shared pooler doesn't support prepared statements in transaction mode\"; \"turn them off in your connection library.\" The pg-specific setting is on a linked page (\"Disabling prepared statements\") that was not fetched, so the pg detail is NOT settled. No single source states whether a Vercel function must use the pooled string on the free tier.",
+      "source": "https://supabase.com/docs/guides/database/connecting-to-postgres",
+      "retrieved": "2026-11-15",
+      "error": ""
+    },
+    {
+      "id": "F4",
+      "fact": "How many Keenable credits does one fetch call cost (the spec states one credit only for a search), and does a fetch response carry the final URL after a redirect?",
+      "status": "answered",
+      "answer": "Credits per fetch: not settled as a flat number. Keenable's credits page says prices are set per organization, so the cost should be read from each response (the usage.credits field), not assumed. It lists two fetch SKUs: \"fetch\" (a fetch of Keenable's indexed copy) and \"fetch.live\" (a fetch made live from the source, also used when Keenable has no indexed copy, even without live=true). The page gives no per-call credit figure for either. It does say \"search and fetch each cost one credit\" in the allowance context, which conflicts with the spec's claim that only search costs one credit; the page's wording on the allowance is quoted, and the source does not state a fetch-specific count beyond that. Redirects: yes. The fetch API reference defines the response url field as \"The page's final address after redirects. It can differ from the url you sent\" and gives the example http://typescriptlang.org/docs/... returning as https://www.typescriptlang.org/docs/..., advising \"Cite this one.\" The page does not describe redirect handling beyond that field. Note: the spec's section on the Keenable client (task 1.7) assumes the same url field. Also, an earlier web search summary mentioned a 402 behavior and an MCP _meta field; those were not verified on the fetched pages and are not part of this answer.",
+      "source": "https://docs.keenable.ai/credits.md (credit SKUs and per-organization pricing note; allowance sentence \"The allowance is quoted in requests because search and fetch each cost one credit.\"); https://docs.keenable.ai/api-reference/fetch.md (response url field: \"The page's final address after redirects. It can differ from the url you sent\")",
+      "retrieved": "2026-11-15",
+      "error": ""
+    },
+    {
+      "id": "F5",
+      "fact": "Does any official, text-based page on an allowlisted domain state a review-time target for building permits or ADU permits as a sentence (the permit performance page shows its targets only inside Power BI dashboards)?",
+      "status": "answered",
+      "answer": "Partly settled. Not a current numeric target. The permit performance page's text does not state a current review-time target in days for building or ADU permits as a sentence. Its current targets are said to be \"in the dashboard\" only: \"The dashboard also includes the current review time target the City has set for each step and the percent of reviews that met this target.\" and \"The dashboard also includes the review time target the City has set for each stage...\" The one numeric day figure in the text is a past target, for Planning Application review: \"The dashboard below includes updated performance targets for Planning Application review that went into effect on May 20, 2025 as part of PermitSF. These new targets are shorter than the previous 30 day targets.\" That sentence gives the previous 30-day target, not the current one, and it concerns Planning Application review, not building or ADU permit review. The page also says \"The City sets targets for review times as part of PermitSF\" with no figures. Related page sf.gov/permitsf (fetched 2026-11-15) states no review-time target in days; its only day figure is a 15-day zoning appeal period, which is not a review target. A second sf.gov URL I guessed returned 404. I did not open the Power BI dashboards, which are not text pages. Sources checked: GET https://sf.gov/permitperformance (redirects to https://www.sf.gov/permit-performance-metrics, HTTP 200), and GET https://www.sf.gov/permitsf (HTTP 200). Not checked: other allowlisted domains such as sfplanning.org or sfdbi.org, and the PermitSF targets page that the spec might name.",
+      "source": "GET https://www.sf.gov/permit-performance-metrics (reached from https://sf.gov/permitperformance); GET https://www.sf.gov/permitsf",
+      "retrieved": "2026-11-15",
+      "error": ""
+    },
+    {
+      "id": "F6",
+      "fact": "Does DataSF delete or rewrite rows in the Building Permit Application Review Metrics (5bat-azvb) and Issuance Metrics (gzxm-jz5j) datasets after publishing them (withdrawn permits, corrected descriptions)?",
+      "status": "answered",
+      "answer": "Not settled. Neither dataset's metadata or column descriptions say whether rows are deleted, withdrawn, corrected, or rewritten after publication. Both are described as refreshed by a nightly process, with metadata listing \"Publishing frequency: Daily\" and \"Data change frequency: Multiple times per hour\" (these conflict). The 5bat-azvb metadata describes data_as_of as \"Timestamp when the record (row) was last updated in the source system,\" and met_cal_sla as changing over time for open reviews, which implies rows are updated in place. gzxm-jz5j's data_as_of has the same wording. The status column includes \"withdrawn,\" \"cancelled,\" and \"revoked,\" but these describe permit status, not row removal. No retention policy is stated for either dataset. Whether individual rows are deleted or overwritten, and whether corrected descriptions replace earlier values, remains unsettled from these sources.",
+      "source": "https://data.sf.gov/api/views/5bat-azvb.json (redirected from https://data.sfgov.org/api/views/5bat-azvb.json); https://data.sf.gov/api/views/gzxm-jz5j.json (redirected from https://data.sfgov.org/api/views/gzxm-jz5j.json)",
+      "retrieved": "2026-11-15",
+      "error": ""
+    },
+    {
+      "id": "F7",
+      "fact": "Is the Vercel system environment variable VERCEL_ENV set to 'production' at runtime of production deployments, and is it also set during the build?",
+      "status": "answered",
+      "answer": "Partly settled from docs. Vercel's reference lists VERCEL_ENV as \"Available at: Both build and runtime\", described as \"The environment that the app is deployed and running on. The value can be either production, preview, or development.\" The reference's example is VERCEL_ENV=production. So the docs say it is available during the build and at runtime, but they do not explicitly state that it is 'production' for every production deployment; that mapping is implied by the description and example. Related notes from the same page: system environment variables must be enabled via the project's \"Enable access to System Environment Variables\" checkbox. VERCEL_TARGET_ENV is also build and runtime, and its description says it may be a custom environment name. A search summary (third-party commentary, lower authority) says VERCEL_ENV is an empty string when not applicable, such as under vercel dev or when a deployment is not triggered by a Git commit. It also reports a third-party claim that VERCEL_ENV returns only production, preview, or development; this conflicts with Vercel's own text and is unresolved.",
+      "source": "https://vercel.com/docs/environment-variables/system-environment-variables",
+      "retrieved": "2026-11-15",
+      "error": ""
+    }
+  ],
+  "gates": [
+    {
+      "id": "G-2.1-account",
+      "what": "Create the Supabase project and a private Storage bucket named sources (human step 2)",
+      "why": "2.1's supabaseStore and the live runs of 2.2, 2.3, 2.4, 2.5 need it; tests use fakes, so only the live import and the replay comparison wait on it.",
+      "owner": "human",
+      "before": "2",
+      "leadTime": "hours",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-2.5-legal",
+      "what": "Write data/heads.json: each department head's name, title, date and verbatim sentence from an official page (human step 5)",
+      "why": "Naming people on a public site is allowed only as a dated, quoted head (invariant 4); Edan checks each sentence by hand.",
+      "owner": "human",
+      "before": "2",
+      "leadTime": "hours",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-2.7-legal",
+      "what": "Quote the state deadline and the city target as exact sentences in data/clocks.json (human step 4, R1, R2)",
+      "why": "The clocks are quoted verbatim text; without them the page shows 'Pending source'. The statute (Government Code 66317) was pre-found in docs/schema-prep.md; the city target has no text source yet.",
+      "owner": "human",
+      "before": "2",
+      "leadTime": "hours",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-2.T-account",
+      "what": "Create the Vercel project (human step 7) and set DATABASE_URL",
+      "why": "The first public deploy needs it; invariant 1 forbids deploying while the sample shows (R4).",
+      "owner": "human",
+      "before": "2",
+      "leadTime": "hours",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-2.T-legal",
+      "what": "The About page in Edan's own words (human step 6)",
+      "why": "/about is Edan's public stance on city departments and must exist before launch.",
+      "owner": "human",
+      "before": "2",
+      "leadTime": "hours",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-R6-irreversible",
+      "what": "Edit migrations/0001_init.sql (row level security on the ten tables, security_invoker on the four views) and test/schema.test.ts (relrowsecurity check) before the migration is applied to Supabase",
+      "why": "After the migration is applied the fix is a second migration, and no wave 2 task owns these files",
+      "owner": "human",
+      "before": "2",
+      "leadTime": "hours",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-2.1-plan",
+      "what": "Supabase free-tier limits: 500 MB database, 1 GB storage, possible inactivity pause (F2)",
+      "why": "Weekly imports add about 75 MB of Storage a year; a paused project would break the site and the import.",
+      "owner": "human",
+      "before": "2",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-2.1-secret",
+      "what": "SUPABASE_SERVICE_ROLE_KEY and SUPABASE_URL in local .env only, not in Vercel (R16, R17)",
+      "why": "supabaseStoreFromEnv reads both; the key bypasses row-level security, and the site does not need it.",
+      "owner": "human",
+      "before": "2",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-2.2-legal",
+      "what": "Confirm that stored and archived permit descriptions may contain street names (R15)",
+      "why": "Public permit records, but the copies must stay private; the wording of the spec is wrong today.",
+      "owner": "human",
+      "before": "2",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-2.5-quota",
+      "what": "Keenable credits: about 7 searches for suggest:heads plus fallback fetches (under 20 credits, 99,999 on hand)",
+      "why": "Budget says a 402 is a stop for Edan; a fetch may cost more than a search (F4).",
+      "owner": "human",
+      "before": "2",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-2.5-secret",
+      "what": "KEENABLE_API_KEY in local .env for suggest:heads and the Keenable fallback",
+      "why": "2.5 uses search and fetch from scripts; tests use fakes.",
+      "owner": "human",
+      "before": "2",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-2.T-irreversible",
+      "what": "Run npm run migrate against the production Supabase database",
+      "why": "Applying migrations/0001_init.sql has no down migration; it creates the schema every wave 2 task reads.",
+      "owner": "human",
+      "before": "2",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-2.T-plan",
+      "what": "Vercel Hobby plan terms (non-commercial use, function time limits) for a public civic site that reads Postgres per request",
+      "why": "2.T deploys the site on Hobby, per the Budget and human step 7; confirm the plan fits before launch.",
+      "owner": "human",
+      "before": "2",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-2.T-secret",
+      "what": "DATABASE_URL (the pooled connection string) in local .env and in Vercel settings",
+      "why": "2.T's pool and every script that writes the database read it; the direct host may not be reachable from Vercel (F3).",
+      "owner": "human",
+      "before": "2",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-2.8-quota",
+      "what": "Optional Socrata app token for data.sf.gov",
+      "why": "The scheduled import runs from shared runner IPs; throttling is unconfirmed (F10).",
+      "owner": "human",
+      "before": "wave2",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-2.8-secret",
+      "what": "GitHub repository secrets DATABASE_URL, SUPABASE_URL and SUPABASE_SECRET_KEY for the scheduled import, if R11 is accepted",
+      "why": "The weekly workflow cannot run without them, and a worker cannot set repository secrets.",
+      "owner": "human",
+      "before": "wave2",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    }
+  ],
+  "specEdits": [
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "- **2.T Wave 2 end to end.** Owns",
+      "replace": "- **2.T Wave 2 end to end.** Depends on 2.1 to 2.7. Owns",
+      "recId": "R1"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "the body of `getProcessView` in `src/lib/view.ts`, and the `scripts` entries of `package.json`",
+      "replace": "`getProcessView` in `src/lib/view.ts` together with its callers and their tests (`src/app/page.tsx`, `src/app/processes/[slug]/page.tsx`, `src/app/processes/[slug]/page.test.tsx`, `src/app/departments/[slug]/page.tsx`, `src/app/departments/[slug]/page.test.tsx`, `test/wave1.test.ts`), which `await` it once it is async, and the `scripts` entries of `package.json`",
+      "recId": "R1"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "- **2.6 Process stats.** Owns",
+      "replace": "- **2.7 Clock facts.** Depends on 2.1 and 2.5 (its exported `fetchOfficialPage`). Owns `src/importers/clocks.ts`, `src/importers/clocks.test.ts`, `scripts/import-clocks.ts`, `data/clocks.example.json`. `data/clocks.json` (Edan's, human step 4) lists `{ kind, url, sentence, days }` with `kind` `process_target` or `state_deadline`, `sentence` the verbatim sentence and `days` the whole number of days it states, or `null`. `importClocks(db, stores, entries, { jurisdiction, process, fetch, keenable, now })` fetches each page with `fetchOfficialPage`, saves it, and inserts a `fact` of that kind for `process` (`value` `{ days }` or `{}`, `quote` the sentence) when `containsQuote(pageText(...), sentence)`, else quarantines the entry as `'unstored'` with `quote_not_found`. A rerun adds nothing. Reads or writes: paid-call (scripts only; tests use fakes). Test: a found sentence yields one fact with its days; a missing one a quarantine row; a rerun adds nothing; an empty `data/clocks.json` imports nothing. Lane: normal.\n- **2.6 Process stats.** Owns",
+      "recId": "R3"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "takes heads from `fact_ok` (the latest `department_head` fact per department),",
+      "replace": "takes heads from `fact_ok` (the latest `department_head` fact per department) and the clocks (the latest `process_target` and `state_deadline` fact of the process, as `{ quote, sourceUrl }` set on the returned view's `clocks` over 1.12's `null`s, or `null` without one),",
+      "recId": "R3"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "the newest head wins. Lane: normal.",
+      "replace": "the newest head wins; the clocks come from the newest `process_target` and `state_deadline` facts and stay `null` without one. Lane: normal.",
+      "recId": "R3"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "(`import:reviews`, `import:issuance`, `provenance`, `suggest:heads`, `import:heads`)",
+      "replace": "(`import:reviews`, `import:issuance`, `provenance`, `suggest:heads`, `import:heads`, `import:clocks`)",
+      "recId": "R3"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "and record the URL and the exact sentence.",
+      "replace": "and record the URL, the exact sentence and its days in `data/clocks.json` (task 2.7).",
+      "recId": "R3"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "fetches each `url` directly (allowlist checked before the request and on the final URL after redirects), falling back to 1.4's `fetchPage` when the direct fetch fails; saves the page with `storedIn: 'git'` and the matching `fetchedVia`;",
+      "replace": "fetches each `url` through the exported `fetchOfficialPage(url, { fetch, keenable, isAllowed })`: directly with `redirect: 'manual'`, following at most 5 redirects and checking each hop with `isAllowed` before requesting it (an unlisted hop is refused with no request to it), falling back to 1.4's `fetchPage` when the direct fetch fails (its `page.url` is the final URL, checked again); saves the page under its final URL with `storedIn` `'git'` when `shouldCommitBody(byteLength)` and `'storage'` otherwise, and the matching `fetchedVia`;",
+      "recId": "R12"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "a redirect off the allowlist is refused; a rerun adds nothing.",
+      "replace": "a redirect to an unlisted host is refused and the fake fetch sees no request to it; a redirect between allowed hosts saves the page under the final URL; a rerun adds nothing.",
+      "recId": "R12"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "After the last page every permit it touched gets a `permit_process` row for `process` with `member = isAdu({ description })` and `classified_at = now`.",
+      "replace": "After each page's rows are stored, every permit that page touched gets a `permit_process` row for `process` with `member = isAdu({ description })` of the permit's stored description and `classified_at = now`, so a run that fails midway leaves no unclassified permit behind.",
+      "recId": "R13"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "reads `review_ok` and `issuance_ok` rows of permits whose `permit_process` row for the process has `member` true,",
+      "replace": "reads `review_ok` and `issuance_ok` rows of permits whose `permit_process` row for the process has `member` true (every date selected as `::text`, because `pg` returns a `date` as a local-time `Date` and PGlite as a UTC one),",
+      "recId": "R15"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "write `data/heads.json` with the name, title and exact sentence.",
+      "replace": "write `data/heads.json` with the name, title and exact sentence; then run `npm run import:heads` (and `npm run import:clocks`) and merge the new `archive/` files in a PR before any `npm run provenance` run, since a saved copy missing from the repository is quarantined as `missing_source`.",
+      "recId": "R20"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "upserts the permit (its description is replaced only when the stored one is empty)",
+      "replace": "upserts the permit (an existing permit keeps its `description` and `source_id`; a new one takes both from this page, and 2.2 later overwrites them)",
+      "recId": "R21"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "Replays 2.2 to 2.6 on the recorded pages into PGlite.",
+      "replace": "Replays 2.2 to 2.7 into PGlite on hand-built pages kept in `test/fixtures/wave2/` (no real page is recorded; invented descriptions, no address key).",
+      "recId": "R23"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "`src/lib/db/pool.ts`,",
+      "replace": "`src/lib/db/pool.ts`, `test/fixtures/wave2/*`,",
+      "recId": "R23"
+    }
+  ],
+  "needsSecondRound": true,
+  "skipped": false,
+  "skipReason": "",
+  "reviewPath": "~/dev/agent-loop/docs/warden/2026-11-15-wave-2-review.json"
+}
