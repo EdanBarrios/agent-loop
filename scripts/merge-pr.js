@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 // Usage: node scripts/merge-pr.js <pr> --repo <path> [--worktree <path>] [--dry-run] [--defer-main]
 //        node scripts/merge-pr.js <pr> --repo <path> --verify-main <mergeSha> [--timeout-min <m>]
+//        node scripts/merge-pr.js <pr> --repo <path> --state
+// --state (loop 2.3.1) only reads the PR: { outcome: 'state', exit: 0, state: 'OPEN'|'MERGED'|'CLOSED', mergeSha } (outcome
+// 'error', exit 4 when gh cannot read it). wave-loop runs it when a merge relay's output was lost (the relay was killed),
+// so a PR that did merge is not parked.
 // Merges one approved pull request and verifies the default branch, in this one process, and prints one JSON line:
 // { outcome: 'merged'|'refused'|'reverted'|'error'|'pending', exit, mergeSha, mainSha, ciState, failing, conflictFiles,
 //   revertPrUrl, message, logTail, ciWaitMs, mergeMs, mainCheckMs, revertMs, elapsedMs, mainCheck }
@@ -20,12 +24,12 @@
 // It never pushes to the default branch, never forces, never uses --admin or --auto, and never retries a refused
 // merge another way. Reads or writes: writes-files (merges a pull request; on red opens one revert pull request).
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeSync } from 'node:fs';
 import { availableParallelism, cpus, loadavg, tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { machineLoad, mergePr } from '../claude/lib/merge.js';
 
-const USAGE = 'usage: node scripts/merge-pr.js <pr> --repo <path> [--worktree <path>] [--dry-run] [--defer-main] | <pr> --repo <path> --verify-main <sha> [--timeout-min <m>]';
+const USAGE = 'usage: node scripts/merge-pr.js <pr> --repo <path> [--worktree <path>] [--dry-run] [--defer-main] | <pr> --repo <path> --verify-main <sha> [--timeout-min <m>] | <pr> --repo <path> --state';
 const args = process.argv.slice(2);
 let pr = null;
 let repo = null;
@@ -34,11 +38,13 @@ let dryRun = false;
 let deferMain = false;
 let verifyMain = null;
 let timeoutMin = 9;
+let stateOnly = false;
 let usageProblem = false;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--repo' && args[i + 1] !== undefined) repo = args[++i];
   else if (args[i] === '--worktree' && args[i + 1] !== undefined) worktree = args[++i];
   else if (args[i] === '--dry-run') dryRun = true;
+  else if (args[i] === '--state') stateOnly = true;
   else if (args[i] === '--defer-main') deferMain = true;
   else if (args[i] === '--verify-main' && args[i + 1] !== undefined) verifyMain = args[++i];
   else if (args[i] === '--timeout-min' && args[i + 1] !== undefined) timeoutMin = Number(args[++i]);
@@ -47,6 +53,7 @@ for (let i = 0; i < args.length; i++) {
 }
 if (verifyMain !== null && (dryRun || deferMain || !/^[0-9a-f]{7,64}$/.test(verifyMain))) usageProblem = true;
 if (!(timeoutMin > 0)) usageProblem = true;
+if (stateOnly && (dryRun || deferMain || verifyMain !== null || worktree !== null)) usageProblem = true;
 if (usageProblem || pr === null || !/^\d+$/.test(pr) || repo === null) {
   fail(USAGE);
 }
@@ -75,6 +82,20 @@ function run(command, { cwd }) {
     child.on('error', (err) => done({ code: 127, stdout, stderr: String(err.message) }));
     child.on('close', (code) => done({ code: code ?? 1, stdout, stderr }));
   });
+}
+
+if (stateOnly) {
+  const v = await run(`gh pr view ${pr} --json state,mergeCommit`, { cwd: repo });
+  let view = null;
+  try {
+    view = v.code === 0 ? JSON.parse(v.stdout) : null;
+  } catch {
+    view = null;
+  }
+  if (!view || typeof view.state !== 'string') fail(`could not read PR #${pr}: ${(v.stderr || v.stdout).trim().slice(0, 300) || `exit ${v.code}`}`);
+  // Written synchronously: process.exit right after console.log can drop the line when stdout is a pipe.
+  writeSync(1, `${JSON.stringify({ outcome: 'state', exit: 0, state: view.state, mergeSha: (view.mergeCommit && view.mergeCommit.oid) || null })}\n`);
+  process.exit(0);
 }
 
 const result = await mergePr(

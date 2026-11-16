@@ -24,6 +24,14 @@ operating manual. Read it fully before running a wave.
      than 6 paths, and a task adding more than one migration. Warnings do not fail the lint.
 2. Before each wave the session reviews the wave's tasks against the spec for ambiguity and asks
    the human the questions that would change the work. Answers go into the spec, not into prompts.
+   The `spec-review` workflow does this: a reviewer, one spike per external fact, a targeted second reviewer pass that
+   revises only the recommendations relying on a fact (since 2.3.1; before, it re-ran the whole review), and an
+   adversary. The reviewer also checks whether a task's change breaks a test file another task owns (often an earlier
+   wave's tail test that pins an exact result shape with `toEqual`); a worker may edit only its owned paths, so such a
+   test needs a named editor in the spec's owner table before the wave. Warden wave 3 parked four tasks on this.
+   Workflows cannot write files: by default (2.3.1) the result carries `reviewPath` and `writeBy: "session"`, and the
+   session writes the file with `node ~/dev/agent-loop/scripts/write-review.js <the run's output file>`, byte for byte
+   what the old writer agent wrote. `project.reviewWriter: "agent"` keeps the Haiku writer agent.
 3. The session runs the `wave-loop` workflow once for the wave. For each task: a worker builds it
    in its own git worktree and opens a PR; a critic that did not write the code reviews the PR
    against a fixed checklist and returns MERGE, FIX or STOP; a merger syncs, waits for CI, merges,
@@ -81,6 +89,20 @@ Each task: `{ id, title, branch, deps: [ids], text, owns, notes }`, with `text` 
 verbatim from the spec. `tail` has the same shape or is `null`. A parked task is relaunched by
 passing only the parked tasks again; a task whose draft PR should be continued after an escalation
 was answered gets `resume: { prNumber, prUrl, worktree, items: [what to do], notes }`.
+
+Relaunches (2.3.1):
+- A dependency that is not in the relaunch counts as merged in an earlier run of the wave and is logged once; it is not
+  checked again, so pass only tasks whose missing dependencies did merge. Before 2.3.1 such a task never started and was
+  parked as unschedulable.
+- The critic sees a task's `resume.items` and `resume.notes` under "Session answers for this relaunch" and treats them
+  as authoritative for the questions the worker asked. An answer that lets a task edit a path it does not own still
+  needs a record in a read-first file (the owner table in `CONTRACT.md`, say); without it the critic fails checklist
+  item 2, as it did for Warden 3.12.
+- When a merge relay's output is lost (the relay returned nothing, or its shell was killed: exit 144), the merge is
+  never re-run. One relay runs `merge-pr.js <pr> --state`, read only; a PR that is MERGED with a merge commit counts as
+  merged (with `mainCi`, main's run is then checked by `--verify-main` as after any deferred merge; without it the
+  result says `mainCheck: "unverified"`). Anything else escalates as before. Warden 3.3 (PR #45) had merged when its
+  relay was killed and was parked anyway.
 
 The result is `{ project, wave, gate, models, state, tasks, escalations, reality, decisions, timings, loopVersion, findings, integration }`.
 Save it as JSON in the session scratchpad, then write the scorecard:
@@ -146,6 +168,7 @@ Loop-cause items are fixed in the workflow script, not by a model change.
 | `checkMutates` | files the check rewrites on main that the merger restores |
 | `criticChecks` | project invariants appended to the critic checklist |
 | `integrationReview` | `false` turns off the read-only integration review of the whole wave's diff after the tail (on by default since 2.3.0) |
+| `reviewWriter` | `"agent"` has spec-review write its file through a Haiku agent; by default (2.3.1) the session writes it with `scripts/write-review.js` |
 | `workerNotes`, `notes` | text added to worker prompts, or to every prompt |
 | `maxBuilders`, `maxChains`, `fixRounds`, `finishRounds`, `models`, `trailer` | loop knobs; defaults 2 check slots, 6 chains, 3 fix rounds, 2 finish rounds, the roles above, `Co-Authored-By: Claude <noreply@anthropic.com>` |
 | `mainCi` | name of the CI workflow that runs the check on pushes to main; when set, the merger waits for that run instead of running the check on this machine |
@@ -172,7 +195,9 @@ Loop-cause items are fixed in the workflow script, not by a model change.
 - `scripts/slot.sh`: the machine-wide check semaphore, linked into each repo as `.claude/slot.sh`.
 - `scripts/merge-pr.js`, `scripts/wait-ci.js`, `scripts/ci-only.js`: the merge, the CI wait and the CI-only delta check,
   run by relay agents from `.claude/scripts`. `merge-pr.js --defer-main` merges and leaves main's run to
-  `merge-pr.js --verify-main <sha>`, which waits for it and reverts once on red.
+  `merge-pr.js --verify-main <sha>`, which waits for it and reverts once on red. `merge-pr.js --state` only reads a
+  PR's state and merge commit (used after a lost merge output).
+- `scripts/write-review.js`: writes a spec-review run's review file from the run's output file.
 - `scripts/spec-lint.js`: structural check of a spec, plus the wave and task shape warnings above.
 - `scripts/loop-scorecard.py`: per-wave scorecard (rounds, fix items by cause, critic findings, the integration
   review, tokens and minutes per role, critic misses including escaped defects, and the decision rule for moving a
