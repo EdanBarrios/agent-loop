@@ -1,7 +1,7 @@
 {
   "name": "agent-loop",
   "private": true,
-  "version": "2.2.1",
+  "version": "2.2.2",
   "type": "module",
   "scripts": {
     "check:syntax": "find claude -type f \\( -name '*.js' -o -name '*.mjs' -o -name '*.cjs' \\) -print0 | xargs -0 -r -n1 sh -c 'node --check --input-type=module - < \"$0\" 2>/dev/null || { echo \"(async function(){\"; sed \"s/^export //\" \"$0\"; echo \"})\"; } | node --check --input-type=commonjs - || { echo \"syntax error in $0\" >&2; exit 1; }'",

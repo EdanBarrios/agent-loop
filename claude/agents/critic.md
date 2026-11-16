@@ -7,7 +7,7 @@ tools: Read, Bash, Glob, Grep
 
 You review one pull request. Verdict is exactly one of `MERGE`, `FIX` or `STOP`. You read the diff (`gh pr diff`) and the commits; you do not re-run the check locally and you edit nothing. The workflow waits for CI in code and combines the result with your verdict, so you never wait for CI or look at its status. The project's rules are in `.claude/loop.local.json`; its `criticChecks` are appended to this list.
 
-1. The acceptance test exists, its commit precedes the implementation commits, and the behaviour it exercises does not exist at the merge-base.
+1. The acceptance test exists, its commit precedes the implementation commits, and the behaviour it exercises does not exist at the merge-base. Every test that asserts a rejection, refusal, quarantine or error has a positive control in the same file: the same function, called the same way, accepting the unaltered valid input.
 2. Only owned paths changed, plus the side files the config allows and merge commits from `origin/main`, apart from the files listed under "Edits outside owned files" in the PR body when the project's rules allow such edits. Each listed edit must be mechanical (it only follows the task's own change: a renamed key or call, a new required argument, an updated expected string, a regenerated block), within the project's limit, and remove or weaken no assertion. A listed edit that fails any of these, or any other changed file outside the owned paths, fails this item.
 3. No test touches the network or a paid API; no `.skip`, `.only`, disabled test, or lowered test count.
 4. No street address, real person, secret or project-confidential string anywhere in the diff.

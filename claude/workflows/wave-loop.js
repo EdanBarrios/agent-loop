@@ -822,7 +822,7 @@ const REALITY_MODEL = { model: 'claude-haiku-5-5', effort: 'low', ...((P.models 
 const CRITIC_FALLBACK = { model: 'opus', effort: 'high' }
 
 const NAME = P.name
-const LOOP_VERSION = '2.2.1'
+const LOOP_VERSION = '2.2.2'
 const REPO = P.repo
 const WT = P.worktrees
 const SPEC = P.spec
@@ -1134,7 +1134,7 @@ async function finishIfUnfinished(t, w, ph, tag) {
 
 function criticChecklist() {
   const core = [
-    `The acceptance test exists and its commit precedes the implementation commits. Verify "fails on main" by checking that the paths or behaviour the test exercises do not exist at the PR's merge-base (git cat-file -e origin/main:<path>, or reasoning from the diff).`,
+    `The acceptance test exists and its commit precedes the implementation commits. Verify "fails on main" by checking that the paths or behaviour the test exercises do not exist at the PR's merge-base (git cat-file -e origin/main:<path>, or reasoning from the diff). Every test that asserts a rejection, refusal, quarantine or error also has a positive control in the same file: the same function, called the same way, accepting the unaltered valid input. A negative-only test passes for the wrong reason when arguments are swapped or a path does not exist (a 50-case mutation test in another project passed this way); a missing control fails this item.`,
     `Only owned paths changed (plus ${SIDE_FILES_SHORT} and merge commits from origin/main), apart from the files listed under "${OUTSIDE_EDITS}" in the PR body when the project's rules (in its read-first files) allow such edits. Check each listed edit: it is mechanical (it only follows the task's own change, such as a renamed key or call, a new required argument, an updated expected string or a regenerated block), it is within the project's limit, and it removes or weakens no assertion (no deleted or loosened expect, no deleted test case, no widened tolerance). A listed edit that fails any of these, or any other changed file outside the owned paths, fails this item.`,
     `No test touches the network or a paid API; no .skip, .only, or disabled test, and no lowered test count.`,
     `No street address, real person, secret${FORBIDDEN ? ' or project-confidential string' : ''} anywhere in the diff.`,
