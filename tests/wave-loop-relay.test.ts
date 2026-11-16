@@ -105,7 +105,7 @@ const mergeRan = (over: Json = {}) => {
   return ran(line, line.exit);
 };
 const blocked = (note = 'Permission to run this command was denied.') => ({ status: 'blocked', note });
-const preflightOk = ran({ outcome: 'error', exit: 4, mergeSha: null, message: 'could not read PR #0: no pull requests found', loopVersion: '2.2.1' }, 4);
+const preflightOk = ran({ outcome: 'error', exit: 4, mergeSha: null, message: 'could not read PR #0: no pull requests found', loopVersion: '2.2.2' }, 4);
 
 const green = ciOf('green');
 // Chunked CI wait: chunk 1 keeps the base label, later chunks add ' c<n>'.
