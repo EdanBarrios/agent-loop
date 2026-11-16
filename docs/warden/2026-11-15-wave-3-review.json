@@ -1,0 +1,1672 @@
+{
+  "project": "Warden",
+  "wave": "3",
+  "accepted": [
+    {
+      "id": "R1",
+      "kind": "defect",
+      "task": "3.5",
+      "category": "correctness",
+      "touches": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR of the spec edit; before any code exists it costs nothing.",
+      "wouldBeWrongIf": "gzxm-jz5j or a stored table turns out to hold a filing date for permits that have no issuance row (then waiting can be computed as written); check one SF permit with only review rows.",
+      "text": "3.5 defines `waiting` as member permits in `permit_ok` filed in the window with no issued `issuance_ok` row, but `permit` has no filing date. The only filing date is `issuance.filed_date`, and 3.19 writes an `issuance` row only for an application that has a permit date. So for APR processes every unpermitted application is invisible, and SF permits that have reviews but no issued row have no filing date either. \"+ N still waiting\" is 0 or unknowable on every clock headline. Resolution: 3.19 stores an unissued `issuance` row (`issued` false, `filed_date` = submitted) for each application with no permit date, and 3.5 counts `issued` false rows by `filed_date`; for SF a permit with no `issuance` row uses its earliest review `start_date`.",
+      "evidence": "migrations/0001_init.sql `create table permit (id, jurisdiction_slug, number, description, source_id, updated_at)` has no date column. Spec 3.5: \"`waiting` (member permits in `permit_ok` filed in the window with no issued `issuance_ok` row)\". Spec 3.19: \"each application with a permit date gets an `issuance`\".",
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "and `waiting` (member permits in `permit_ok` filed in the window with no issued `issuance_ok` row)",
+          "replace": "and `waiting` (`issuance_ok` rows of member permits with `issued` false and a `filed_date` in the window; a member permit with no `issuance` row counts when its earliest review `start_date` is in the window)"
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "each application with a permit date gets an `issuance` (`addenda` 0, `kind` null, `filed_date` submitted, `issued_date` issued, `calendar_days` the difference, `issued` true, `source_id` the permit page);",
+          "replace": "each application with a permit date gets an `issuance` (`addenda` 0, `kind` null, `filed_date` submitted, `issued_date` issued, `calendar_days` the difference, `issued` true, `source_id` the permit page); each application with no permit date gets an `issuance` with `issued` false, `issued_date` and `calendar_days` null, `filed_date` submitted and `source_id` its application page (a later import that finds the permit updates it);"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category correctness is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "/Users/edan/dev/warden/migrations/0001_init.sql: `permit` has no date column; `issuance` has `filed_date`, nullable `issued_date`, `issued boolean not null`, so an unissued row is schema-valid. Live DataSF query on gzxm-jz5j grouped by issued_status: 151,677 of 151,677 rows are \"Issued\" (no unissued row exists). Spec 3.19 line 309 writes an issuance only for an application with a permit date. Live data.ca.gov query on APR Table A: APPLICATION_STATUS is Approved 156,845, Pending 85,584, Withdrawn 1,449, Disapproved 210, null 30 (sum 244,118, the spec's count).",
+        "reason": "The gap is real on both sides: SF's issuance dataset holds only issued permits and APR stores nothing for an unpermitted application, so `waiting` cannot be computed as written. Both find strings match once. Two things to carry forward, neither a reason to hold it: (1) APR Table A has an APPLICATION_STATUS column that 3.3 does not request, so \"still waiting\" will count approved-but-unpermitted, withdrawn and disapproved applications; (2) the SF fallback uses a review start date, not a filing date, and 3.5 must now also read `review_ok`, which its text and test list do not yet say."
+      }
+    },
+    {
+      "id": "R2",
+      "kind": "defect",
+      "task": "3.5",
+      "category": "correctness",
+      "touches": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR of the spec edits.",
+      "wouldBeWrongIf": "Edan wants the new SF window and day count to differ from wave 2 on purpose (then live step 2 and the golden check must say which figures are allowed to move).",
+      "text": "3.5 contradicts 1.12 and wave 2 on two points, so live step 2 (SF median equals the wave 2 clock) and the tail's golden check cannot both hold. (a) Window start: 1.12 starts at `asOf` minus 6 or 12 calendar months with both ends counting; 3.5 adds a day. (b) Days: wave 2 uses the `calendar_days` of the `addenda` 0 row, per track; 3.5 recomputes `issued_date - filed_date` over 'issued member permits' without saying addenda 0, which can count a permit once per addendum. Also 3.14 asks for 'means' from `computeProcessView`, which returns medians only, and live step 2 compares one all-track median with per-track clocks. Resolution: 3.5 uses 1.12's window rule and the `addenda` 0 `calendar_days`; step 2 compares per-track medians; 3.14 drops means.",
+      "evidence": "Spec 3.5: \"the 6 and 12 month windows start at `asOf` minus 6 or 12 months plus a day\" and \"days = `issued_date - filed_date`, the permit's earliest filing\". Spec 1.12: \"`windowStart` is `asOf` minus 6 or 12 calendar months ... both ends count\" and \"basis `median`\". Live step 2: \"the SF ADU page's filing-to-permit median equals the wave 2 page's actual clock for the same window\". 3.14: \"the clocks' medians, means and counts per track\".",
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "(the 6 and 12 month windows start at `asOf` minus 6 or 12 months plus a day; `all` starts at `since`)",
+          "replace": "(the 6 and 12 month windows start at `asOf` minus 6 or 12 calendar months, the same day or the month's last day, both ends counting, exactly as 1.12; `all` starts at `since`)"
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "`median-days`, `mean-days` over issued member permits whose `issued_date` is in the window (days = `issued_date - filed_date`, the permit's earliest filing)",
+          "replace": "`median-days`, `mean-days` over the `addenda` 0 `issuance_ok` rows of member permits with `issued` true, a `calendar_days` and an `issued_date` in the window (days = `calendar_days`, the figure 1.12 and wave 2 read)"
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "(the clocks' medians, means and counts per track, each department's share and median days; not names)",
+          "replace": "(the clocks' medians and counts per track, each department's share and median days; not names; `computeProcessView` has no mean, so the tail checks `mean-days` against a mean the test computes from the same input)"
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "Check: the SF ADU page's filing-to-permit median equals the wave 2 page's actual clock for the same window.",
+          "replace": "Check: each track's median on the SF ADU page (`track:in-house`, `track:otc`) equals the wave 2 page's actual clock for the same window; the all-track headline median is recomputed by hand from the saved response."
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category correctness is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "/Users/edan/dev/warden/src/lib/stats/compute.ts: `windowStart = minusMonths(asOf, ...)` with `date >= windowStart && date <= asOf`; clocks filter `r.addenda === 0` and take the median of `calendarDays`; no mean anywhere in the file. Live DataSF query on gzxm-jz5j, addenda 0: `calendar_days` differs from `date_diff_d(issued_date, filed_date)` in 148,306 of 148,308 rows; samples show calendar_days = difference + 1 (filed 2023-05-18, issued 2023-05-22, calendar_days 5). ADU-filtered rows include 168 with addenda above 0.",
+        "reason": "Confirmed on live data: 3.5's `issued_date - filed_date` is one day under the `calendar_days` wave 2 reads on nearly every SF row, and the window start is a day off 1.12, so live step 2 and the golden check could not both pass. `computeProcessView` returns per-track medians only, so the 3.14 and step 2 edits are right. All four find strings match once. Side note: 3.19 stores APR `calendar_days` as the plain difference, so SF (inclusive) and APR differ by one day in convention."
+      }
+    },
+    {
+      "id": "R3",
+      "kind": "defect",
+      "task": "3.5",
+      "category": "correctness",
+      "touches": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR of the spec edit.",
+      "wouldBeWrongIf": "3.2's refusal of a row with no sources is dropped, or the producers are meant to cite the process's whole dataset when a window is empty.",
+      "text": "3.2's `replaceSummaries` throws, writing nothing, on a row with no `sourceIds`, but 3.5 to 3.7 emit a row for every process, window and department even when nothing was counted (a small city's 6-month window, a department with reviews only in `all`). `sourceIds` are 'the distinct source_ids of the rows it counted', so those rows have none and the whole refresh aborts. With about 470 cities times six APR kinds times three windows this is the normal case, not an edge. Resolution: a producer writes a row only when it counted at least one stored row; a window with no case has no row, and the page reads that as no data.",
+      "evidence": "Spec 3.2: \"it throws, writing nothing, on ... a row with no `sourceIds`\". Spec 3.5: \"Each row's `sourceIds` are the distinct `source_id`s of the issuance and permit rows it counted; a figure with `n` under `MIN_CASES_FOR_FIGURE` has `value` `null`\". Spec 3.18: \"replaceSummaries for all of them in one transaction\".",
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "Every figure a page shows is a `process_summary` row, written only by task 3.18 from the rows 3.5, 3.6 and 3.7 return.",
+          "replace": "Every figure a page shows is a `process_summary` row, written only by task 3.18 from the rows 3.5, 3.6 and 3.7 return. A producer returns a row only when it counted at least one stored row, because every summary cites at least one source (3.2 refuses a row with none): a window with no case has no row, and a page reads that as no data in the window."
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category correctness is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Spec line 292 (3.2): `replaceSummaries` throws, writing nothing, on a row with no `sourceIds`; line 308 (3.18): all rows go in one transaction. /Users/edan/dev/warden/src/lib/summaries/types.ts: `sourceIds` \"never empty\". 0003: `web.process_summary` hides a summary with no source. Live APR names: 534 jurisdictions times six kinds, most with empty 6-month windows.",
+        "reason": "A producer that emits a row for an empty window has no source to cite, and one such row aborts the whole refresh. The edit is consistent with the view and the type. One follow-on to state: with no row for a zero count, 3.16's `headlineFor` must read a missing `waiting` row as 0."
+      }
+    },
+    {
+      "id": "R4",
+      "kind": "defect",
+      "task": "3.18",
+      "category": "correctness",
+      "touches": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR of the spec edit.",
+      "wouldBeWrongIf": "sf-adu-permit is not a process of a catalog kind with a basis other than none (it is: kind adu-permit, basis clock).",
+      "text": "3.18 gives a process two sets of rows: every process of a kind with a basis other than `none` gets 3.5's rows (since the kind's `apr.since`), and every process with `review_ok` rows gets 3.6's and 3.5's rows again with different `asOf`, `since` and `tracks`. `sf-adu-permit` is in both, so the same process, subject, window and measure appear twice and `replaceSummaries` throws on the duplicate, which stops every refresh. Resolution: a process with `review_ok` rows gets only the second set.",
+      "evidence": "Spec 3.18: \"for every catalog kind with a basis other than `none` and every process of it ... the rows of 3.5 (`clock` kinds; `since` the kind's `apr.since`; ...) ...; for each process with `review_ok` rows, the rows of 3.6 and of 3.5 with `asOf` its newest `data_as_of`, `since` its earliest filing and `tracks` true\"; 3.2: \"throws ... two rows with the same process, subject, window and measure\"; catalog: `adu-permit` basis `clock`.",
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "for each process with `review_ok` rows, the rows of 3.6 and of 3.5 with `asOf` its newest `data_as_of`, `since` its earliest filing and `tracks` true;",
+          "replace": "for each process with `review_ok` rows, instead of the clock rows above (a process gets one set, never both, so no process, subject, window and measure repeats), the rows of 3.6 and of 3.5 with `asOf` its newest `data_as_of`, `since` its earliest filing and `tracks` true;"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category correctness is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Spec line 308 (3.18) reads additively: every process of a kind with a basis gets 3.5's rows, then each process with `review_ok` rows gets 3.6's and 3.5's again. Catalog line 225: `adu-permit` basis `clock`; 0001 seeds `sf-adu-permit` with kind `adu-permit`. 0003: `unique (process_slug, subject, \"window\", measure)`; 3.2 throws on a duplicate.",
+        "reason": "`sf-adu-permit` is in both sets, so the same process, subject, window and measure would be produced twice and the refresh would throw. The edit removes the overlap. Find matches once."
+      }
+    },
+    {
+      "id": "R8",
+      "kind": "defect",
+      "task": "3.2",
+      "category": "correctness",
+      "touches": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR of the spec edit.",
+      "wouldBeWrongIf": "the helper already double-quotes identifiers in the worker's design (then the edit only records it).",
+      "text": "3.2's `insertMany` checks table and column names against `^[a-z_]+$` and emits them as given, but `process_summary` has a column `window`, which is a reserved word in Postgres and was created quoted (`\"window\"`) in 0003. `replaceSummaries` inserts through `insertMany`, so its first statement is a syntax error. The test list does not include a `window` column. Resolution: after the identifier check, the helper writes every identifier in double quotes, and the test inserts into `process_summary`.",
+      "evidence": "migrations/0003_hardening.sql: `\"window\" text not null check (\"window\" in ('6m', '12m', 'all', 'latest'))`. Spec 3.2: \"`table` and `columns` checked against `^[a-z_]+$` (a bad identifier throws before any statement)\" and `replaceSummaries` \"inserts the rows with `insertMany`\".",
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "`table` and `columns` checked against `^[a-z_]+$` (a bad identifier throws before any statement)",
+          "replace": "`table` and `columns` checked against `^[a-z_]+$` and then written in double quotes (`window` is a reserved word; a bad identifier throws before any statement)"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category correctness is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Ran in local PGlite (the repo's test database): `insert into t (id, window) values (1, 'x')` gives \"syntax error at or near \\\"window\\\"\"; the same with `\"id\", \"window\"` succeeds; `update t set window = ...` also fails. 0003 creates the column as `\"window\"`.",
+        "reason": "Confirmed. Quoting every identifier that already passed `^[a-z_]+$` is always safe. 3.2's own `replaceSummaries` test would have hit this, so the edit mainly saves a round; `updateMany` and any column named in the `onConflict` clause need the same quoting."
+      }
+    },
+    {
+      "id": "R9",
+      "kind": "defect",
+      "task": "3.12",
+      "category": "ownership",
+      "touches": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR of the spec edits.",
+      "wouldBeWrongIf": "the critic does not enforce CONTRACT.md's shared list against a task's own Owns line (wave 2 marked pool.ts 'by exception', which suggests it does).",
+      "text": "CONTRACT.md lists `vitest.config.ts` and `src/lib/db/*` as session-owned, but 3.13 owns `vitest.config.ts`, 3.12 owns `src/lib/db/pool.ts` and 3.2 owns `src/lib/db/batch.ts`, with no exception noted (only 3.11 and 3.T carry one). A worker stops on a file outside its lane, so these three tasks would stop or the critic would flag them. Resolution: mark the exceptions on the three tasks and in CONTRACT.md.",
+      "evidence": "CONTRACT.md: \"Shared, owned by the session (no task edits these): `package.json`, ... `vitest.config.ts`, `next.config.ts`, ... `src/lib/db/*`\". Spec 3.13: \"Owns `vitest.config.ts`, `test/setup/no-network.ts`, `test/no-network.test.ts`.\"; 3.12: \"Owns `src/lib/db/pool.ts`, `src/lib/env.ts`\"; 3.2: \"Owns `src/lib/db/batch.ts`, `src/lib/db/batch.test.ts`\".",
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "Owns `vitest.config.ts`, `test/setup/no-network.ts`, `test/no-network.test.ts`.",
+          "replace": "Owns `vitest.config.ts` (by exception to the session's list), `test/setup/no-network.ts`, `test/no-network.test.ts`."
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "Owns `src/lib/db/pool.ts`, `src/lib/env.ts`, `src/lib/env.test.ts`,",
+          "replace": "Owns `src/lib/db/pool.ts` (by exception to the session's `src/lib/db/*`), `src/lib/env.ts`, `src/lib/env.test.ts`,"
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "Owns `src/lib/db/batch.ts`, `src/lib/db/batch.test.ts`, `src/lib/summaries/store.ts`,",
+          "replace": "Owns `src/lib/db/batch.ts`, `src/lib/db/batch.test.ts` (both by exception to the session's `src/lib/db/*`), `src/lib/summaries/store.ts`,"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category ownership is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "/Users/edan/dev/warden/CONTRACT.md: shared list includes `vitest.config.ts` and `src/lib/db/*` (\"no task edits these\"); the wave 3 rows for 3.2, 3.12 and 3.13 carry no exception note, while 3.11 and 3.T do, and wave 2 marked pool.ts \"by exception\". /Users/edan/dev/warden/.claude/loop.local.json lists CONTRACT.md in readFirst.",
+        "reason": "The contradiction is real and the notes are cheap. Two gaps: the edits touch only the spec's task lines, so CONTRACT.md itself (what a worker reads first) and the spec's copy of the owner table still need the three notes; and /Users/edan/dev/agent-loop/claude/workflows/wave-loop.js `parseOwns` takes every backticked token in an Owns sentence as a path pattern, so writing `src/lib/db/*` in backticks inside 3.2's and 3.12's Owns would give each task the whole folder, the other's file included. Write that glob without backticks."
+      }
+    },
+    {
+      "id": "R10",
+      "kind": "defect",
+      "task": "3.21",
+      "category": "dependency",
+      "touches": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR of the spec edits.",
+      "wouldBeWrongIf": "src/lib/stats/process.test.ts and the wave 2 page tests never assert a department name (then only the missing dependency on 3.14 remains).",
+      "text": "3.21 deletes `DEPARTMENT_NAMES` from `compute.ts` and makes names optional, so a department with no given name shows its code. The live read path (`loadProcessView` in `src/lib/stats/process.ts`, owned by nobody until 3.T deletes it) calls `computeProcessView` without names, so the SF page and its tests lose 'Planning', 'Building Inspection' and so on from 3.21's merge until the tail: CI goes red on tests that assert names, or the live page shows CPC and DBI. 3.21 also says 3.14's golden numbers hold but does not depend on 3.14, so the golden file can be generated after `compute.ts` changed. Resolution: keep the constant as the default until 3.T, which deletes it with `process.ts`; 3.21 depends on 3.14.",
+      "evidence": "src/lib/stats/process.ts calls `computeProcessView({ name, slug, window, asOf, reviews, issuances, isAdu, reviewsSourceUrl, issuanceSourceUrl, heads })` with no names. Spec 3.21: \"`DEPARTMENT_NAMES` is deleted from `compute.ts` ... a missing code shows the code\" and \"so 3.14's golden numbers hold\"; header: \"Depends on 3.2 and 3.4.\" Spec 3.14: \"Pins today's numbers before the stats move to summaries.\"",
+      "dependsOn": [
+        "F1"
+      ],
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "- **3.21 Reviews importer on the runner, names from the database.** Depends on 3.2 and 3.4.",
+          "replace": "- **3.21 Reviews importer on the runner, names from the database.** Depends on 3.2, 3.4 and 3.14 (the golden numbers are pinned before `compute.ts` changes)."
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "`DEPARTMENT_NAMES` is deleted from `compute.ts`: a department code not yet in `department`",
+          "replace": "`importReviews` stops using `DEPARTMENT_NAMES` (3.T deletes the constant together with `process.ts`, which names departments on the live read path until then): a department code not yet in `department`"
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "`computeProcessView` takes an optional `departmentNames` input (code to name; a missing code shows the code) and is otherwise unchanged",
+          "replace": "`computeProcessView` takes an optional `departmentNames` input (code to name; when it is not given the constant `DEPARTMENT_NAMES` names the code, as today; a code in neither shows the code) and is otherwise unchanged"
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "`computeProcessView` uses given names and falls back to the code; no file imports `DEPARTMENT_NAMES`.",
+          "replace": "`computeProcessView` uses given names, then `DEPARTMENT_NAMES`, then the code; `reviews.ts` does not import `DEPARTMENT_NAMES`."
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "`src/lib/view.ts`, `src/lib/stats/process.ts` and `src/lib/stats/process.test.ts` (removed),",
+          "replace": "`src/lib/view.ts`, `src/lib/stats/compute.ts` (`DEPARTMENT_NAMES` removed), `src/lib/stats/process.ts` and `src/lib/stats/process.test.ts` (removed),"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category dependency is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "/Users/edan/dev/warden/src/lib/stats/process.ts calls `computeProcessView` with no names; src/lib/stats/process.test.ts lines 176 to 177 assert `name: 'Planning'` and `'Building Inspection'`. Grep for DEPARTMENT_NAMES: also imported by src/importers/reviews.ts, src/lib/stats/compute.test.ts (line 5) and test/schema.test.ts (line 4, Edan's file per CONTRACT.md).",
+        "reason": "Confirmed, and wider than stated: deleting the constant in 3.21 breaks process.test.ts and test/schema.test.ts, neither owned by 3.21. Keeping it as the default until the tail is right. The edit is incomplete in one place: when 3.T deletes the constant it must also change compute.test.ts (3.21's) and test/schema.test.ts (Edan's), which import it, and 3.T's Owns gains only compute.ts. Add those two files to 3.T, or the tail stops on files outside its lane."
+      }
+    },
+    {
+      "id": "R11",
+      "kind": "defect",
+      "task": "3.18",
+      "category": "ordering",
+      "touches": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR; the stub is one file.",
+      "wouldBeWrongIf": "scripts/refresh-summaries.ts exists on a branch not merged to main (it does not on main today).",
+      "text": "package.json on main already runs `tsx scripts/refresh-summaries.ts` after `import:reviews`, `import:issuance`, `provenance` and `import:facts`, but that file does not exist until 3.18 merges. Every one of those commands now exits non-zero after doing its work (the importer succeeds, then 'cannot find module'), and the same holds in the weekly workflow of 3.11 if it lands first. Resolution: a one-line stub script (prints a line, exits 0) in the session's contract work, replaced by 3.18.",
+      "evidence": "package.json: `\"import:reviews\": \"tsx scripts/import-reviews.ts && tsx scripts/refresh-summaries.ts\"`; reading /Users/edan/dev/warden/scripts/refresh-summaries.ts: file does not exist. Spec: \"adds the `package.json` scripts of this wave\" in the contracts PR; 3.18 owns `scripts/refresh-summaries.ts`.",
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "adds the `package.json` scripts of this wave (",
+          "replace": "adds a stub `scripts/refresh-summaries.ts` (prints one line and exits 0; 3.18 replaces it, so the scripts that call it keep working until then) and the `package.json` scripts of this wave ("
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category ordering is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "/Users/edan/dev/warden/package.json: `import:reviews`, `import:issuance`, `provenance`, `import:facts` and the new imports all end `&& tsx scripts/refresh-summaries.ts`; /Users/edan/dev/warden/scripts/ has no refresh-summaries.ts. PR #39's body says so itself: \"until then those commands fail after their import succeeds\".",
+        "reason": "Confirmed. A stub that exits 0 is safe because no page reads summaries until 3.26 to 3.29. The contracts PR is already merged, so this is a follow-up session PR, and the stub sits on 3.18's path, which 3.18 then replaces."
+      }
+    },
+    {
+      "id": "R12",
+      "kind": "defect",
+      "task": "3.23",
+      "category": "correctness",
+      "touches": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR plus a one-line package.json change.",
+      "wouldBeWrongIf": "scripts/provenance.ts always exits 0 even when it quarantines something (the spec does not say), which would make the && harmless.",
+      "text": "`npm run provenance` is `tsx scripts/provenance.ts && tsx scripts/refresh-summaries.ts`. Any quarantine of a stored row bumps `summary_epoch`, which hides every summary until the next refresh, and 0003 relies on the provenance run ending with that refresh. If the provenance script exits non-zero when it quarantines (the useful behaviour for CI), the refresh is skipped exactly when it is needed and the whole site shows 'No data yet' until someone refreshes by hand. Resolution: the refresh runs whatever the check's exit code, and the exit code is passed on.",
+      "evidence": "package.json: `\"provenance\": \"tsx scripts/provenance.ts && tsx scripts/refresh-summaries.ts\"`. migrations/0003_hardening.sql: \"one quarantine change hides every summary until the next refresh, which the provenance check and every importer run at their end\".",
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "each `import:*` and `provenance` followed by `&& tsx scripts/refresh-summaries.ts`",
+          "replace": "each `import:*` followed by `&& tsx scripts/refresh-summaries.ts`, and `provenance` followed by a refresh that runs whatever the check's exit code and then passes that code on (a quarantine hides every summary until a refresh)"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category correctness is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "/Users/edan/dev/warden/scripts/provenance.ts header: \"Exit 0 when the check ran, 2 when it could not run\"; it exits 0 when it quarantines. /Users/edan/dev/warden/src/checks/provenance.ts inserts each quarantine row by row with no transaction, and `supabaseStore` throws on a non-404 error. 0003's trigger bumps the epoch on each such insert.",
+        "reason": "The stated trigger (non-zero on quarantine) is not today's behaviour, and the recommendation says so. The same harm does occur another way: a run that quarantines some rows and then fails on a Storage error exits 2, the epoch has moved, and `&&` skips the refresh, hiding every summary. Running the refresh whatever the exit code fixes that. package.json is session-owned and needs the matching change."
+      }
+    },
+    {
+      "id": "R16",
+      "kind": "defect",
+      "task": "3.28",
+      "category": "correctness",
+      "touches": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR of the spec edit.",
+      "wouldBeWrongIf": "Edan wants a page per rule holder (the spec says they are 'never ranked or shown as places').",
+      "text": "Rule holders (`ca-adu-permit`, `us-calfresh-application`) are real `process` rows, and 3.28's `loadProcessPage` returns `null` only for an unknown kind, place or process. So `/processes/adu-permit/ca` renders a page for a row the spec says is never shown as a place, and 3.27 redirects `/processes/ca-adu-permit` to it. Resolution: `loadProcessPage` returns `null` for a rule holder, so both give not found.",
+      "evidence": "Spec: \"Rule holders are never ranked or shown as places.\"; 3.17 creates the holder rows `ruleHolderSlug(entry)` at `ca` or `us`; 3.28: \"`null` for an unknown kind, place or process\"; 3.27: \"when `kind` is not a catalog kind and a process row has that slug, a permanent redirect\".",
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "`null` for an unknown kind, place or process.",
+          "replace": "`null` for an unknown kind, place or process, and for a rule holder (`ca-<kind>`, `us-<kind>`), so its page and the redirect to it are not found."
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category correctness is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Spec line 206: rule holders \"are never ranked or shown as places\"; line 307 (3.17) creates them as `process` rows at `ca` or `us`; line 318 (3.28) returns `null` only for an unknown kind, place or process; line 317 (3.27) redirects any process slug that is not a catalog kind.",
+        "reason": "Confirmed: `/processes/adu-permit/ca` would render a rule holder. One wording risk: the gloss \"(`ca-<kind>`, `us-<kind>`)\" also describes real processes such as `ca-calfresh-application` (CDSS's Statewide row, Q23) and every state or federal kind's own row. The test should be \"the slug equals `ruleHolderSlug(entry)`\", or a literal reading turns every state and federal process page into not found."
+      }
+    },
+    {
+      "id": "R31",
+      "kind": "question",
+      "task": "3.19",
+      "category": "correctness",
+      "touches": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR of the labels; no data change.",
+      "wouldBeWrongIf": "HCD's APR instructions define APP_SUBMIT_DT as the building permit application date for every unit category, not the planning or entitlement application.",
+      "text": "Question for Edan: what does the APR 'application submitted' date measure for the non-ADU housing kinds? 3.19 turns Table A's `APP_SUBMIT_DT` and Table A2's `BP_ISSUE_DT1` into 'filing to permit' for six kinds. The survey lists A2's `ENT_APPROVE_DT1` next to `BP_ISSUE_DT1`, which suggests the application date for a single-family or multifamily project is an entitlement application, so the span includes planning approval, not just the building permit, while the card says 'filing to permit' and Q18 compares an ADU span to the state's 60-day limit. Only ADUs, usually ministerial, plausibly match the rule. Recommended until HCD's definition is quoted: label non-ADU kinds 'application to building permit, as the cities report it to the state' and show no legal-rule line for them.",
+      "evidence": "Survey row Y2: \"HCD APR Table A (APP_SUBMIT_DT) + A2 (ENT_APPROVE_DT1, BP_ISSUE_DT1, CO_ISSUE_DT1)\"; spec 3.19: \"`issued_date` issued, `calendar_days` the difference\"; 3.8 card text: \"251 days median, filing to permit\"; Q18.",
+      "dependsOn": [
+        "F10"
+      ],
+      "edits": [],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category correctness is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "data.ca.gov `datastore_search` on APR Table A lists the columns TOT_APPROVED_UNITS, TOT_DISAPPROVED_UNITS, APP_SUBMITTED_SB35, DENSITY_BONUS_RECEIVED, DENSITY_BONUS_APPROVED, PROJECT_TYPE and APPLICATION_STATUS (Approved 156,845, Pending 85,584). Process survey row Y2 lists ENT_APPROVE_DT1 beside BP_ISSUE_DT1 in Table A2.",
+        "reason": "The columns describe a housing development application that is approved or disapproved in its own right, with density bonus and SB 35 fields, which points to an entitlement application, not a building permit application. Labelling the non-ADU kinds as plain \"filing to permit\" against a permit deadline would overstate what the data shows. The question and the cautious label are right until HCD's definition is quoted."
+      }
+    },
+    {
+      "id": "R33",
+      "kind": "defect",
+      "task": "3.15",
+      "category": "correctness",
+      "touches": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR of the spec edits.",
+      "wouldBeWrongIf": "the live header text matches the spec exactly (the spike's paraphrase may have dropped the suffix); the required-column check then never fires.",
+      "text": "Two gaps in how 3.15 reads the CDSS workbook. (a) 'Statewide gives ca' does not say which cell: the spike found the `County` cell holds 'Statewide' and the `FIPS` cell is empty on all 154 Statewide rows, so a parser that tests `FIPS` first rejects the row. (b) A missing column is indistinguishable from a blank cell: the spec relies on a header with two spaces before 'Monthly', while the spike lists the expedited column without that suffix, and a renamed column would silently give no expedited figure for every county, with the drop guard (row counts only) saying nothing. Resolution: name the Statewide test and make `readSheetRows` throw when a required column is absent from the header.",
+      "evidence": "F3 spike: \"the `County` cell holds the text 'Statewide' (154 of 154 rows). The `FIPS` cell is empty (no value in column B on all 154 Statewide rows)\"; AG listed as \"Timeliness Expedited Services Percentage\". Spec 3.15: \"`Statewide` gives `ca`; otherwise `FIPS` must match `^US-06[0-9]{3}$`\"; spec CalFresh paragraph: \"`Timeliness Expedited Services Percentage  Monthly` (two spaces before `Monthly`...)\"; \"a blank cell gives no measure\".",
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "`Statewide` gives `ca`; otherwise `FIPS` must match",
+          "replace": "a row whose `County` is `Statewide` (its `FIPS` is empty) gives `ca`; otherwise `FIPS` must match"
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "`readSheetRows(bytes, { sheet, headerRow })`:",
+          "replace": "`readSheetRows(bytes, { sheet, headerRow, required })`:"
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "throws naming the sheet when it is missing, and naming the column when the header has a duplicate.",
+          "replace": "throws naming the sheet when it is missing, and naming the column when the header has a duplicate or when a `required` column is absent from the header (the importer passes the six column names of `CALFRESH_TIMELINESS`, so a renamed column fails the run instead of publishing blanks)."
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category correctness is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Workbook, sheet Monthly: 154 of 154 Statewide rows have an empty FIPS cell; every county row's FIPS starts `US-06`. The header holds exactly `Timeliness 30 day Percentage` and `Timeliness Expedited Services Percentage  Monthly` (two spaces), 303 columns, no duplicates.",
+        "reason": "The Statewide point is confirmed and the edit removes a real trap. The header matches the spec today, so the required-column check never fires now, but it is the only guard against a silent rename, since the drop guard counts rows. 3.20's script must actually pass `required`; its text does not say so yet."
+      }
+    },
+    {
+      "id": "R34",
+      "kind": "defect",
+      "task": "3.3",
+      "category": "correctness",
+      "touches": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR; wrong names would be corrected by updating rows.",
+      "wouldBeWrongIf": "the 529 APR jurisdiction names are already unique after slugging and title-casing gives the right public name for every one (check once against the real name list).",
+      "text": "Three small gaps in how APR jurisdictions become places and permits. (a) Names: a plain title-case of the upper-case APR name publishes wrong city names ('Mcfarland' for McFarland; 'La Canada Flintridge' for La Cañada Flintridge), and accent loss also stops `matchDotgov` from finding the city's .gov domain. (b) Slugs: the slug removes every run outside a-z0-9, so two different names can collide (for example 'ST. HELENA' and 'ST HELENA'), and 3.19 upserts a jurisdiction by slug with no collision check, merging two cities silently. (c) Kind choice: when one tracking ID has rows of several kinds on the same date, 'the earliest' does not say which wins, so the ADU count could change between runs. Resolution: an exceptions map for names, a thrown error on a slug collision between different names, and a tie-break by the smaller `_id`.",
+      "evidence": "Spec 3.3: \"slug the name in lower case with every run outside `a-z0-9` as one `-`, trimmed; name in title case; level `city`\"; test names `LA CANADA FLINTRIDGE` and `ST. HELENA`; 3.19: \"each jurisdiction seen is upserted\" and \"keeps the earliest `submitted` date with its page's source, jurisdiction and kind (a later row of another kind counts in `conflicts`)\".",
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "name in title case; level `city`;",
+          "replace": "name in title case, corrected by an exceptions map in `apr.ts` for names title case gets wrong (`MCFARLAND` is McFarland, `LA CANADA FLINTRIDGE` is La Cañada Flintridge; the session fills it from the real name list), two different names that give one slug throw; level `city`;"
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "(a later row of another kind counts in `conflicts`)",
+          "replace": "(a later row of another kind counts in `conflicts`; rows with the same date keep the smaller `_id`)"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category correctness is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Pulled every distinct JURIS_NAME and CNTY_NAME from both APR tables (534 names): no slug collisions, no punctuation, no name in two counties. `MCFARLAND` and `LA CANADA FLINTRIDGE` are both present; the data has `SAINT HELENA`, not `ST. HELENA`.",
+        "reason": "The two name examples are real, so the exceptions map is needed. No collision exists today, which makes that guard cheap insurance, but `jurisdictionFromApr` takes one row and cannot see another name, so the check belongs in the importer. The smaller-`_id` tie-break is deterministic within a run only, since CKAN reassigns `_id` on a reload."
+      }
+    },
+    {
+      "id": "R35",
+      "kind": "defect",
+      "task": "3.18",
+      "category": "correctness",
+      "touches": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR of the spec edit.",
+      "wouldBeWrongIf": "Edan prefers a failed notification to be silent (a day-old cache is acceptable) and the weekly job to stay green.",
+      "text": "`notifySite` returns `{ status }` and the script 'prints counts only', so a wrong `REVALIDATE_SECRET` (401) or a down site leaves the summaries written and the site serving cached figures for up to a day, with the job green and nobody told. Resolution: the script exits 5 when the notification's status is not 204, so the weekly job fails visibly.",
+      "evidence": "Spec 3.18: \"`notifySite({ siteUrl, secret, fetcher })` posts to `<siteUrl>/api/revalidate` with the bearer secret and returns `{ status }`\"; 3.12: wrong secret gives 401; `webCached` `revalidate: 86400`.",
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "`notifySite({ siteUrl, secret, fetcher })` posts to `<siteUrl>/api/revalidate` with the bearer secret and returns `{ status }`; without `SITE_URL` or `REVALIDATE_SECRET` it does nothing and says so.",
+          "replace": "`notifySite({ siteUrl, secret, fetcher })` posts to `<siteUrl>/api/revalidate` with the bearer secret and returns `{ status }`; without `SITE_URL` or `REVALIDATE_SECRET` it does nothing and says so; the script exits 5 when the status is not 204 (the summaries are written, but the site's cache stays up to a day old)."
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category correctness is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Spec line 308: the script \"prints counts only\" and `notifySite` returns `{ status }` with no exit rule; line 302: a wrong secret gives 401 and the cache lasts 86,400 seconds. Exit codes in use: 0, 1, 2, 3 (discover), 4 (halted); 5 is free.",
+        "reason": "A silent 401 leaves stale figures for a day behind a green job. Exiting 5 makes it visible and collides with no other code. A network error from the fetcher should count the same as a status other than 204. Find matches once."
+      }
+    },
+    {
+      "id": "R36",
+      "kind": "defect",
+      "task": "3.9",
+      "category": "ambiguity",
+      "touches": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR of the spec edit.",
+      "wouldBeWrongIf": "3.7 is changed to write share and rate rows for all three windows (CDSS data has no 6-month or all-time figure by design: Q16).",
+      "text": "The window filter is specified for every process page, but a share kind has rows only for window `12m` (plus `month:` rows with no stated window) and a rate kind only for `latest`, so `?window=6m` or `all` on a CalFresh or Medi-Cal page has nothing to show. 3.7 does not say which window the `month:` rows carry, and the `process_summary` key includes the window. Resolution: the filter is not shown for share and rate processes, and their `month:` rows carry window `12m`.",
+      "evidence": "Spec 3.7: \"`share` ... (window `12m`)\" and \"window `latest`\" with `month:` rows window unstated; 3.9: \"the window filter (the existing `WindowFilter`)\"; 0003: `unique (process_slug, subject, \"window\", measure)`.",
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "the window filter (the existing `WindowFilter`);",
+          "replace": "the window filter (the existing `WindowFilter`, shown only for a clock or a process with `dept:` summaries: a share has window `12m` and a rate window `latest` only, and their `month:` rows carry window `12m`);"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category ambiguity is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Spec line 284 to 285 and 297: a share's whole-process row is window `12m`, a rate's is `latest`, and the `month:` rows have no stated window; 0003's unique key includes the window; line 306: `readSummaries` returns the requested window plus `latest`.",
+        "reason": "The gap is real. The edit lands in the wrong place for half of it: the rule that `month:` rows carry `12m` is written into 3.9, a component task, while 3.7 writes those rows and 3.16 and 3.28 read them, in parallel, without reading 3.9. Put that clause in 3.7 and the Summary measures table. 3.28 also says its page renders \"the window filter\", and a `?window=6m` on a share page should be treated as `12m`."
+      }
+    }
+  ],
+  "asked": [
+    {
+      "id": "R5",
+      "kind": "defect",
+      "task": "3.7",
+      "category": "correctness",
+      "touches": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR of the spec edits.",
+      "wouldBeWrongIf": "CDSS's blank Applications Received cells are limited to months before the 2014-2016 range for every county, which would make the exemption unused; or Edan prefers to drop CalFresh months whose count is blank.",
+      "text": "The CalFresh blanks do not fit the rate rules. (a) 3.7 sets a rate row's `n` to the month's `Applications Received`, 0 when blank, and the summary rule nulls `value` when `n` is under 5, so a month where CDSS blanked the count loses its published percentage. In the workbook 1,785 county rows have a percentage but a blank count, and the blanks hit large counties too (Alameda 48 months, San Diego 37). (b) 3.16 ranks only when `n` >= 30 and 3.27 files the rest under 'Too few to rank', so such a county is called small when its count is only unpublished. (c) `second` is chosen as the newest month with a value, separately from the first rate, but the `RateHeadline` type carries one `month`; the expedited column is blank on 1,808 county rows against 68 for the 30-day column, so the two often differ. Resolution: rate rows keep their percentage when the count is blank; `n` 0 means 'count not published', which is not ranked and is labelled so; `second` appears only for the same month as `share`.",
+      "evidence": "F3 spike (CDSS workbook, sheet Monthly): AG expedited blank on 1,808 county rows, AF 30-day blank on 68, AN Applications Received blank on 1,843; 'In 1,785 county rows where AN is blank, some percentage column is still present'; 'Alameda had 48 blank AN months and San Diego had 37'. Spec 3.7: \"`n` the month's `size` value (0 when absent)\"; Summary measures: \"`value` is `null` when `n` is under the minimum ... `MIN_CASES_FOR_FIGURE` = 5\"; src/lib/web/types.ts `RateHeadline`: `month: string; second: number | null`.",
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "`value` is `null` when `n` is under the minimum to state a figure: `MIN_CASES_FOR_FIGURE` = 5, in `src/lib/summaries/types.ts`.",
+          "replace": "`value` is `null` when `n` is under the minimum to state a figure: `MIN_CASES_FOR_FIGURE` = 5, in `src/lib/summaries/types.ts`, except for a rate measure: CDSS withholds its own small cells, so a published percentage is kept, and its `n` is 0 when CDSS published no application count (\"count not published\", not \"too few\")."
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "for `rate` `{ basis: 'rate', share, month, n, second, label, secondLabel, rule, ranked, tier }`;",
+          "replace": "for `rate` `{ basis: 'rate', share, month, n, second, label, secondLabel, rule, ranked, tier }` (`second` only from the same month as `share`, else `null`; `n` 0 means CDSS published no count: `ranked` false and 3.27 lists it as \"Count not published\", never \"Too few to rank\");"
+        }
+      ],
+      "decision": "ask",
+      "reason": "adversary disagree: The blank counts are almost all Jan 2014 to mid 2016, when CDSS did not publish the column at all; 3.7 reads only the last 12 months and the latest month, where no count is blank and the two rates never fall in different months. The recommendation's own wouldBeWrongIf (the exemption goes unused) is close to met. The edit also exempts every rate from the minimum of 5 and adds a \"Count not published\" list that neither 3.27 nor the session-owned `Ranking` type has. The same-month rule for `second` is harmless and worth keeping alone; the rest is Edan's call on a small-count rule. (Downloaded the CDSS workbook (12,557,967 bytes, 200) and read sheet Monthly with openpyxl. County rows since Jan 2014: 30-day blank 68, expedited blank 1,808, Applications Received blank 1,817. Rows with a 30-day value and a blank count by year: 2014 696, 2015 696, 2016 348, 2019 3, 2020 3, 2021 8, 2022 1, 2023 4, and none in 2024 to 2026. Mar to Sep 2026: all 58 counties have 30-day, expedited and count; Oct 2026 rows are all blank. Counties whose newest 30-day month differs from their newest expedited month: 0 of 58. /Users/edan/dev/warden/src/lib/web/types.ts `Ranking` has four lists and no \"Count not published\".)",
+      "adversary": {
+        "verdict": "disagree",
+        "evidence": "Downloaded the CDSS workbook (12,557,967 bytes, 200) and read sheet Monthly with openpyxl. County rows since Jan 2014: 30-day blank 68, expedited blank 1,808, Applications Received blank 1,817. Rows with a 30-day value and a blank count by year: 2014 696, 2015 696, 2016 348, 2019 3, 2020 3, 2021 8, 2022 1, 2023 4, and none in 2024 to 2026. Mar to Sep 2026: all 58 counties have 30-day, expedited and count; Oct 2026 rows are all blank. Counties whose newest 30-day month differs from their newest expedited month: 0 of 58. /Users/edan/dev/warden/src/lib/web/types.ts `Ranking` has four lists and no \"Count not published\".",
+        "reason": "The blank counts are almost all Jan 2014 to mid 2016, when CDSS did not publish the column at all; 3.7 reads only the last 12 months and the latest month, where no count is blank and the two rates never fall in different months. The recommendation's own wouldBeWrongIf (the exemption goes unused) is close to met. The edit also exempts every rate from the minimum of 5 and adds a \"Count not published\" list that neither 3.27 nor the session-owned `Ranking` type has. The same-month rule for `second` is harmless and worth keeping alone; the rest is Edan's call on a small-count rule."
+      }
+    },
+    {
+      "id": "R6",
+      "kind": "defect",
+      "task": "3.23",
+      "category": "correctness",
+      "touches": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR of the spec edits.",
+      "wouldBeWrongIf": "W&I 18914 on leginfo says '3 days' in digits (the spike could not read it: leginfo returned 403), in which case the first edit is harmless.",
+      "text": "Live step 10 names California's 3-day expedited CalFresh rule as one of the first two facts, but 3.23 quarantines a fact whose `value.days` is a number unless the quote has that number as a whole word before 'day(s)'. The only text the spike read says 'no later than the third calendar day' (ACL 12-74), with a weekend counted as one day, so `days: 3` would be quarantined as `quote_not_found`. Also statutes often write 'sixty (60) days', which the check also rejects. Resolution: the expedited fact has `days` null (the quoted sentence is the rule), and 3.23 accepts a parenthesised repeat.",
+      "evidence": "F4 spike, ACL 12-74: \"applicants determined to be entitled to ES will continue to receive CalFresh benefits no later than the third calendar day following the date the application was filed. For purposes of this section, a weekend (Saturday and Sunday) shall be considered one calendar day.\" Spec 3.23: \"the number as a whole word, optionally followed by \\\"business\\\", \\\"working\\\" or \\\"calendar\\\", then \\\"day\\\" or \\\"days\\\"\"; live step 10: \"California's 3-day expedited rule (W&I Code 18914) are the first two\".",
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "`days` only for calendar days, else `null`",
+          "replace": "`days` only when the quote states the number in digits before \"day\" or \"days\" (the check of 3.23), else `null`: the 3-day expedited sentence says \"third calendar day\", so its `days` is `null`"
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "(the number as a whole word, optionally followed by \"business\", \"working\" or \"calendar\", then \"day\" or \"days\")",
+          "replace": "(the number as a whole word, optionally followed by a parenthesised repeat as in \"sixty (60) days\", then optionally \"business\", \"working\" or \"calendar\", then \"day\" or \"days\")"
+        }
+      ],
+      "decision": "ask",
+      "reason": "adversary disagree: The defect is real: a fact with `days: 3` on a \"third calendar day\" sentence would be quarantined. Both edits need rewording first. Edit 1 replaces \"only for calendar days\" with \"in digits before day or days (the check of 3.23)\", and that check accepts \"business\" and \"working\", so a business-day figure could now be recorded as `days`; it should read \"only for calendar days stated in digits\". Edit 2 says the number is \"followed by a parenthesised repeat\" but its example, \"sixty (60) days\", has the digits inside the parentheses, so a worker cannot tell which form to accept, and no test pins it. (Regex of 3.23's rule run locally: fails for 3 on \"no later than the third calendar day following the date the application was filed\" and for 60 on \"within sixty (60) days\", passes for 30 on \"no later than 30 calendar days\". Fetched eCFR API text of 7 CFR 273.2: \"not later than the seventh calendar day\" (words, not digits). leginfo WIC 18914 returned 403, so that wording is unverified. Spec line 333: \"`days` only for calendar days, else `null`\".)",
+      "adversary": {
+        "verdict": "disagree",
+        "evidence": "Regex of 3.23's rule run locally: fails for 3 on \"no later than the third calendar day following the date the application was filed\" and for 60 on \"within sixty (60) days\", passes for 30 on \"no later than 30 calendar days\". Fetched eCFR API text of 7 CFR 273.2: \"not later than the seventh calendar day\" (words, not digits). leginfo WIC 18914 returned 403, so that wording is unverified. Spec line 333: \"`days` only for calendar days, else `null`\".",
+        "reason": "The defect is real: a fact with `days: 3` on a \"third calendar day\" sentence would be quarantined. Both edits need rewording first. Edit 1 replaces \"only for calendar days\" with \"in digits before day or days (the check of 3.23)\", and that check accepts \"business\" and \"working\", so a business-day figure could now be recorded as `days`; it should read \"only for calendar days stated in digits\". Edit 2 says the number is \"followed by a parenthesised repeat\" but its example, \"sixty (60) days\", has the digits inside the parentheses, so a worker cannot tell which form to accept, and no test pins it."
+      }
+    },
+    {
+      "id": "R7",
+      "kind": "defect",
+      "task": "3.25",
+      "category": "correctness",
+      "touches": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR; the text.ts change is additive.",
+      "wouldBeWrongIf": "Edan decides to quote only from HTML pages (then the PDF half of the edit is the intended behaviour and only XML is new); or Keenable's fetch returns extracted text for PDFs and eCFR HTML, which the fallback would then use.",
+      "text": "The first two facts of live step 10 cannot be verified with today's `pageText`. It strips tags only for text/html and application/xhtml+xml; any other type is just whitespace-collapsed. The survey verified 7 CFR 273.2 through the eCFR API (XML, so tags stay in the saved text and the quote never matches), and the CDSS source for the 3-day rule found by the spike is a PDF (ACL 12-74, binary, never matches). leginfo also blocks automated fetches, so the direct fetch falls back to Keenable's markdown. No wave 3 task owns `src/lib/sources/text.ts`. Resolution: 3.25 owns text.ts, strips XML tags, and states that no sentence is quoted from a PDF in wave 3 (PDF text extraction would be a new dependency, which is Edan's call).",
+      "evidence": "src/lib/sources/text.ts: `if (!isHtml(contentType)) return collapse(body);` with `isHtml` true only for text/html and application/xhtml+xml. Survey line 9: \"Federal CFR text was verified through the eCFR API\"; line 8: leginfo \"blocked every automated fetch\". F4 spike source: https://www.cdss.ca.gov/lettersnotices/entres/getinfo/acl/2012/12-74.pdf.",
+      "dependsOn": [
+        "F9"
+      ],
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "- **3.25 Fact import.** Depends on 3.1 and 3.2. Owns `src/importers/page-facts.ts`, `src/importers/page-facts.test.ts`, `scripts/import-facts.ts`.",
+          "replace": "- **3.25 Fact import.** Depends on 3.1 and 3.2. Owns `src/importers/page-facts.ts`, `src/importers/page-facts.test.ts`, `scripts/import-facts.ts`, `src/lib/sources/text.ts`, `src/lib/sources/text.test.ts` (by exception to 2.1: `pageText` also strips tags from `application/xml` and `text/xml`, as the eCFR API answers XML; a PDF has no text extraction in wave 3, so no sentence is quoted from a PDF such as ACL 12-74, and 3.24 saves one but returns no sentence from it)."
+        }
+      ],
+      "decision": "ask",
+      "reason": "adversary disagree: The stated blocker does not hold: the federal sentence verifies with today's `pageText`, and the PDF is the spike's source, not the one step 10 names. Stripping XML tags is harmless hardening and could be kept as an optional change, but it is not needed for live step 10, and the sentence about 3.24 returning nothing from a PDF sits in 3.25's Owns line, where the 3.24 worker will not read it. (Fetched https://www.ecfr.gov/api/versioner/v1/full/2025-01-01/title-7.xml?part=273&section=273.2 (200, content type text/xml) and ran the repo's own `pageText` and `containsQuote` on it: with `text/xml` the tags stay in the text, yet the 30-day sentence of (g)(1) and the seventh-day sentence of (i) are both found (true, true), because neither sentence has a tag inside it. Spec line 333 names W&I 18914 on leginfo for the 3-day rule, not the ACL 12-74 PDF; leginfo returned 403 to a direct fetch, which 2.5's Keenable fallback covers by design.)",
+      "adversary": {
+        "verdict": "disagree",
+        "evidence": "Fetched https://www.ecfr.gov/api/versioner/v1/full/2025-01-01/title-7.xml?part=273&section=273.2 (200, content type text/xml) and ran the repo's own `pageText` and `containsQuote` on it: with `text/xml` the tags stay in the text, yet the 30-day sentence of (g)(1) and the seventh-day sentence of (i) are both found (true, true), because neither sentence has a tag inside it. Spec line 333 names W&I 18914 on leginfo for the 3-day rule, not the ACL 12-74 PDF; leginfo returned 403 to a direct fetch, which 2.5's Keenable fallback covers by design.",
+        "reason": "The stated blocker does not hold: the federal sentence verifies with today's `pageText`, and the PDF is the spike's source, not the one step 10 names. Stripping XML tags is harmless hardening and could be kept as an optional change, but it is not needed for live step 10, and the sentence about 3.24 returning nothing from a PDF sits in 3.25's Owns line, where the 3.24 worker will not read it."
+      }
+    },
+    {
+      "id": "R13",
+      "kind": "defect",
+      "task": "3.23",
+      "category": "schema_migration",
+      "touches": [],
+      "reversible": false,
+      "costCents": 0,
+      "reverseCost": "Before 0003 is applied: edit the draft PR. After: a new migration (0004) replacing the trigger function.",
+      "wouldBeWrongIf": "a summary or the web.process_summary view will ever be built from a fact (today summaries cite only permit, review, issuance and figure sources, never a fact).",
+      "text": "0003's trigger bumps the summary epoch for every quarantine except 'unstored', so quarantining a `fact` (a head or a deadline whose quote is not found, which 3.23 and 3.25 will do for discovered sentences) hides every summary on the site until the next refresh. Summaries are built from permits, reviews, issuances, figures and their sources, never from facts, so a fact quarantine cannot make a summary wrong. Resolution: exclude 'fact' from the bump, in the draft before it is applied.",
+      "evidence": "migrations/0003_hardening.sql: `if (tg_op = 'DELETE' and old.subject_table <> 'unstored') or (tg_op <> 'DELETE' and new.subject_table <> 'unstored') then`; `web.process_summary` depends only on `summary_source` and quarantined sources. Spec Q22: \"any quarantine change hides every summary until the next refresh\".",
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "migrations/0003_hardening.sql",
+          "find": "  if (tg_op = 'DELETE' and old.subject_table <> 'unstored')\n     or (tg_op <> 'DELETE' and new.subject_table <> 'unstored') then",
+          "replace": "  if (tg_op = 'DELETE' and old.subject_table not in ('unstored', 'fact'))\n     or (tg_op <> 'DELETE' and new.subject_table not in ('unstored', 'fact')) then"
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: not reversible by one revert PR or one config edit; category schema_migration is human-only; adversary block: The edit rewrites 0003 \"before it is applied\", but the repository's record says 0003 is already live. The runner would never re-run it, so tests (PGlite, built from the files) would get the new trigger while production keeps the old one, and a test could then assert behaviour production does not have. The substance is sound (no summary is built from a fact), but it has to be a new migration 0004 with `create or replace function`, approved by Edan as a schema change. (PR #39's body (merged 2026-11-16T07:32Z): \"Not in this PR: applying migrations (0001 to 0003 are already live)\"; PR #37 (0003) is merged. /Users/edan/dev/warden/src/lib/db/migrate.ts skips any file whose name is in `schema_migrations`. /Users/edan/dev/warden/.claude/loop.local.json workerNotes: migrations 0001 to 0003 \"are Edan's schema ... add none\". I could not confirm against the live database: a read-only query was denied by the permission system.)",
+      "adversary": {
+        "verdict": "block",
+        "evidence": "PR #39's body (merged 2026-11-16T07:32Z): \"Not in this PR: applying migrations (0001 to 0003 are already live)\"; PR #37 (0003) is merged. /Users/edan/dev/warden/src/lib/db/migrate.ts skips any file whose name is in `schema_migrations`. /Users/edan/dev/warden/.claude/loop.local.json workerNotes: migrations 0001 to 0003 \"are Edan's schema ... add none\". I could not confirm against the live database: a read-only query was denied by the permission system.",
+        "reason": "The edit rewrites 0003 \"before it is applied\", but the repository's record says 0003 is already live. The runner would never re-run it, so tests (PGlite, built from the files) would get the new trigger while production keeps the old one, and a test could then assert behaviour production does not have. The substance is sound (no summary is built from a fact), but it has to be a new migration 0004 with `create or replace function`, approved by Edan as a schema change."
+      }
+    },
+    {
+      "id": "R14",
+      "kind": "defect",
+      "task": "3.28",
+      "category": "schema_migration",
+      "touches": [],
+      "reversible": false,
+      "costCents": 0,
+      "reverseCost": "Before 0003 is applied: edit the draft PR. After: a 0004 migration adding the view.",
+      "wouldBeWrongIf": "discovered pages are also cited by some summary (they are not: summaries cite dataset sources) or Edan prefers the list to come from the JSON file alone with no quarantine check.",
+      "text": "3.28's `OfficialPages` lists discovered pages with fetch time and SHA-256 'from web.summary_source's source fields by sourceId, a source not readable there left out'. `web.summary_source` holds only sources cited by a visible summary, and discovered pages are cited by none, so every page is 'not readable' and the Official pages block is always empty. It also cannot hide a page whose source was quarantined. Resolution: add `web.source` (saved pages with no open quarantine; URL, fetch time, SHA-256, type) to the unapplied 0003 and read it.",
+      "evidence": "migrations/0003_hardening.sql: `create view web.summary_source as select ss.summary_id, src.id as source_id, src.url, ... from public.summary_source ss join web.process_summary s on s.id = ss.summary_id join public.source src ...`. Spec 3.28: \"from `web.summary_source`'s source fields by `sourceId`, a source not readable there left out\"; 3.24 saves pages with `saveSource` and cites them from no summary.",
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "migrations/0003_hardening.sql",
+          "find": "create view web.office_serves as select office_id, jurisdiction_slug from public.office_serves;",
+          "replace": "create view web.office_serves as select office_id, jurisdiction_slug from public.office_serves;\n-- Saved pages with no open quarantine, for pages that list official pages found by discovery (no summary cites them).\ncreate view web.source as\n  select s.id, s.url, s.fetched_at, s.sha256, s.content_type\n  from public.source s\n  where not exists (\n    select 1 from public.quarantine q\n    where q.released_at is null and q.subject_table = 'source' and q.subject_id = s.id::text);"
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "from `web.summary_source`'s source fields by `sourceId`, a source not readable there left out",
+          "replace": "from `web.source` (0003: saved pages with no open quarantine) by `sourceId`, a source not readable there left out"
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: not reversible by one revert PR or one config edit; category schema_migration is human-only; adversary block: Adding `web.source` by editing the applied 0003 would exist only in test databases. The spec edit then tells 3.28 to read a view production does not have, so every test passes and the process page fails in production with a missing relation. Rework as migration 0004 for Edan's approval, or avoid the schema change by listing pages from `web.fact` or from the JSON file alone. The view also shows every saved source's URL to the reader role, which Edan should see before approving. (Same record as R13: PR #39 states 0001 to 0003 are already live, and migrate.ts applies a file only once by name. 0003's `web.summary_source` joins `web.process_summary`, so it lists only sources cited by a visible summary; 3.24 saves discovered pages that no summary cites, so the stated defect is real. `web.fact` already exposes `source_url`, `source_fetched_at` and `source_sha256` for pages behind a published fact. Live database not queried (permission denied).)",
+      "adversary": {
+        "verdict": "block",
+        "evidence": "Same record as R13: PR #39 states 0001 to 0003 are already live, and migrate.ts applies a file only once by name. 0003's `web.summary_source` joins `web.process_summary`, so it lists only sources cited by a visible summary; 3.24 saves discovered pages that no summary cites, so the stated defect is real. `web.fact` already exposes `source_url`, `source_fetched_at` and `source_sha256` for pages behind a published fact. Live database not queried (permission denied).",
+        "reason": "Adding `web.source` by editing the applied 0003 would exist only in test databases. The spec edit then tells 3.28 to read a view production does not have, so every test passes and the process page fails in production with a missing relation. Rework as migration 0004 for Edan's approval, or avoid the schema change by listing pages from `web.fact` or from the JSON file alone. The view also shows every saved source's URL to the reader role, which Edan should see before approving."
+      },
+      "revision": {
+        "id": "R14",
+        "kind": "question",
+        "text": "3.28's `OfficialPages` cannot work as written: it takes each discovered page's fetch time and SHA-256 'from `web.summary_source`'s source fields by `sourceId`, a source not readable there left out'. `web.summary_source` lists only sources cited by a visible summary, and 3.24 saves discovered pages that no summary cites, so every page is 'not readable' and the Official pages block is always empty, with every 3.28 test written against a hand-inserted fixture still passing. This revises the earlier proposal, which edited migration 0003: 0003 is already live (PR #39, merged 16 Nov 2026) and `migrate.ts` skips an applied file by name, so an edit would exist only in test databases, and the change is a schema change that the decision envelope reserves for Edan. Decision for Edan, before 3.28 starts: (A) no schema change: `OfficialPages` lists the pages from the `data/discovery` JSON alone, 3.24 adds `fetchedAt` to each `pages` entry (it already has `sha256`), and 3.28 drops the `web.summary_source` lookup; cost: a page whose source is later quarantined stays listed until the session rewrites the file. (B) a new migration `0004_web_source.sql` that adds `web.source` (saved sources with no open quarantine: id, url, fetched_at, sha256, content_type), approved by Edan like 0003; 3.28 reads it and drops a page it cannot read; cost: the reader role can then read the URL, fetch time and hash of every saved page, including dataset responses, which `web.summary_source` already shows for cited ones and which invariant 2 limits to allowlisted official pages. Recommendation: B if a quarantined page must never be listed (invariant 3's rule), else A. No spec edit is proposed until Edan picks, because the 3.28 text is wrong under both.",
+        "evidence": "migrations/0003_hardening.sql: `create view web.summary_source as select ss.summary_id, src.id as source_id, src.url, src.fetched_at, src.sha256, src.content_type from public.summary_source ss join web.process_summary s on s.id = ss.summary_id join public.source src on src.id = ss.source_id;`. Spec 3.28: \"from `web.summary_source`'s source fields by `sourceId`, a source not readable there left out\". Spec 3.24: pages are saved with `saveSource` and the summaries (3.5 to 3.7) cite only dataset sources. PR #39 body: \"Not in this PR: applying migrations (0001 to 0003 are already live).\" src/lib/db/migrate.ts: `if (done.has(name)) continue;`. Decision envelope: \"Workers stop and ask for: any schema change beyond wave 0's migration\". .claude/loop.local.json workerNotes: migrations 0001 to 0003 are Edan's schema, add none.",
+        "reverseCost": "Option A: one revert PR (spec and 3.24, 3.28 text). Option B: a migration cannot be unapplied; a 0005 migration that drops the view, one small PR.",
+        "wouldBeWrongIf": "a discovered page were also cited by some summary through `summary_source` (3.5 to 3.7 cite only dataset sources, so no), or Edan wants the Official pages block dropped from 3.28 for this wave.",
+        "reversible": false,
+        "costCents": 0,
+        "touches": [
+          "fixed_decision"
+        ],
+        "category": "schema_migration",
+        "task": "3.28",
+        "dependsOn": [],
+        "edits": []
+      }
+    },
+    {
+      "id": "R15",
+      "kind": "defect",
+      "task": "3.24",
+      "category": "dependency",
+      "touches": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR of the spec edits.",
+      "wouldBeWrongIf": "3.10, 3.24 and 3.28 are built by one worker who fixes one shape for both files (they are three parallel tasks, so no).",
+      "text": "Three parallel tasks share two file formats with no shared definition. 3.24 writes `data/discovery/hosts.json` and 3.10's `pendingHosts` reads it 'per slug ... most seen first', but 3.24 only says it 'merges refused hosts', so the per-place counts 3.10 needs are not specified. 3.28 reads `pages` from `data/discovery/<place>/<kind>.json` and needs a fetch time that 3.24's page record (`topic, url, finalUrl, sourceId, sha256`) does not carry. None depends on another. Resolution: fix both shapes in 3.24 and have 3.10 and 3.28 read exactly those.",
+      "evidence": "Spec 3.10: \"`pendingHosts(hosts, isAllowed)` (per slug the hosts `isAllowed` rejects, most seen first)\" and \"from `pendingHosts` of `data/discovery/hosts.json`\". Spec 3.24: \"merges refused hosts into `data/discovery/hosts.json`\" and \"`pages: [{ topic, url, finalUrl, sourceId, sha256 }]`\". Spec 3.28: \"final URL, fetch time and SHA-256\".",
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "merges refused hosts into `data/discovery/hosts.json`,",
+          "replace": "merges refused hosts into `data/discovery/hosts.json` (an object `{ \"<place slug>\": { \"<host>\": <times seen> } }`, the shape 3.10's `pendingHosts` reads),"
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "`pages: [{ topic, url, finalUrl, sourceId, sha256 }]`",
+          "replace": "`pages: [{ topic, url, finalUrl, sourceId, sha256, fetchedAt }]` (`fetchedAt` ISO, the shape 3.28 reads)"
+        }
+      ],
+      "decision": "ask",
+      "reason": "adversary disagree: Half holds. The `hosts.json` shape is undefined between two parallel tasks, and the first edit fixes it. The second half is wrong on the spec's own text: 3.28 takes the fetch time from the database by `sourceId`, so the page record needs no `fetchedAt`, and that edit cannot apply anyway because its find string does not occur. Keep the first edit and drop the second, unless R14 is reworked to list pages from the JSON alone, in which case `fetchedAt` becomes useful and the find needs correcting. (Ran each find string against the spec: the second, `pages: [{ topic, url, finalUrl, sourceId, sha256 }]` with backticks around it, has 0 matches (in line 314 it sits inside a larger backticked object). Spec line 318 (3.28): final URL, fetch time and SHA-256 come from the database's source fields \"by `sourceId`\", not from the JSON file. Spec lines 300 and 314: 3.10's `pendingHosts` reads per-slug counts that 3.24 never defines.)",
+      "adversary": {
+        "verdict": "disagree",
+        "evidence": "Ran each find string against the spec: the second, `pages: [{ topic, url, finalUrl, sourceId, sha256 }]` with backticks around it, has 0 matches (in line 314 it sits inside a larger backticked object). Spec line 318 (3.28): final URL, fetch time and SHA-256 come from the database's source fields \"by `sourceId`\", not from the JSON file. Spec lines 300 and 314: 3.10's `pendingHosts` reads per-slug counts that 3.24 never defines.",
+        "reason": "Half holds. The `hosts.json` shape is undefined between two parallel tasks, and the first edit fixes it. The second half is wrong on the spec's own text: 3.28 takes the fetch time from the database by `sourceId`, so the page record needs no `fetchedAt`, and that edit cannot apply anyway because its find string does not occur. Keep the first edit and drop the second, unless R14 is reworked to list pages from the JSON alone, in which case `fetchedAt` becomes useful and the find needs correcting."
+      }
+    },
+    {
+      "id": "R17",
+      "kind": "defect",
+      "task": "3.1",
+      "category": "privacy",
+      "touches": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR of the catalog flag; the discovery run can be repeated later.",
+      "wouldBeWrongIf": "Edan wants non-SF department heads shown in wave 3 (then a task must create `department` rows for other cities and an approval path must be added).",
+      "text": "Head discovery for `adu-permit` (two searches per place, up to three page fetches each, about 1,080 searches over about 540 places, candidate names committed to git) has no consumer in wave 3. A head shows only in `DepartmentBreakdown`, which renders only for a process with `dept:` summaries, and only SF has review data. No task creates `department` rows for other cities (a `department_head` fact needs a `department_id`), and no task approves a discovered head: human step 12 says approve, but `approved_at` has no script or file that sets it for a facts-folder head. Resolution: set `heads` false for every kind in wave 3 and revisit when a second city has department data.",
+      "evidence": "Spec 3.1: \"`heads` true only for `adu-permit`\"; 3.9: \"when the view has departments, `DepartmentBreakdown`\"; 3.6 reviews summaries from `review_ok` only; 0001: `check (case kind when 'department_head' then department_id is not null ...)`; 3.25: \"a head from a facts folder does not [show] until approved\"; human step 12.",
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "`heads` true only for `adu-permit`;",
+          "replace": "`heads` false for every kind in wave 3 (a head shows only on a process with `dept:` summaries, which only SF has; no task creates `department` rows for other cities or approves a discovered head; the field and the `head-*` queries stay for a later wave);"
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: category privacy is human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "0001 `fact` check: `department_head` requires `department_id is not null`; only SF has `department` rows (0001 seed, 3.21 inserts for SF reviews only). Spec line 299: a head shows only in `DepartmentBreakdown`, which renders only with `dept:` summaries (3.6, from `review_ok`). Spec line 315: a facts-folder head stays unapproved, and no task or script sets `approved_at`. Live APR names: 534 places, so about 1,070 head searches.",
+        "reason": "Confirmed: a head found for any city but SF can be neither stored nor approved nor shown this wave, so the searches and the names committed to git buy nothing. The catalog table at spec line 225 still says \"yes (with heads)\" and needs the same change, and 3.1's \"place search with heads\" test must use a test entry."
+      }
+    },
+    {
+      "id": "R18",
+      "kind": "defect",
+      "task": "3.24",
+      "category": "quota",
+      "touches": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR of the spec edits.",
+      "wouldBeWrongIf": "the number of seeded cities is far below 470 (the APR import creates one city per reporting jurisdiction: 529 minus 58 counties), or the catalog's discoverEach flags change.",
+      "text": "The budget line for discovery does not follow from the catalog. The wave 3 text says about 2,700 credits for '46 rule searches and place searches for five kinds', but 46 is the number of catalog kinds; only the 28 with a rule level get a rule search. Place searches: `adu-permit` (about 540 places, 4 searches with heads), `building-permit` and `records-request` (about 470 cities, 2 each), `calfresh-application` and `medi-cal-renewal` (58 counties, 2 each) come to about 4,300 searches, 3,200 without heads (R17), plus Keenable fetch fallbacks. The run cap is per run, so nothing breaks, but the figure Edan approves is wrong by over half. The Keenable bullet also says '99,999 free credits' while the docs describe a monthly allowance of 100,000 that renews.",
+      "evidence": "Spec Budget: \"the wave 3 searches need about 2,700 (46 rule searches and place searches for five kinds)\"; catalog rows with a rule level other than none: 28 of 46; spec: \"529 reporting jurisdictions, with 58 county names\". F2 spike: \"100,000 requests a month, free. The allowance resets each month.\" (https://docs.keenable.ai/credits.md, retrieved 2026-11-16).",
+      "dependsOn": [
+        "F2"
+      ],
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "- Keenable: 99,999 free credits as of 13 Nov 2026; a search or a fetch costs about 1 credit",
+          "replace": "- Keenable: a free allowance of 100,000 requests a month that renews each month (docs.keenable.ai/credits, read 16 Nov 2026; 99,999 were left on 13 Nov 2026); a search or a fetch costs about 1 credit"
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "the wave 3 searches need about 2,700 (46 rule searches and place searches for five kinds), plus a credit for each Keenable fetch fallback.",
+          "replace": "the wave 3 searches need about 4,300 (28 rule searches, one per catalog kind with a rule level, and place searches for five kinds over about 470 cities and 58 counties: 2 per place, 4 for `adu-permit` with heads; about 3,200 without heads), plus a credit for each Keenable fetch fallback, over several runs under the cap."
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: category quota is human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Counted the catalog table: 28 of 46 kinds have a rule level other than none; five kinds have discoverEach. Live APR jurisdiction names: 477 cities (SF included) and 57 counties. Recomputed: 534 x 4 + 477 x 2 + 477 x 2 + 58 x 2 + 58 x 2 + 28 = 4,304; without heads 3,236. Fetched https://docs.keenable.ai/credits.md: \"100,000 requests a month, free. The allowance resets each month.\"",
+        "reason": "Both corrections check out against the catalog, the real place list and Keenable's own page. Both find strings match once."
+      }
+    },
+    {
+      "id": "R19",
+      "kind": "defect",
+      "task": "3.24",
+      "category": "quota",
+      "touches": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR; the keenable.ts change is additive.",
+      "wouldBeWrongIf": "SDK 0.1.3's search and fetch responses do not carry the `usage` object the docs describe (then 3.24 can only estimate and the cap must say so), or this organization's price is 1 credit per call.",
+      "text": "3.24 enforces the 5,000-credit cap by 'a credit counted per search and per Keenable fetch', but Keenable prices are set per organization and each response reports its real `usage.credits`. The merged client discards it: `search` returns only `response.results`, and `fetchPage` returns the page. If a search costs more than one credit for this organization, the cap spends several times its number. 3.24 does not own `src/lib/keenable.ts`, so a worker cannot fix it. Resolution: 3.24 owns the small change that returns `usage` with the results, counts `usage.credits`, and the session makes one real search and one fetch first and records both costs.",
+      "evidence": "src/lib/keenable.ts: `const response = await withSdk((sdk) => sdk.search(query)); return response.results.slice(0, maxResults);`. F2 spike: \"Prices are set per organization, so read what a call actually cost from the response rather than assuming a flat rate\"; example `usage`: {\"sku\":\"search.pro\",\"amount\":1,\"credits\":1,\"paid\":true,\"credits_remaining\":99120}; no fetch example. Spec 3.24: \"a credit counted per search and per Keenable fetch\".",
+      "dependsOn": [
+        "F2"
+      ],
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "a credit counted per search and per Keenable fetch,",
+          "replace": "credits counted from each response's `usage.credits` (not assumed to be 1),"
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "Owns `src/importers/discover.ts`, `src/importers/discover.test.ts`, `scripts/discover.ts`, `data/discovery/README.md`.",
+          "replace": "Owns `src/importers/discover.ts`, `src/importers/discover.test.ts`, `scripts/discover.ts`, `data/discovery/README.md`, and `src/lib/keenable.ts` with its test (by exception to 1.4 and 1.7: `search` and `fetchPage` also return the response's `usage`)."
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: category quota is human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "/Users/edan/dev/warden/src/lib/keenable.ts: `search` returns `response.results.slice(0, maxResults)`. Fetched https://docs.keenable.ai/credits.md: \"Prices are set per organization, so read what a call actually cost from the response\"; a separate `fetch.live` SKU applies when Keenable has no indexed copy. SDK 0.1.3 types (node_modules/keenable/dist/index.d.ts): `SearchResponse.raw` and `Page.raw` are \"the unmodified JSON object\", so `usage` is reachable; there is no typed `usage`. Callers of `search` and `fetchPage`: src/importers/page-facts.ts (3.25's) and its test.",
+        "reason": "Confirmed, and feasible through `raw`. Two conditions on the edit: the change must be additive, because `page-facts.ts` (3.25, in parallel) uses `search`'s result as an array and a changed return type breaks a file 3.24 does not own; and `src/lib/keenable.test.ts` should be named in backticks, since \"with its test\" is not a path the loop's owned-paths matcher sees."
+      }
+    },
+    {
+      "id": "R20",
+      "kind": "defect",
+      "task": "3.11",
+      "category": "secret",
+      "touches": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR of the workflow and its test.",
+      "wouldBeWrongIf": "the install step is run with --ignore-scripts and no dependency executes code at import time (the spec does not say so).",
+      "text": "The weekly workflow puts `DATABASE_URL` (the owner login), `SUPABASE_SECRET_KEY` and the other secrets in the job-level `env`, so `npm ci` and every dependency install script run with them. A compromised package or install script could read and send them. Only the seven import steps need them. Resolution: set `env` on those steps, never on checkout, setup-node or `npm ci`, and make the test check that.",
+      "evidence": "Spec 3.11: \"job-level `env` `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `SITE_URL` and `REVALIDATE_SECRET` from `${{ secrets.<NAME> }}`\" and the steps \"`npm ci`, then `npm run import:reviews` ...\"; test: \"each secret appears only as `${{ secrets.<NAME> }}` in the job `env`\".",
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "job-level `env` `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `SITE_URL` and `REVALIDATE_SECRET` from",
+          "replace": "step-level `env` (on the import, seed and provenance steps only, never on checkout, Node setup or `npm ci`, so no install script can read a secret) `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `SITE_URL` and `REVALIDATE_SECRET` from"
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "each secret appears only as `${{ secrets.<NAME> }}` in the job `env`;",
+          "replace": "each secret appears only as `${{ secrets.<NAME> }}` in the `env` of a step after `npm ci`;"
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: category secret is human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "/Users/edan/dev/warden/.npmrc holds only `legacy-peer-deps=true` (no ignore-scripts); spec line 301 puts the five secrets in job-level `env` ahead of `npm ci`. /Users/edan/dev/warden/src/lib/env.ts leaves the environment alone when there is no `.env`, so step-level env works in CI.",
+        "reason": "Standard hardening and correct here: install scripts would otherwise run with the owner database login. If R21 is also applied, its final refresh step needs `DATABASE_URL`, `SITE_URL` and `REVALIDATE_SECRET` too, and this edit's \"import, seed and provenance steps only\" would exclude it; word the two together."
+      }
+    },
+    {
+      "id": "R21",
+      "kind": "defect",
+      "task": "3.18",
+      "category": "quota",
+      "touches": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR of the spec edits.",
+      "wouldBeWrongIf": "a full refresh over every process takes seconds (measure it in the 3.T replay), in which case the six runs cost nothing and the edit is only tidier.",
+      "text": "Each of the seven weekly steps is an `npm run` script that ends with a full refresh, so one twice-weekly run refreshes every summary up to six times (each import and the provenance run), each time deleting and reinserting every summary row and its source links in one transaction. That is wasted work on a free database and free Actions minutes, and it multiplies dead rows. Worst case for minutes: 9 runs a month at the 120-minute limit is 1,080 minutes of the roughly 2,000 Linux minutes the Free plan's $12 buys, before `check.yml` runs. Resolution: the workflow's steps set `SKIP_REFRESH=1` and one last step refreshes (which also covers a provenance quarantine).",
+      "evidence": "package.json: every `import:*` and `provenance` ends `&& tsx scripts/refresh-summaries.ts`. Spec 3.11: cron `0 14 * * 1,4`, `timeout-minutes: 120`, 'each its own step'; 3.2: `replaceSummaries` 'deletes every `process_summary` row of those processes'. F6 spike: Free plan includes $12 of compute, Linux 2-core $0.006 a minute (docs.github.com, about billing for GitHub Actions), '$12 / 0.006 = 2,000 minutes' is the reviewer's derivation.",
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "and prints counts only; it runs after every import and provenance run (the `package.json` scripts).",
+          "replace": "and prints counts only, and exits 0 at once when `SKIP_REFRESH` is `1`; it runs after every import and provenance run (the `package.json` scripts) and once at the end of the weekly workflow."
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "each its own step with `if: ${{ !cancelled() }}` so one halted import does not stop the others,",
+          "replace": "each its own step with `SKIP_REFRESH: '1'` in its `env` and `if: ${{ !cancelled() }}` so one halted import does not stop the others, then a last step `npm run refresh-summaries` with the same `if`,"
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "the seven npm steps in order;",
+          "replace": "the seven npm steps in order, each with `SKIP_REFRESH`, then `npm run refresh-summaries`;"
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: category quota is human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "/Users/edan/dev/warden/package.json: five imports and `provenance` each end with a refresh, so one workflow run of the seven steps refreshes six times. Spec line 292: `replaceSummaries` deletes and reinserts every row and link of the processes it covers.",
+        "reason": "The arithmetic holds and the change is cheap. Two costs to state in the edit: any new quarantine of a stored row early in the run now hides every summary until the last step instead of for minutes; and a run cancelled at the 120-minute limit skips the final step under `!cancelled()`, leaving no refresh at all until the next run, so that step wants `if: always()`. The skip should also print a line."
+      }
+    },
+    {
+      "id": "R22",
+      "kind": "question",
+      "task": "3.12",
+      "category": "vendor_plan",
+      "touches": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One Vercel setting (re-enable deploys); no code.",
+      "wouldBeWrongIf": "the Vercel project is not linked to the repository's main branch (then nothing deploys on merge and the pause is unnecessary), or Edan accepts the live site showing errors for the weeks between the page tasks and live step 12.",
+      "text": "Question for Edan: should Vercel's production deploys be paused from the first wave 3 merge until live step 12? A public production URL exists and answers 200. If main deploys to it, the merges of 3.26 to 3.29 replace live pages (`/departments`, `/sources`, the process page) with versions that read `web.*` through `WEB_DATABASE_URL`: before human steps 13 and 14 they throw in production, and after them they show 'No data yet' until the tail's live imports and refresh have run. Step 14 says 'before the tail merges' but the page tasks merge earlier. Recommended default: pause deploys (Ignored Build Step) at the start of the wave, re-enable at live step 12 after the checks pass, and scope `WEB_DATABASE_URL` to Production and Preview.",
+      "evidence": "F1 spike: public production URL https://warden-ecru.vercel.app answers HTTP 200; git link and main deploy not confirmed. Spec 3.29: \"All `dynamic = 'force-dynamic'`, read through `siteDb()`, 'No data yet' without a database outside production and a throw in production\"; human step 14: \"Before the tail merges\".",
+      "dependsOn": [
+        "F1"
+      ],
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "Runs after 0002 and 0003 are applied to the live database.",
+          "replace": "Runs after 0002 and 0003 are applied to the live database. Vercel's production deploys stay paused (Ignored Build Step) from the first merge of this wave until live step 12 has passed, so no reader meets a missing `WEB_DATABASE_URL` or an empty site; Edan re-enables them then."
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: category vendor_plan is human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "PR #37 carries a Vercel bot comment with a preview deployment for the branch (`warden-git-schema-0003-hardening-...vercel.app`), so the project is linked to the repository, which the spike could not confirm. Spec line 302 (3.12): `siteDb()` reads only `WEB_DATABASE_URL` and throws in production without it. /Users/edan/dev/warden/src/lib/stats/process.ts (the live read path until 3.T) queries `review_ok`, `permit` and `fact_ok`, which the `warden_reader` role cannot read.",
+        "reason": "Stronger than stated: once 3.12 merges, production either throws or, with `WEB_DATABASE_URL` set, runs the old read path as a role that gets permission denied on every raw table, until the tail lands. Pausing production deploys is the right default. One wording flaw: live step 12 checks the deployed site, so deploys cannot stay paused \"until step 12 has passed\"; re-enable after step 11 and run step 12 on the fresh deploy. It also needs a row in the human checklist."
+      }
+    },
+    {
+      "id": "R23",
+      "kind": "question",
+      "task": "3.16",
+      "category": "legal",
+      "touches": [
+        "fixed_decision"
+      ],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One edit to src/lib/tiers.ts (fixed decision 6 says cutoffs are a one-file change).",
+      "wouldBeWrongIf": "Edan wants the placeholder cutoffs to stand at launch, or wants separate cutoffs only for share kinds.",
+      "text": "Question for Edan: the home page now leads with a county ranking in which CalFresh counties get letters from the placeholder cutoffs (A is 80 to 89 percent). The state itself flags counties below 90 percent, and the survey records California's federal-fiscal-year figure as 86.35 percent, which the placeholders would grade A. A county the state flags as under standard would carry an A on the featured page of a site that names agencies. Recommended: set the final cutoffs (human step 8) before live step 12, or use cutoffs for legal-deadline shares anchored on the 90 percent flag, and decide whether Medi-Cal renewals use the same set.",
+      "evidence": "docs/research/2026-11-15-process-survey.md row C1: \"CDSS flags counties below 90%\"; row S7: \"USDA application processing timeliness (APT) rates by state (CA FY2025: 86.35%)\"; src/lib/tiers.ts: `{ letter: 'A', min: 80 }`, 'The cutoffs below are placeholders'. Spec human step 8: \"Any time\".",
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "| 8 | Set the final tier cutoffs in `src/lib/tiers.ts`. | Any time | Edan | none |",
+          "replace": "| 8 | Set the final tier cutoffs in `src/lib/tiers.ts`. The home page leads with CalFresh tiers, and the state flags counties under 90%. | Before live step 12 | Edan | none |"
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: touches fixed_decision; category legal is human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Workbook, Sep 2026 30-day shares: Lassen 79.3%, Plumas 86.7%, Merced 88.6% are the three lowest; /Users/edan/dev/warden/src/lib/tiers.ts placeholders put 80 to 89 at A and 70 to 79 at B. /Users/edan/dev/warden/docs/research/2026-11-15-process-survey.md row C1: \"CDSS flags counties below 90%\"; row S7: California's federal figure 86.35%.",
+        "reason": "Concrete on today's data: Plumas and Merced would carry an A on the featured ranking while under the state's 90% line. Moving human step 8 ahead of live step 12 only changes when Edan sets cutoffs he already owns. Find matches once."
+      }
+    },
+    {
+      "id": "R24",
+      "kind": "defect",
+      "task": "3.16",
+      "category": "correctness",
+      "touches": [
+        "fixed_decision"
+      ],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR of the spec edit.",
+      "wouldBeWrongIf": "Edan accepts a tier on a share whose rule line shows 'Pending source', as long as the catalog marks the measure legal.",
+      "text": "3.16 gives a tier whenever the catalog flag `legalMeasure` is true and the headline is ranked. The flag is a hardcoded boolean, but the rule that justifies the tier comes only from a verified fact, and may be missing: the CalFresh rule needs Q17 and a federal quote, and the Medi-Cal renewal rule is listed in the survey as 'W&I 14102.5 per DHCS' with no verified text. The card would then show a letter beside 'Pending source' for the legal rule, a deadline 'set by law' with no source behind it. Resolution: a tier needs a non-null rule.",
+      "evidence": "Spec 3.16: \"`tier` is `tierFor(share)` (fixed decision 6) only when `spec.legalMeasure` and ranked, else `null`\"; catalog 3.1: \"`legalMeasure` true only for `calfresh-application` and `medi-cal-renewal`\"; spec: \"A card's legal rule comes only from a verified fact\"; survey row C3: \"Renewal processing timeframe (W&I 14102.5 per DHCS)\".",
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "`tier` is `tierFor(share)` (fixed decision 6) only when `spec.legalMeasure` and ranked, else `null`;",
+          "replace": "`tier` is `tierFor(share)` (fixed decision 6) only when `spec.legalMeasure`, ranked and `rule` is not `null` (a verified legal deadline fact), else `null`;"
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: touches fixed_decision",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Spec line 306: `tier` needs only `spec.legalMeasure` and ranked; line 207: a card's legal rule comes only from a verified fact. Process survey line 188 on Medi-Cal renewals: \"Cites W&I 14102.5 as the reporting mandate\" (a reporting mandate, not a deadline); Q17: without the federal domains CalFresh's rule shows \"Pending source\".",
+        "reason": "A letter grade beside \"Pending source\" claims a legal standard the site has not sourced, and for Medi-Cal renewals the survey found no deadline text at all. Requiring a non-null rule is consistent with fixed decision 6. Consequence to accept: if Q17 is answered no, the featured CalFresh ranking has no tier stamps, and the 3.16 and 3.T tests must seed a rule fact."
+      }
+    },
+    {
+      "id": "R25",
+      "kind": "question",
+      "task": "3.1",
+      "category": "legal",
+      "touches": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR of the label text.",
+      "wouldBeWrongIf": "CDSS's workbook or dashboard defines the two columns in text the session can quote (the Updates sheet or the CF 296 instructions), which closes this.",
+      "text": "Question for Edan (the session can close it by quoting CDSS): what do CDSS's two timeliness columns measure? Q15 covers only the expedited column. The 30-day column is also unquoted, yet the catalog labels it 'decided within 30 days' and the home page ranks counties on it. The spike found the expedited standard is 3 calendar days in California (W&I 18914, ACL 12-74) and 7 in federal rules (7 CFR 273.2(i)), and the DFA 296X report counts 1-3 and 4-7 day issuance separately, so 'expedited on time' could mean either. Also the catalog's `secondLabel` omits the '(CDSS measure)' that Q15's default requires. Recommended: no label states a day count or a rule for either column until CDSS's definition is quoted from a saved page.",
+      "evidence": "F4 spike: \"California's standard for ES is three calendar days ... federal standard for ES is seven days, per 7 CFR 273.2(i)(3)(i)\" (DFA 296X 7/13); \"I did not find a CDSS column titled exactly 'Timeliness Expedited Services Percentage' ... so I cannot say which standard that column measures.\" Spec Q15 default: \"expedited on time (CDSS measure)\"; 3.1: `secondLabel: 'expedited on time'`, `label: 'decided within 30 days'`.",
+      "dependsOn": [
+        "F4"
+      ],
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "`secondLabel: 'expedited on time'`",
+          "replace": "`secondLabel: 'expedited on time (CDSS measure)'`"
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "until the session quotes CDSS's definition from the CF 296 instructions; then the label names the rule.",
+          "replace": "until the session quotes CDSS's definition of this column and of the 30-day column from a saved CDSS page (the workbook's `Updates` sheet, the dashboard page or the CF 296 instructions); then the labels name the rule."
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: category legal is human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Ran the find strings: the first, `secondLabel: 'expedited on time'` wrapped in backticks, has 0 matches (line 291 has it inside a larger backticked object); the second matches once. Workbook sheet Updates calls the columns only \"30-Day Timeliness\" and \"ES Timeliness\" and links \"Dashboard Definitions, Sources, and Methodology\"; it marks the newest month (Sep 2026) \"Preliminary\". Fetched eCFR 273.2(i): \"not later than the seventh calendar day\". Spec Q15 default: \"expedited on time (CDSS measure)\".",
+        "reason": "The question holds: neither column is defined in anything the session has quoted, and the catalog label drops the qualifier Q15's default requires. The first edit will not apply as written; its find must drop the backticks. The definitions document linked from the Updates sheet is the likeliest place to close this, and the newest month being preliminary belongs in the same label decision."
+      }
+    },
+    {
+      "id": "R26",
+      "kind": "question",
+      "task": "3.12",
+      "category": "vendor_plan",
+      "touches": [],
+      "reversible": true,
+      "costCents": 2000,
+      "reverseCost": "A plan change in Vercel (list price of Pro believed to be 20 USD a month per seat, unverified); no code.",
+      "wouldBeWrongIf": "Vercel's terms allow a free-plan site run by an individual for a public civic purpose and the plan's duration and cache-item limits hold for the heaviest page.",
+      "text": "Question for Edan: is the site allowed on Vercel's free (Hobby) plan, and do its limits fit? The spike could not settle Hobby's terms (which restrict the plan to non-commercial use) or whether its function duration and invocation limits hold for `force-dynamic` pages whose cache misses run several queries against a 10-second database timeout. Also unchecked: whether Next's `unstable_cache` refuses an item above a size limit, which matters for `loadPlaceView('ca')` and the 470-city rankings. Recommended: Edan reads Vercel's terms for non-commercial use once; live step 12 adds a timed first request after a refresh for the home page, `/rankings`, `/processes/adu-permit` and `/places/ca`, and fails above 5 seconds or if any response is not cached on the second request.",
+      "evidence": "F8 spike: \"Not settled from sources\" (vercel.com/legal/terms). Spec 3.12: `webCached` with `revalidate: 86400`; human step 13: `statement_timeout = '10s'`; live step 12: \"a second request to the home page within the hour makes no database query\".",
+      "dependsOn": [
+        "F8",
+        "F11"
+      ],
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "a second request to the home page within the hour makes no database query (the pooler's statement count);",
+          "replace": "a first request after a refresh answers in under 5 seconds for the home page, `/rankings`, `/processes/adu-permit` and `/places/ca`, and a second request to each within the hour makes no database query (the pooler's statement count);"
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: cost 2000 cents is over the cap of 0 cents; category vendor_plan is human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Fetched https://vercel.com/docs/limits/fair-use-guidelines: Hobby guideline of 1,000,000 function invocations and 4 hours of active CPU a month; the page's fair-use examples did not render, so the non-commercial question stays unread. Spec line 302: `webCached` with `revalidate: 86400`; human step 13: `statement_timeout = '10s'`.",
+        "reason": "A fair question that only Edan can close on the terms, and the added timing check in live step 12 is a cheap way to find a cache-size or duration limit before readers do. Find matches once."
+      }
+    },
+    {
+      "id": "R27",
+      "kind": "question",
+      "task": "3.11",
+      "category": "vendor_plan",
+      "touches": [],
+      "reversible": true,
+      "costCents": 2500,
+      "reverseCost": "A plan change in Supabase (Pro is 25 USD a month per the spec); no code.",
+      "wouldBeWrongIf": "Supabase counts a scheduled import's queries through the pooler as user database activity, or Edan accepts a pause (the spec's R10 default).",
+      "text": "Question for Edan: does the free-tier pause still stay a watched risk now that the site is the featured product? Wave 3 leans on 'twice weekly so the free Supabase project never sits quiet for 7 days', but the docs say a project is inactive without 'sufficient user database activity' and that 'a few user requests to the database each day over the previous week is enough'; they do not mention scheduled jobs, and two busy days a week is not a few requests a day. With the site cached for a day, visitor traffic may add a query a day at best. A paused project takes the whole site down. Recommended: at launch either pay for Pro or add a daily one-statement keep-alive and check the dashboard's pause countdown after the first week; do not rely on the cron alone.",
+      "evidence": "F5 spike: \"Typically a few user requests to the database each day over the previous week is enough\"; listed activity: \"visiting the project in the Dashboard\", \"making API calls to your project\", \"sending requests via your connected application\"; \"The page does not mention scheduled jobs or cron.\" Spec 3.11: \"twice weekly so the free Supabase project never sits quiet for 7 days, R10\"; R10 decided: \"stay free for v1 and watch for Supabase's warning email\".",
+      "dependsOn": [
+        "F5"
+      ],
+      "edits": [],
+      "decision": "ask",
+      "reason": "envelope: cost 2500 cents is over the cap of 0 cents; category vendor_plan is human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Fetched https://supabase.com/docs/guides/platform/free-project-pausing: a Free project \"is considered inactive if it does not receive sufficient user database activity over the past week\"; \"a few user requests to the database each day\" is typically enough; no mention of scheduled jobs. Spec line 301 relies on a twice-weekly cron for exactly this.",
+        "reason": "The spec's claim that two runs a week keep the project awake is not supported by the page it rests on, and after wave 3 the cached site adds almost no queries. The question stands for Edan; it carries no edit."
+      }
+    },
+    {
+      "id": "R28",
+      "kind": "defect",
+      "task": "3.18",
+      "category": "quota",
+      "touches": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR of the spec edits; the live size check is a read.",
+      "wouldBeWrongIf": "the live count after the first APR refresh shows summary_source under a few hundred thousand rows, or Supabase counts index bytes differently from the estimate (F5 leaves that open).",
+      "text": "Q13's database estimate ('under 5 MB for summaries') leaves out `summary_source`: one row per summary and per saved page the summary cites. The statewide APR import is about 133 pages, and a city's permits are spread over many of them, so a summary can cite tens of pages. With roughly 45,000 summary rows, that is on the order of 10^5 to 10^6 link rows plus two indexes, tens of MB, and every refresh deletes and reinserts all of it (dead rows count until vacuum). The free plan allows 500 MB including indexes. Also Budget says imports run weekly, saving about 75 MB a year, but 3.11 runs twice a week (about 150 MB a year of the 1 GB of storage). Resolution: state both, add a size stop to live step 3 and make the 3.18 test count links.",
+      "evidence": "Spec Q13: \"plus under 5 MB for summaries, CalFresh and renewals\"; 3.5 \"`sourceIds` are the distinct `source_id`s of the issuance and permit rows it counted\"; 3.2 `replaceSummaries` 'inserts ... their `summary_source` links'; 3.19 spike: 'Applications since 2021: 244,118 rows in Table A; 419,683 in Table A2' at 5,000 rows a page. Spec Budget: \"Imports run weekly; ... about 75 MB a year.\" vs 3.11 cron `0 14 * * 1,4`. F5 spike: \"The docs do not say how index size counts against the free 500 MB quota\".",
+      "dependsOn": [
+        "F5"
+      ],
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "plus under 5 MB for summaries, CalFresh and renewals (estimate, checked in live step 3).",
+          "replace": "plus the `process_summary` rows and their `summary_source` links (one link per summary and saved page it cites; the reviewer's estimate is tens of MB, and every refresh rewrites them), plus CalFresh and renewals under 5 MB (estimate). Live step 3 reports the database size and the `summary_source` row count and stops above 350 MB, for Edan to decide on Supabase Pro."
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "Imports run weekly; a full SF ADU import saves about 1.4 MB gzipped (measured 15 Nov 2026), about 75 MB a year.",
+          "replace": "Imports run twice a week (3.11); a full SF ADU import saves about 1.4 MB gzipped (measured 15 Nov 2026), about 150 MB a year of the 1 GB of storage, plus the APR pages and the CalFresh workbook (about 12.5 MB, saved again only when CDSS changes it)."
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: category quota is human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "0003: `summary_source` has one row per summary and source plus a second index. 244,118 and 419,683 rows at 5,000 a page is 49 + 84 = 133 pages. Spec line 301: cron `0 14 * * 1,4` is twice a week, while Budget line 33 says weekly; 1.4 MB x 104 is about 146 MB. Workbook Updates sheet shows CDSS revising the file about monthly.",
+        "reason": "The link table is missing from the estimate and the weekly figure is stale; both corrections follow from the spec and schema. The 350 MB stop is a sensible tripwire. One understatement: the 12.5 MB workbook changes about monthly, so it adds roughly 150 MB a year to Storage on its own."
+      }
+    },
+    {
+      "id": "R29",
+      "kind": "question",
+      "task": "3.19",
+      "category": "legal",
+      "touches": [],
+      "reversible": false,
+      "costCents": 0,
+      "reverseCost": "Deleting saved copies and facts built on a source whose terms forbid storing or republishing; the site pages built on them go with them.",
+      "wouldBeWrongIf": "the data.ca.gov and data.chhs.ca.gov dataset licences and Keenable's terms are read and allow saving responses and republishing derived figures and short quotes (the spike read none of them).",
+      "text": "Question for Edan: have the terms for the new sources been read? Wave 3 saves full copies of data.ca.gov (HCD APR), data.chhs.ca.gov (DHCS) and cdss.ca.gov responses, republishes derived figures and quotes, saves pages found through Keenable, and runs discovery at machine speed. The spike read only cdss.ca.gov's conditions ('public domain, unless otherwise indicated') and DataSF's licence. The CHHS terms returned 403, data.ca.gov's terms returned 404, and Keenable's terms page returned 404; a search snippet suggests a clause on bulk data extraction and one on data usage and attribution. The decision envelope makes a new source domain a stop, but no step reads the terms. Recommended: Edan or the session reads the per-dataset licence of the two APR tables and the DHCS resource, and Keenable's terms, before the first live import and discovery run; a page saved through Keenable stays labelled `fetched_via keenable`.",
+      "evidence": "F7 spike: data.chhs.ca.gov terms \"returned HTTP 403\"; data.ca.gov terms-of-use \"returned 404\"; Keenable terms \"returned 404\"; \"A search snippet indicates ... a Section 6.2 on prohibited activities that mentions bulk data extraction.\" Spec 3.24: hundreds of searches and fetches per run; 0001 `fetched_via ... 'keenable'`.",
+      "dependsOn": [
+        "F7"
+      ],
+      "edits": [],
+      "decision": "ask",
+      "reason": "envelope: not reversible by one revert PR or one config edit; category legal is human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "data.ca.gov `package_show` for the APR dataset: `rights: \"No restrictions on public use\"`, licence not specified. data.chhs.ca.gov `package_show` for Medi-Cal renewals: `data_license: \"Terms of Use\"`, with a note that counts are preliminary and subject to change. Keenable's terms not read.",
+        "reason": "Half of this can be closed now: the APR dataset states no restriction on public use. The DHCS dataset points to the CHHS Terms of Use, which nobody has read, and Keenable's terms are still unread, so the question stands for those two before the first live run."
+      }
+    },
+    {
+      "id": "R30",
+      "kind": "defect",
+      "task": "3.11",
+      "category": "secret",
+      "touches": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR plus removing a secret; the CA certificate is public.",
+      "wouldBeWrongIf": "Edan accepts unverified TLS for the owner connection from CI (the file's own comment calls the check a later one-line change).",
+      "text": "Wave 3 adds the first unattended job that sends the owner `DATABASE_URL` (full read-write, password in the connection string) from GitHub's runners to the Supabase pooler, and `DB_SSL` encrypts but does not verify the server certificate. A network attacker between a runner and the pooler could present any certificate and read the password. The code comment already says pinning the provider's CA is 'a one-line change once Edan supplies it', but no human step asks for it. Resolution: add a human step to download Supabase's CA certificate and make the importers and the site verify it.",
+      "evidence": "src/lib/db/pool.ts: \"Encrypted, certificate not verified: the pooler's certificate chain is not one Node trusts by default ... Pinning the provider's CA is a one-line change here once Edan supplies it.\" Spec 3.11: job runs `npm run import:*` with `DATABASE_URL` from secrets.",
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "| 16 | Name the departments a reviews import lists as `newDepartments` (if any). | After any reviews import that lists one | Edan | none |",
+          "replace": "| 16 | Name the departments a reviews import lists as `newDepartments` (if any). | After any reviews import that lists one | Edan | none |\n| 17 | Download Supabase's CA certificate (project settings, database) and give it to the session, which makes `DB_SSL` verify it for the importers and the site before the weekly workflow is enabled. | Before step 9 | Edan, 5 minutes | none |"
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: category secret is human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "/Users/edan/dev/warden/src/lib/db/ssl.ts: `DB_SSL = { rejectUnauthorized: false }`, with the comment that pinning Supabase's CA is the next step; every script and the pool use it. Spec 3.11 sends the owner `DATABASE_URL` from GitHub's runners.",
+        "reason": "Confirmed in code, and the code already names the fix. A human step is the missing piece. `ssl.ts` is session-owned, so the change is a session PR, and /Users/edan/dev/warden/test/db-tls.test.ts will need updating with it."
+      }
+    },
+    {
+      "id": "R32",
+      "kind": "defect",
+      "task": "3.18",
+      "category": "correctness",
+      "touches": [],
+      "reversible": true,
+      "costCents": 0,
+      "reverseCost": "One revert PR of the spec edits.",
+      "wouldBeWrongIf": "Edan wants each place judged on its own last 12 months of data with the dates shown beside every ranking row.",
+      "text": "Each APR process gets its own `asOf`, the latest permit or application date of that process. APR data is annual and jurisdictions file at different times, so one city's '12m' window ends in December 2025 and another's in March 2026. The ranking then compares medians over different periods under one label, and the ranking table does not show each row's window. Resolution: one `asOf` per kind for the whole import, so one ranking compares one window; a place with no case in it has no row (R3).",
+      "evidence": "Spec Summary measures: \"A window ends at the data's own date (`windowEnd`): SF's `data_as_of`, the latest APR permit or application date, or a figure's latest `period_end`\"; 3.18: \"`asOf` the latest permit or application date of the process\"; 3.27: ranking table lists 'rank, place, the figure ... the count' with no window.",
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "`asOf` the latest permit or application date of the process;",
+          "replace": "`asOf` the latest permit or application date of the kind's whole import, one for every process of the kind, so a ranking compares one window;"
+        },
+        {
+          "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+          "find": "the latest APR permit or application date, or a figure's latest `period_end`.",
+          "replace": "the latest APR permit or application date of the whole import (one `asOf` for every process of the kind), or a figure's latest `period_end`."
+        }
+      ],
+      "decision": "ask",
+      "reason": "adversary block: The diagnosis is right, but the fix sets one `asOf` for a whole kind to the latest date in the import, and the real data has typo dates centuries ahead. For `adu-permit` that puts every city's 6 and 12 month windows in the year 2819, emptying the statewide ranking that the home page features; today the same typo damages only the one jurisdiction. It must be reworked before any form is applied: anchor the shared `asOf` to the end of the latest report year, and reject dates after the fetch date in 3.3. Those rows also produce waits of tens of thousands of days in the current spec. (Live data.ca.gov queries: `MAX(APP_SUBMIT_DT)` in Table A is 2819-03-01 and `MAX(BP_ISSUE_DT1)` in Table A2 is 2109-11-13. Rows dated after 2026-11-16 by unit category: Table A has ADU 4 (max 2819-03-01), SFD 5 (max 2109-12-30), 5+ 2; Table A2 has SFD 5, ADU 3, 2 to 4 1. Also 217 application rows and 138 permit rows dated in 2026 although the latest report year is 2025. Spec line 293: the parsers reject only \"a date that is not a real YYYY-MM-DD\", so these pass.)",
+      "adversary": {
+        "verdict": "block",
+        "evidence": "Live data.ca.gov queries: `MAX(APP_SUBMIT_DT)` in Table A is 2819-03-01 and `MAX(BP_ISSUE_DT1)` in Table A2 is 2109-11-13. Rows dated after 2026-11-16 by unit category: Table A has ADU 4 (max 2819-03-01), SFD 5 (max 2109-12-30), 5+ 2; Table A2 has SFD 5, ADU 3, 2 to 4 1. Also 217 application rows and 138 permit rows dated in 2026 although the latest report year is 2025. Spec line 293: the parsers reject only \"a date that is not a real YYYY-MM-DD\", so these pass.",
+        "reason": "The diagnosis is right, but the fix sets one `asOf` for a whole kind to the latest date in the import, and the real data has typo dates centuries ahead. For `adu-permit` that puts every city's 6 and 12 month windows in the year 2819, emptying the statewide ranking that the home page features; today the same typo damages only the one jurisdiction. It must be reworked before any form is applied: anchor the shared `asOf` to the end of the latest report year, and reject dates after the fetch date in 3.3. Those rows also produce waits of tens of thousands of days in the current spec."
+      },
+      "revision": {
+        "id": "R32",
+        "kind": "defect",
+        "text": "APR dates are not validated against the day of the fetch, and 3.18 feeds the latest one into a window. The spec rejects only 'a date that is not a real YYYY-MM-DD' (3.3), 3.18 sets each APR process's `asOf` to 'the latest permit or application date of the process', and every 6, 12 month and `all` window of that process ends there. The live data holds dates years ahead (a typo): one stray application dated in 2028 or a permit in 2029 moves that jurisdiction's window years past its data, so its 6 and 12 month windows hold no case and the place shows no figure, with nothing in the import counts to say why. Resolution (a narrow fix inside existing tasks, no new field, no schema change): 3.3's `parseApplication` and `parsePermit` take `today` (an ISO date, the day of the fetch, passed from `now` in 3.19) and return `{ error }` for a date after it, so the row goes to quarantine as `parse_error` (3.19 already does this for an `error` row) and never reaches `asOf`. Known cost: a permit whose permit date is rejected counts as still waiting, not issued, until upstream corrects it; the `rejected` count in 3.19's result shows how many. Not changed here: places keep their own `asOf`, so one ranking can compare medians over windows that end in different months (the ranking table does not show each row's window). Making them share one `asOf` per kind needs the report year (the `YEAR` field is parsed but not stored) or a reviewed date in the data, and showing `windowEnd` in the ranking needs a field on `Headline` (session-owned contract); both are for Edan to choose, and anchoring a shared `asOf` to the maximum date in the import is wrong for the reason above.",
+        "evidence": "Live query of data.ca.gov datastore_search_sql, 16 Nov 2026: applications table (`c78b769d-...`) `SELECT \"YEAR\", COUNT(*), MAX(\"APP_SUBMIT_DT\") ... GROUP BY \"YEAR\"` gives YEAR 2025 max 2026-12-16, YEAR 2024 max 2028-09-26, YEAR 2021 max 2031-03-04; 11 application rows are dated after 2026-11-16. Permits table (`fe505d9b-...`): YEAR 2025 max 2029-08-11, YEAR 2024 max 2028-04-11. The latest ADU permit date per jurisdiction (dates up to 2026-11-16) spans 2025-06 to 2026-10 (288 jurisdictions end in 2025-12, 43 in 2025-11, 36 in 2025-10, 17 in 2025-09), so a per-process `asOf` really does differ between places. Spec 3.3: parsers return `{ error }` for \"a date that is not a real `YYYY-MM-DD`\"; 3.18: \"`asOf` the latest permit or application date of the process\".",
+        "reverseCost": "One revert PR of the spec edits (the tasks are not yet built).",
+        "wouldBeWrongIf": "data.ca.gov corrects those dates before the import (then the rejection removes nothing and costs nothing), or Edan wants a future-dated row kept and clamped to the fetch date instead of quarantined.",
+        "reversible": true,
+        "costCents": 0,
+        "touches": [],
+        "category": "data_quality",
+        "task": "3.3",
+        "dependsOn": [],
+        "edits": [
+          {
+            "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+            "find": "`parseApplication(row)` (`{ jurisName",
+            "replace": "`parseApplication(row, today)` (`{ jurisName"
+          },
+          {
+            "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+            "find": "`parsePermit(row)` (`{ jurisName",
+            "replace": "`parsePermit(row, today)` (`{ jurisName"
+          },
+          {
+            "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+            "find": "or a date that is not a real `YYYY-MM-DD`",
+            "replace": "or a date that is not a real `YYYY-MM-DD` or is after `today` (an ISO date the caller passes: the day of the fetch; a date equal to it passes)"
+          },
+          {
+            "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+            "find": "each skip and error case; `countySlug`",
+            "replace": "each skip and error case, including a date after `today` (an application dated 2819-03-01 and a permit dated 2109-12-30 are errors; one dated `today` parses); `countySlug`"
+          },
+          {
+            "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+            "find": "its rows parsed with `parseApplication` or `parsePermit`",
+            "replace": "its rows parsed with `parseApplication` or `parsePermit` (`today` the date of `now`)"
+          }
+        ]
+      }
+    }
+  ],
+  "spikes": [
+    {
+      "id": "F1",
+      "fact": "Is the Vercel project already connected to the warden repository and deploying main to a production URL that people can open? If so, merging 3.12 before the tail breaks the live site (R6); if not, the ordering risk is only for Edan's own previews.",
+      "status": "answered",
+      "answer": "Partly settled. Public production URL exists at https://warden-ecru.vercel.app (HTTP 200). Git link to the repo and main deploy not confirmed by any source.",
+      "source": "https://warden-ecru.vercel.app/ ; vercel project inspect warden",
+      "retrieved": "2026-11-16",
+      "error": ""
+    },
+    {
+      "id": "F2",
+      "fact": "Keenable: are the 99,999 credits a one-time grant or a monthly allowance, and what do one search and one page fetch cost for this organization (`usage.credits` of a real response)? Does a fetch that the direct fetch already answered cost anything?",
+      "status": "answered",
+      "answer": "Not settled. The source docs do not mention a \"99,999 credits\" grant at all. The docs describe a recurring allowance: \"100,000 requests a month, free. The allowance resets each month.\" Per the docs, \"search and fetch each cost one credit\" against that allowance, but the SKU table (search.realtime, search.pro, fetch, fetch.live) gives no per-SKU credit values, and the docs say: \"Prices are set per organization, so read what a call actually cost from the response rather than assuming a flat rate.\" The only example is a search.pro usage object: {\"sku\": \"search.pro\", \"amount\": 1, \"credits\": 1, \"paid\": true, \"credits_remaining\": 99120}. No fetch usage.credits example is given, so the per-organization cost of one fetch is not settled. On whether a fetch answered by the direct fetch costs anything: the docs do not address this directly. They define fetch as \"A fetch of Keenable's indexed copy of a page\" and fetch.live as \"A fetch made live from the source: with live=true, or when Keenable has no indexed copy,\" and state that \"failed calls, which are never billed\" and calls \"that aren't billed in credits report no usage.\" Whether a direct-fetch answer is billed is not stated. Caveat: the earlier web search also found no 99,999 figure. No real organization response was probed (no read-only API call was made), and the local repos contain no Keenable reference beyond warden review/loop docs.",
+      "source": "https://docs.keenable.ai/credits.md (also https://docs.keenable.ai/credits, the same page)",
+      "retrieved": "2026-11-16",
+      "error": ""
+    },
+    {
+      "id": "F3",
+      "fact": "In CDSS's CalFresh dashboard workbook (sheet `Monthly`), which columns does CDSS blank for small counties or months: the percentage columns, `Applications Received`, or both? What do the `County` and `FIPS` cells hold on the `Statewide` row?",
+      "status": "answered",
+      "answer": "Both kinds of column are blanked, and the blanks are not limited to small counties. The workbook's own note in A1 says \"certain cells are blank to meet de-identification guidelines.\" Blanks appear in the percentage columns and in `Applications Received`.\n\nCounts from the downloaded Monthly sheet (8,932 county-month rows, 154 Statewide rows):\n- AF Timeliness 30 day Percentage: 68 county rows blank.\n- AG Timeliness Expedited Services Percentage: 1,808 county rows blank.\n- AK Negative Error Rate on Completed Cases and AL Negative Error Rate: 1,856 county rows blank each.\n- AM Active Error Rate: 1,276 county rows blank.\n- AN Applications Received and AO Online Applications Received: 1,843 county rows blank each, always together in the same rows.\n- Non-percentage control columns for comparison: R CalFresh Households and S CalFresh Persons, 58 county rows blank each.\n\nBlank counts were also high for large counties, e.g. Alameda had 48 blank AN months and San Diego had 37, so the pattern is not small-county only. Blank AN rows fall mostly in 2014-2016, and the dashboard page says county data may be missing \"for some variables or months due to data validation concerns.\"\n\nThe percentage blanks do not follow one pattern. In 1,785 county rows where AN is blank, some percentage column is still present, and in 1,211 rows where some percentage column is blank, AN is present.\n\nStatewide row: the `County` cell holds the text \"Statewide\" (154 of 154 rows). The `FIPS` cell is empty (no value in column B on all 154 Statewide rows). Statewide rows also have some blanks: AN is blank on 31 of them, and AG, AK, AL, AM and AO are blank on 22 to 32 each.\n\nThe source does not say which exact rule or threshold causes these blanks, so the small-county question is not settled by it.",
+      "source": "https://www.cdss.ca.gov/Portals/9/Additional-Resources/Research-and-Data/DSSDS/Master%20data%20PUBLIC%20ACCESSIBLE.xlsx (sheet \"Monthly\", linked from https://www.cdss.ca.gov/inforesources/data-portal/research-and-data/calfresh-data-dashboard, downloaded with a read-only curl GET and parsed locally; the dashboard page says \"County data may be missing for some variables or months due to data validation concerns, please see the Updates tab in the Raw Data Excel file for details\")",
+      "retrieved": "2026-11-16",
+      "error": ""
+    },
+    {
+      "id": "F4",
+      "fact": "What is the exact legal citation for California's 3-calendar-day expedited CalFresh rule (Welfare and Institutions Code 18912, 18914, a CDSS regulation or an ACL letter), is its text on an allowlisted ca.gov or leginfo page, and does CDSS's column `Timeliness Expedited Services Percentage` measure the 3-day or the federal 7-day standard?",
+      "status": "answered",
+      "answer": "(a) Citation: Welfare and Institutions Code section 18914, as amended by AB 1359 (Chapter 468, Statutes of 2012), effective January 1, 2013. ACL 12-74 (December 24, 2012) states: \"applicants determined to be entitled to ES will continue to receive CalFresh benefits no later than the third calendar day following the date the application was filed. For purposes of this section, a weekend (Saturday and Sunday) shall be considered one calendar day. However, if the third calendar day is a nonworking day or holiday, the County Welfare Department (CWD) shall make benefits available on or before the working day immediately proceeing the nonworking day.\" ACL 12-74 cites 7 CFR 273.2(i) and MPP 63-301.51 and related sections. I did not verify the text of W&I 18912 itself. (b) leginfo.legislature.ca.gov section 18914 returned HTTP 403 to my fetch, so I could not read the statute text from leginfo. ACL 12-74 is on cdss.ca.gov, a ca.gov domain, and I read it. (c) The DFA 296X form (7/13), \"CalFresh Expedited Service Quarterly Statistical Report\", defines ES as: \"California's standard for ES is three calendar days due to provision of the Welfare Rights League v. McMahon settlement; federal standard for ES is seven days, per 7 CFR 273.2(i)(3)(i).\" Its Item 4a1 counts benefits issued in 1-3 days and Item 4a2 counts 4-7 days. I did not find a CDSS column titled exactly \"Timeliness Expedited Services Percentage\" in the CDSS dashboard or its data files, so I cannot say which standard that column measures. The CDSS data dashboard is published as yearly .xlsx files, which I did not open. Not settled: the exact column definition.",
+      "source": "https://www.cdss.ca.gov/lettersnotices/entres/getinfo/acl/2012/12-74.pdf (ACL 12-74, read via WebFetch and pdftotext); https://www.cdss.ca.gov/research/res/pdf/blankforms/DFA296Xv7_13.pdf (DFA 296X 7/13, read via WebFetch and pdftotext). Attempted https://leginfo.legislature.ca.gov/faces/codes_displaySection.xhtml?lawCode=WIC&sectionNum=18914 (HTTP 403). Column not located; no source for it.",
+      "retrieved": "2026-11-15",
+      "error": ""
+    },
+    {
+      "id": "F5",
+      "fact": "Supabase free plan: the per-object upload limit (believed 50 MB), whether a twice-weekly scheduled import counts as activity that prevents the 7-day pause, the 500 MB database limit including indexes for about 244,000 APR permits, and any statement or transaction time limit on the session pooler that one 660,000-row import transaction could exceed.",
+      "status": "answered",
+      "answer": "(a) Settled: the Supabase pricing page's Free plan Storage table lists \"Max file upload size\" as 50 MB. Storage total on Free is 1 GB. (b) Not settled as yes/no. The free-plan-pausing docs say: \"A Free plan project is considered inactive if it does not receive sufficient user database activity\"; \"Typically a few user requests to the database each day over the previous week is enough\"; listed ways to generate activity are visiting the project in the Dashboard, \"making API calls to your project\", and \"sending requests via your connected application\". The page does not mention scheduled jobs or cron. The pausing rule is stated as \"Free projects are paused after 1 week of inactivity\" (pricing page) and \"low activity in a 7-day period\" (going-into-prod page). A search result cites a Supabase GitHub discussion (#13121), a community reply, saying the check looks at database activity such as queries and transactions rather than connections; it does not address scheduled imports or pg_cron. (c) Partly settled: the pricing page lists \"500 MB database size\" on Free. The database-size docs say \"Database size is consumed primarily by your data, indexes, and materialized views\", so indexes do contribute. The docs do not say how index size counts against the free 500 MB quota, and state the 500 MB database size quota \"does not trigger\" read-only mode and is \"a billing quota for your organization\". No source gave per-row size, so the 244,000-permit fit is not settled. (d) Not settled: the connecting-to-postgres and pooling-and-limits pages state no statement_timeout, transaction time limit, or query timeout for the session pooler (port 5432; \"the session mode connection string connects to your Postgres instance through the shared pooler (Supavisor)\"). Pooling-and-limits points to the Supavisor FAQ and Managing connections pages for timeouts; I did not fetch those, so (d) remains open.",
+      "source": "https://supabase.com/pricing; https://supabase.com/docs/guides/platform/free-plan-pausing; https://supabase.com/docs/guides/platform/going-into-prod; https://supabase.com/docs/guides/database/database-size; https://supabase.com/docs/guides/database/connecting-to-postgres; https://supabase.com/docs/guides/database/connecting-to-postgres/pooling-and-limits; https://github.com/orgs/supabase/discussions/13121 (community reply, secondary). Not fetched: https://supabase.com/kb/troubleshooting/supavisor-faq-YyP5tI and https://supabase.com/docs/guides/database/connection-management.",
+      "retrieved": "2026-11-16",
+      "error": ""
+    },
+    {
+      "id": "F6",
+      "fact": "How many GitHub Actions minutes does Edan's account include for a private repository (Free plan: 2,000 a month), against check.yml on every pull request plus twice-weekly imports with a 120-minute limit each?",
+      "status": "answered",
+      "answer": "Not settled as stated. The premise's \"2,000 minutes a month\" matches the GitHub pricing page, but the billing documentation says the Free plan's included Actions compute for private repositories is $12 USD per month, not a minute count. The docs say included compute is \"expressed as a monetary amount, not a fixed number of minutes or other usage units.\" Per-minute rates in the same docs are Linux 2-core (x64) $0.006, Windows 2-core (x64) $0.010, and macOS 3- or 4-core $0.062. Dividing $12 by the Linux 2-core rate gives 2,000 minutes, which is the derivation I made, not a figure the docs state. The docs also say standard GitHub-hosted runners for private or internal repositories draw from the included allowance. The pricing page lists \"2,000 minutes/month\" for Free and notes that the Actions row is \"Free for public repositories.\" The docs say nothing about a 120-minute job limit, so that limit is not verified. Whether check.yml on every PR plus twice-weekly imports fits the allowance is not settled by these sources. The runner size and OS of the jobs would change the minute count.",
+      "source": "https://docs.github.com/en/billing/managing-billing-for-github-actions/about-billing-for-github-actions (the \"Included compute usage and storage\" table and per-minute rates); https://github.com/pricing (Actions row: \"2,000 minutes/month\", \"Free for public repositories\")",
+      "retrieved": "2026-11-15",
+      "error": ""
+    },
+    {
+      "id": "F7",
+      "fact": "Do the licences and terms of data.ca.gov (HCD APR), data.chhs.ca.gov (DHCS), cdss.ca.gov, DataSF and Keenable permit saving and republishing derived figures and storing fetched pages, and what attribution do they require?",
+      "status": "answered",
+      "answer": "Only partly settled. Retrieved 2026-11-15.\n\n- cdss.ca.gov: Settled in part. The Conditions of Use say information is \"considered in the public domain, unless otherwise indicated\" and \"may be distributed or copied as permitted by law.\" Copyrighted material (e.g., photographs) and information owned by others need the owner's permission. The page does not address saving fetched pages or republishing derived figures specifically. No attribution requirement is stated.\n- DataSF: Settled in part. Data is made available under the Public Domain Dedication and License v1.0. Derivative works are covered (Section VII.B), but the page does not say whether derived figures may be republished. Re-identification is prohibited, and combining data to re-identify is prohibited. Individual datasets may carry additional terms. No attribution requirement is stated. Note the source is an sf.gov page for DataSF; the datasf.org URL redirected to sf.gov.\n- data.chhs.ca.gov (CalHHS/DHCS portal): Not settled. The disclosure page only links to its Terms of Use at https://data.chhs.ca.gov/pages/terms, which returned HTTP 403. Per-dataset licence metadata varies; some DHCS datasets show \"other-license-specified\" or no licence.\n- data.ca.gov (HCD APR): Not settled. The Terms page https://data.ca.gov/pages/terms-of-use returned 404, and https://data.ca.gov/pages/conditions-of-use also returned 404. The CA Open Data Handbook (https://handbook.data.ca.gov/disclosures) says open licences should have no restrictions on copying, publishing, distributing or adapting, and states no general attribution requirement. Portal-wide terms are unverified; licence is set per dataset.\n- Keenable: Not settled. The terms page https://keenable.ai/page/terms-of-use returned 404. A search snippet indicates a Section 6.4 \"Data Usage and Attribution Rights\" and a Section 6.2 on prohibited activities that mentions bulk data extraction. The caching, republishing and attribution terms were not read.",
+      "source": "Settled: https://www.cdss.ca.gov/conditions-of-use (CDSS, fetched 2026-11-15); https://www.sf.gov/reports--april-2017--datasf-terms-use (DataSF terms, fetched 2026-11-15); https://handbook.data.ca.gov/disclosures (CA Open Data Handbook, for the general open-licence standard only, fetched 2026-11-15). Not retrieved: https://data.chhs.ca.gov/pages/terms (403), https://data.ca.gov/pages/terms-of-use (404), https://data.ca.gov/pages/conditions-of-use (404), https://keenable.ai/page/terms-of-use (404; snippet only from search).",
+      "retrieved": "2026-11-15",
+      "error": ""
+    },
+    {
+      "id": "F8",
+      "fact": "Vercel Hobby plan: does its terms of use allow a public civic site, and do its function duration and invocation limits hold for `force-dynamic` pages that make database queries on every uncached request?",
+      "status": "answered",
+      "answer": "Not settled from sources; see the report text.",
+      "source": "vercel.com/legal/terms",
+      "retrieved": "2026-11-15",
+      "error": ""
+    }
+  ],
+  "gates": [
+    {
+      "id": "G-3.11-quota",
+      "what": "GitHub Actions minutes for a private repository",
+      "why": "check.yml now builds on every PR and the weekly workflow may run up to 120 minutes twice a week (F6)",
+      "owner": "human",
+      "before": "3",
+      "leadTime": "hours",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-3.12-account",
+      "what": "Vercel project exists and is connected to the repository (human step 7)",
+      "why": "3.12's cache route, the revalidate secret and live step 12 need a deployed site",
+      "owner": "human",
+      "before": "3",
+      "leadTime": "hours",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-3.12-plan",
+      "what": "Vercel plan: confirm the Hobby plan's terms allow a public civic site and its limits fit the dynamic pages (F8, F11)",
+      "why": "If not, the site needs a paid plan before launch; the spike could not settle the terms.",
+      "owner": "human",
+      "before": "3",
+      "leadTime": "hours",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-3.19-irreversible",
+      "what": "First live statewide `npm run import:apr` into the production database (live step 3), then `import:calfresh` and `import:medi-cal-renewals`",
+      "why": "There is no delete or rollback tooling (`stale` rows are reported, never deleted); a bad import is cleaned by hand in SQL, which is why R5 should be settled first",
+      "owner": "human",
+      "before": "3",
+      "leadTime": "hours",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-3.19-legal",
+      "what": "Licence and attribution terms of the data sources and of Keenable's content (F7)",
+      "why": "The statewide APR import, DHCS renewals, the CDSS workbook and saved copies of fetched pages are stored and republished as figures",
+      "owner": "human",
+      "before": "3",
+      "leadTime": "hours",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-3.19-plan",
+      "what": "Supabase plan: stay on Free (500 MB database, 1 GB storage, pause after 7 quiet days) or move to Pro at 25 USD a month",
+      "why": "The statewide import, summaries and links approach the free limits, and a pause takes the site down (R27, R28, F5).",
+      "owner": "human",
+      "before": "3",
+      "leadTime": "hours",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-3.19-quota",
+      "what": "Supabase free-tier limits: 500 MB database (about 150 MB estimated after the statewide APR import), 1 GB Storage with a per-object cap, pause after 7 idle days",
+      "why": "The statewide import is the first load that can approach them (F5); a full database blocks writes and a pause takes the site down",
+      "owner": "human",
+      "before": "3",
+      "leadTime": "hours",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-3.2-irreversible",
+      "what": "Edan approves schema PR #37 (migration 0003) and the session applies 0002 and 0003 to the live database with `npm run migrate`",
+      "why": "Migrations are one way; the web schema, summaries, import runs and geoid that every wave 3 task reads exist only after this, and R13 and R14 are cheap only before it.",
+      "owner": "human",
+      "before": "3",
+      "leadTime": "hours",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-3.24-quota",
+      "what": "Keenable credits: about 12,300 for the discovery steps against the 99,999 on record, in capped runs of 5,000",
+      "why": "The spec's 2,700 estimate is wrong (R13); a 402 stops the run and needs Edan; whether the credits renew is unknown (F2)",
+      "owner": "human",
+      "before": "3",
+      "leadTime": "hours",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-3.26-plan",
+      "what": "Vercel Hobby plan terms and function limits for a public site with dynamic pages",
+      "why": "Wave 3 turns the site into a public ranking of California places on the free plan (F8)",
+      "owner": "human",
+      "before": "3",
+      "leadTime": "hours",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-3.9-legal",
+      "what": "Edan reads `/methods` and writes `/about` in his own words (human steps 15 and 6) before the site is public",
+      "why": "The site ranks named government agencies and places worst first; the wording is the legal and reputational surface",
+      "owner": "human",
+      "before": "3",
+      "leadTime": "hours",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-3.T-plan",
+      "what": "Edan sets the final tier cutoffs in `src/lib/tiers.ts` (human step 8)",
+      "why": "The home page leads with CalFresh letters; the placeholders grade the state's own 86 percent figure an A (R23).",
+      "owner": "human",
+      "before": "3",
+      "leadTime": "hours",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-contracts PR-irreversible",
+      "what": "Edan approves PR #37 and the session applies migrations 0002 and 0003 to the live database with `npm run migrate`",
+      "why": "Wave 3 builds on both; applying them to production cannot be undone by the loop (0001 to 0003 are never edited, only added to)",
+      "owner": "human",
+      "before": "3",
+      "leadTime": "hours",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-3.10-plan",
+      "what": "Edan's allowlist decisions: session-added `.gov` domains from the CISA registry (Q1, invariant 2) and `ecfr.gov` and `fns.usda.gov` under `us` (Q17)",
+      "why": "Invariant 2 says adding a domain is a spec change; without Q17 the federal CalFresh rule stays \"Pending source\"",
+      "owner": "human",
+      "before": "3",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-3.11-account",
+      "what": "Supabase CA certificate from project settings, for verified TLS on the owner and site connections (R30)",
+      "why": "CI will send the owner password over a connection whose certificate is not verified today.",
+      "owner": "human",
+      "before": "3",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-3.11-plan",
+      "what": "Supabase plan decision: stay on Free or move to Pro (25 USD a month)",
+      "why": "R10 chose Free for v1; twice-weekly imports and the statewide data raise the odds of hitting a limit, and a pause is an outage",
+      "owner": "human",
+      "before": "3",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-3.11-secret",
+      "what": "Add GitHub repository secrets `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `SITE_URL` and `REVALIDATE_SECRET` (human step 9)",
+      "why": "weekly-import.yml (3.11) reads them as job env; without them the first scheduled run fails and the Supabase project can go quiet",
+      "owner": "human",
+      "before": "3",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-3.12-secret",
+      "what": "Create the `warden_web` login with a long random password in the Supabase SQL editor (human step 13) and set its statement timeout",
+      "why": "3.12 reads only through this login; the password must never be pasted into chat",
+      "owner": "human",
+      "before": "3",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-3.15-plan",
+      "what": "Decision on the `exceljs` dependency (Q14), pinned exactly",
+      "why": "Fixed decision 1 forbids a new dependency without Edan; the library's last release is 19 Oct 2023 (R20)",
+      "owner": "human",
+      "before": "3",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-3.24-secret",
+      "what": "Keenable API key in the local `.env` for the discovery runs (live steps 8 and 9)",
+      "why": "3.24's script is the only paid caller; the key is local only and never goes to CI",
+      "owner": "human",
+      "before": "3",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-3.26-account",
+      "what": "Decide whether Vercel's production deploys are paused during the wave and confirm the Vercel project's Git link and environment scopes (F1)",
+      "why": "Merges of the page tasks replace live pages with versions that need `WEB_DATABASE_URL` and imported summaries (R22).",
+      "owner": "human",
+      "before": "3",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-3.T-irreversible",
+      "what": "Delete `DATABASE_URL` from Vercel after live step 12 passes (human step 14)",
+      "why": "The owner login leaves the site; the value must still be held elsewhere by Edan to restore it",
+      "owner": "human",
+      "before": "3",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    }
+  ],
+  "specEdits": [
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "and `waiting` (member permits in `permit_ok` filed in the window with no issued `issuance_ok` row)",
+      "replace": "and `waiting` (`issuance_ok` rows of member permits with `issued` false and a `filed_date` in the window; a member permit with no `issuance` row counts when its earliest review `start_date` is in the window)",
+      "recId": "R1"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "each application with a permit date gets an `issuance` (`addenda` 0, `kind` null, `filed_date` submitted, `issued_date` issued, `calendar_days` the difference, `issued` true, `source_id` the permit page);",
+      "replace": "each application with a permit date gets an `issuance` (`addenda` 0, `kind` null, `filed_date` submitted, `issued_date` issued, `calendar_days` the difference, `issued` true, `source_id` the permit page); each application with no permit date gets an `issuance` with `issued` false, `issued_date` and `calendar_days` null, `filed_date` submitted and `source_id` its application page (a later import that finds the permit updates it);",
+      "recId": "R1"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "(the 6 and 12 month windows start at `asOf` minus 6 or 12 months plus a day; `all` starts at `since`)",
+      "replace": "(the 6 and 12 month windows start at `asOf` minus 6 or 12 calendar months, the same day or the month's last day, both ends counting, exactly as 1.12; `all` starts at `since`)",
+      "recId": "R2"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "`median-days`, `mean-days` over issued member permits whose `issued_date` is in the window (days = `issued_date - filed_date`, the permit's earliest filing)",
+      "replace": "`median-days`, `mean-days` over the `addenda` 0 `issuance_ok` rows of member permits with `issued` true, a `calendar_days` and an `issued_date` in the window (days = `calendar_days`, the figure 1.12 and wave 2 read)",
+      "recId": "R2"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "(the clocks' medians, means and counts per track, each department's share and median days; not names)",
+      "replace": "(the clocks' medians and counts per track, each department's share and median days; not names; `computeProcessView` has no mean, so the tail checks `mean-days` against a mean the test computes from the same input)",
+      "recId": "R2"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "Check: the SF ADU page's filing-to-permit median equals the wave 2 page's actual clock for the same window.",
+      "replace": "Check: each track's median on the SF ADU page (`track:in-house`, `track:otc`) equals the wave 2 page's actual clock for the same window; the all-track headline median is recomputed by hand from the saved response.",
+      "recId": "R2"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "Every figure a page shows is a `process_summary` row, written only by task 3.18 from the rows 3.5, 3.6 and 3.7 return.",
+      "replace": "Every figure a page shows is a `process_summary` row, written only by task 3.18 from the rows 3.5, 3.6 and 3.7 return. A producer returns a row only when it counted at least one stored row, because every summary cites at least one source (3.2 refuses a row with none): a window with no case has no row, and a page reads that as no data in the window.",
+      "recId": "R3"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "for each process with `review_ok` rows, the rows of 3.6 and of 3.5 with `asOf` its newest `data_as_of`, `since` its earliest filing and `tracks` true;",
+      "replace": "for each process with `review_ok` rows, instead of the clock rows above (a process gets one set, never both, so no process, subject, window and measure repeats), the rows of 3.6 and of 3.5 with `asOf` its newest `data_as_of`, `since` its earliest filing and `tracks` true;",
+      "recId": "R4"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "`table` and `columns` checked against `^[a-z_]+$` (a bad identifier throws before any statement)",
+      "replace": "`table` and `columns` checked against `^[a-z_]+$` and then written in double quotes (`window` is a reserved word; a bad identifier throws before any statement)",
+      "recId": "R8"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "Owns `vitest.config.ts`, `test/setup/no-network.ts`, `test/no-network.test.ts`.",
+      "replace": "Owns `vitest.config.ts` (by exception to the session's list), `test/setup/no-network.ts`, `test/no-network.test.ts`.",
+      "recId": "R9"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "Owns `src/lib/db/pool.ts`, `src/lib/env.ts`, `src/lib/env.test.ts`,",
+      "replace": "Owns `src/lib/db/pool.ts` (by exception to the session's `src/lib/db/*`), `src/lib/env.ts`, `src/lib/env.test.ts`,",
+      "recId": "R9"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "Owns `src/lib/db/batch.ts`, `src/lib/db/batch.test.ts`, `src/lib/summaries/store.ts`,",
+      "replace": "Owns `src/lib/db/batch.ts`, `src/lib/db/batch.test.ts` (both by exception to the session's `src/lib/db/*`), `src/lib/summaries/store.ts`,",
+      "recId": "R9"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "- **3.21 Reviews importer on the runner, names from the database.** Depends on 3.2 and 3.4.",
+      "replace": "- **3.21 Reviews importer on the runner, names from the database.** Depends on 3.2, 3.4 and 3.14 (the golden numbers are pinned before `compute.ts` changes).",
+      "recId": "R10"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "`DEPARTMENT_NAMES` is deleted from `compute.ts`: a department code not yet in `department`",
+      "replace": "`importReviews` stops using `DEPARTMENT_NAMES` (3.T deletes the constant together with `process.ts`, which names departments on the live read path until then): a department code not yet in `department`",
+      "recId": "R10"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "`computeProcessView` takes an optional `departmentNames` input (code to name; a missing code shows the code) and is otherwise unchanged",
+      "replace": "`computeProcessView` takes an optional `departmentNames` input (code to name; when it is not given the constant `DEPARTMENT_NAMES` names the code, as today; a code in neither shows the code) and is otherwise unchanged",
+      "recId": "R10"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "`computeProcessView` uses given names and falls back to the code; no file imports `DEPARTMENT_NAMES`.",
+      "replace": "`computeProcessView` uses given names, then `DEPARTMENT_NAMES`, then the code; `reviews.ts` does not import `DEPARTMENT_NAMES`.",
+      "recId": "R10"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "`src/lib/view.ts`, `src/lib/stats/process.ts` and `src/lib/stats/process.test.ts` (removed),",
+      "replace": "`src/lib/view.ts`, `src/lib/stats/compute.ts` (`DEPARTMENT_NAMES` removed), `src/lib/stats/process.ts` and `src/lib/stats/process.test.ts` (removed),",
+      "recId": "R10"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "adds the `package.json` scripts of this wave (",
+      "replace": "adds a stub `scripts/refresh-summaries.ts` (prints one line and exits 0; 3.18 replaces it, so the scripts that call it keep working until then) and the `package.json` scripts of this wave (",
+      "recId": "R11"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "each `import:*` and `provenance` followed by `&& tsx scripts/refresh-summaries.ts`",
+      "replace": "each `import:*` followed by `&& tsx scripts/refresh-summaries.ts`, and `provenance` followed by a refresh that runs whatever the check's exit code and then passes that code on (a quarantine hides every summary until a refresh)",
+      "recId": "R12"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "`null` for an unknown kind, place or process.",
+      "replace": "`null` for an unknown kind, place or process, and for a rule holder (`ca-<kind>`, `us-<kind>`), so its page and the redirect to it are not found.",
+      "recId": "R16"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "`Statewide` gives `ca`; otherwise `FIPS` must match",
+      "replace": "a row whose `County` is `Statewide` (its `FIPS` is empty) gives `ca`; otherwise `FIPS` must match",
+      "recId": "R33"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "`readSheetRows(bytes, { sheet, headerRow })`:",
+      "replace": "`readSheetRows(bytes, { sheet, headerRow, required })`:",
+      "recId": "R33"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "throws naming the sheet when it is missing, and naming the column when the header has a duplicate.",
+      "replace": "throws naming the sheet when it is missing, and naming the column when the header has a duplicate or when a `required` column is absent from the header (the importer passes the six column names of `CALFRESH_TIMELINESS`, so a renamed column fails the run instead of publishing blanks).",
+      "recId": "R33"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "name in title case; level `city`;",
+      "replace": "name in title case, corrected by an exceptions map in `apr.ts` for names title case gets wrong (`MCFARLAND` is McFarland, `LA CANADA FLINTRIDGE` is La Cañada Flintridge; the session fills it from the real name list), two different names that give one slug throw; level `city`;",
+      "recId": "R34"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "(a later row of another kind counts in `conflicts`)",
+      "replace": "(a later row of another kind counts in `conflicts`; rows with the same date keep the smaller `_id`)",
+      "recId": "R34"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "`notifySite({ siteUrl, secret, fetcher })` posts to `<siteUrl>/api/revalidate` with the bearer secret and returns `{ status }`; without `SITE_URL` or `REVALIDATE_SECRET` it does nothing and says so.",
+      "replace": "`notifySite({ siteUrl, secret, fetcher })` posts to `<siteUrl>/api/revalidate` with the bearer secret and returns `{ status }`; without `SITE_URL` or `REVALIDATE_SECRET` it does nothing and says so; the script exits 5 when the status is not 204 (the summaries are written, but the site's cache stays up to a day old).",
+      "recId": "R35"
+    },
+    {
+      "file": "docs/spec/2026-11-13-warden-v1-tasks.md",
+      "find": "the window filter (the existing `WindowFilter`);",
+      "replace": "the window filter (the existing `WindowFilter`, shown only for a clock or a process with `dept:` summaries: a share has window `12m` and a rate window `latest` only, and their `month:` rows carry window `12m`);",
+      "recId": "R36"
+    }
+  ],
+  "needsSecondRound": true,
+  "skipped": false,
+  "skipReason": "",
+  "reviewPath": "~/dev/agent-loop/docs/warden/2026-11-15-wave-3-review.json"
+}
