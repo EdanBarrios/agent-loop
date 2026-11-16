@@ -16,6 +16,8 @@ const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 type Any = Record<string, any>;
 
 const project = { name: 'Sim', repo: '/tmp/sim', github: 'o/r', worktrees: '/tmp/sim-wt', spec: 's.md' };
+const VERSION: string = JSON.parse(readFileSync(join(import.meta.dirname, '..', '..', 'package.json'), 'utf8')).version;
+const WAVE_LOOP_REF = { scriptPath: '/tmp/sim/.claude/workflows/wave-loop.js' };
 
 function task(id: string, verdicts: Array<string | null>): Any {
   return {
@@ -33,7 +35,9 @@ function waveResult(wave: string, over: Any = {}): Any {
   firstRound.forEach((v, i) => {
     tasks[`${wave}.${i + 1}`] = task(`${wave}.${i + 1}`, v === 'MERGE' ? ['MERGE'] : [v, 'MERGE']);
   });
-  return { project: 'Sim', wave, gate: over.gate ?? 'PASS', models: {}, state: {}, tasks, escalations: over.escalations ?? [] };
+  const result: Any = { project: 'Sim', wave, gate: over.gate ?? 'PASS', models: {}, state: {}, tasks, escalations: over.escalations ?? [], loopVersion: VERSION };
+  if ('loopVersion' in over) result.loopVersion = over.loopVersion;
+  return result;
 }
 
 const waveArg = (wave: string) => ({
@@ -42,9 +46,9 @@ const waveArg = (wave: string) => ({
   tail: null,
 });
 
-async function runChain(opts: { project?: Any; waves: string[]; answers: Record<string, Any | Error>; gates?: Any[] }) {
-  const calls: Array<{ name: string; args: Any }> = [];
-  const workflow = async (name: string, args: Any) => {
+async function runChain(opts: { project?: Any; waves: string[]; answers: Record<string, Any | Error>; gates?: Any[]; waveLoop?: unknown }) {
+  const calls: Array<{ name: unknown; args: Any }> = [];
+  const workflow = async (name: unknown, args: Any) => {
     calls.push({ name, args });
     const a = opts.answers[args.wave];
     if (a instanceof Error) throw a;
@@ -53,6 +57,7 @@ async function runChain(opts: { project?: Any; waves: string[]; answers: Record<
   const logs: string[] = [];
   const args: Any = { project: opts.project ?? project, waves: opts.waves.map(waveArg) };
   if (opts.gates !== undefined) args.gates = opts.gates;
+  if (opts.waveLoop !== undefined) args.waveLoop = opts.waveLoop;
   const out = await new AsyncFunction('agent', 'parallel', 'pipeline', 'phase', 'log', 'workflow', 'args', source)(
     async () => {
       throw new Error('chain-loop must not call agent()');
@@ -73,7 +78,7 @@ describe('chain-loop: running waves in order', () => {
       waves: ['1', '2'],
       answers: { '1': waveResult('1'), '2': waveResult('2') },
     });
-    expect(calls.map((c) => c.name)).toEqual(['wave-loop', 'wave-loop']);
+    expect(calls.map((c) => c.name)).toEqual([WAVE_LOOP_REF, WAVE_LOOP_REF]);
     expect(calls.map((c) => c.args.wave)).toEqual(['1', '2']);
     expect(calls[0].args).toEqual({ project, wave: '1', tasks: waveArg('1').tasks, tail: null });
     expect(out.waves.map((w: Any) => w.wave)).toEqual(['1', '2']);
@@ -160,6 +165,43 @@ describe('chain-loop: running waves in order', () => {
 
   it('refuses to start without waves', async () => {
     await expect(runChain({ waves: [], answers: {} })).rejects.toThrow(/args\.waves/);
+  });
+});
+
+describe('chain-loop: which wave-loop runs (loop 2.3.0)', () => {
+  it('calls wave-loop by the script path linked into the project, not by name', async () => {
+    const { calls } = await runChain({ waves: ['1'], answers: { '1': waveResult('1') } });
+    expect(calls.map((c) => c.name)).toEqual([{ scriptPath: '/tmp/sim/.claude/workflows/wave-loop.js' }]);
+  });
+
+  it('args.waveLoop overrides the reference', async () => {
+    const ref = { scriptPath: '/loop/claude/workflows/wave-loop.js' };
+    const { calls } = await runChain({ waves: ['1'], answers: { '1': waveResult('1') }, waveLoop: ref });
+    expect(calls[0].name).toEqual(ref);
+  });
+
+  it('carries the package.json version', () => {
+    expect(source).toContain(`const LOOP_VERSION = '${VERSION}'`);
+  });
+
+  it('a wave that reports another loop version stops the chain with an error naming both versions', async () => {
+    const { out, calls } = await runChain({
+      waves: ['1', '2'],
+      answers: { '1': waveResult('1', { loopVersion: '1.0.0' }), '2': waveResult('2') },
+    });
+    expect(calls).toHaveLength(1);
+    expect(out.stoppedBecause).toBe('child_error');
+    expect(out.remaining).toEqual(['2']);
+    expect(out.error.wave).toBe('1');
+    expect(out.error.message).toContain(`chain-loop is loop ${VERSION}`);
+    expect(out.error.message).toContain('reported loop 1.0.0');
+    expect(out.error.message).toContain('/tmp/sim/.claude/workflows/wave-loop.js');
+  });
+
+  it('a wave with no loop version (an old wave-loop) stops the chain too', async () => {
+    const { out } = await runChain({ waves: ['1', '2'], answers: { '1': waveResult('1', { loopVersion: undefined }), '2': waveResult('2') } });
+    expect(out.stoppedBecause).toBe('child_error');
+    expect(out.error.message).toContain('reported no loop version');
   });
 });
 

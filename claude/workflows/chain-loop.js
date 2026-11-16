@@ -2,7 +2,7 @@
 // Run with the Workflow tool: { name: 'chain-loop', args: { project, waves: [{ wave, tasks, tail }] } }.
 // args.project: the parsed .claude/loop.local.json. args.waves: the waves to run, in order, each shaped as for wave-loop.
 // args.gates (optional): the parsed gate checklist array, forwarded as args.gates on every wave-loop call.
-// Each wave runs through workflow('wave-loop', { project, wave, tasks, tail }); nesting is one level, so wave-loop
+// Each wave runs through workflow(<wave-loop by script path>, { project, wave, tasks, tail }); nesting is one level, so wave-loop
 // itself never calls workflow() and runs exactly as in v1. Chaining follows project.chain (default: chain after wave 1
 // when the first-pass merge rate is at least 0.7; chain: false runs one wave and stops).
 // Returns { waves: [waveResult...], stoppedBecause, remaining: [wave ids], error? }. stoppedBecause is one of
@@ -191,14 +191,18 @@ function shouldContinue(waveResult, project, nextWave, firstPassRate) {
 }
 
 /**
- * Run waves in order through the runtime's workflow('wave-loop', ...), one call per wave. A wave-loop call that
+ * Run waves in order through the runtime's workflow(waveLoop, ...), one call per wave. A wave-loop call that
  * throws or returns nothing stops the chain and is reported once; it is never retried. `gates` (the parsed gate
  * checklist, an array) is forwarded unchanged on every child call; when it is undefined the child args carry no
  * `gates` key (the v1 shape). The session re-reads the gate file and relaunches the chain to pick up changes.
- * @param {{ project: any, waves: Array<{ wave: string, tasks: any[], tail?: any }>, workflow: (name: string, args: any) => Promise<any>, log?: (s: string) => void, gates?: any[] }} io
+ * `waveLoop` is what workflow() is called with: the name 'wave-loop' (the default) or `{ scriptPath }`. A name resolves
+ * from the session's own .claude/workflows, which can be another copy of the loop (loop 2.3.0). `loopVersion`, when
+ * given, must equal every wave result's loopVersion; a wave that reports another one (or none) stops the chain as a
+ * child_error that names both versions, so a stale wave-loop never runs a second wave.
+ * @param {{ project: any, waves: Array<{ wave: string, tasks: any[], tail?: any }>, workflow: (ref: any, args: any) => Promise<any>, log?: (s: string) => void, gates?: any[], waveLoop?: string | { scriptPath: string }, loopVersion?: string }} io
  * @returns {Promise<{ waves: any[], stoppedBecause: string, remaining: string[], error?: { wave: string, message: string } }>}
  */
-async function runChain({ project, waves, workflow, log = () => {}, gates }) {
+async function runChain({ project, waves, workflow, log = () => {}, gates, waveLoop = 'wave-loop', loopVersion }) {
   if (!Array.isArray(waves) || waves.length === 0) throw new Error('args.waves is missing or empty: pass [{ wave, tasks, tail }] in the order to run.');
   waves.forEach((w, i) => {
     if (!w || w.wave === undefined || w.wave === null || w.wave === '') throw new Error(`args.waves[${i}].wave is missing.`);
@@ -213,8 +217,12 @@ async function runChain({ project, waves, workflow, log = () => {}, gates }) {
       /** @type {any} */
       const childArgs = { project, wave: ids[i], tasks: w.tasks || [], tail: w.tail ?? null };
       if (gates !== undefined) childArgs.gates = gates;
-      result = await workflow('wave-loop', childArgs);
+      result = await workflow(waveLoop, childArgs);
       if (!result || typeof result !== 'object') throw new Error('wave-loop returned nothing');
+      if (loopVersion !== undefined && result.loopVersion !== loopVersion) {
+        const where = typeof waveLoop === 'string' ? `the workflow named '${waveLoop}'` : `${waveLoop.scriptPath}`;
+        throw new Error(`chain-loop is loop ${loopVersion}, but ${where} reported ${result.loopVersion ? `loop ${result.loopVersion}` : 'no loop version'}: another copy of the loop ran this wave. Pass args.waveLoop = { scriptPath: '<the loop checkout>/claude/workflows/wave-loop.js' } or relink the project's .claude/workflows, then relaunch`);
+      }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       log(`Chain stopped: wave ${ids[i]} failed to run (${message}); not retried`);
@@ -231,5 +239,12 @@ async function runChain({ project, waves, workflow, log = () => {}, gates }) {
 }
 // @bundle-end chain
 
+// Loop 2.3.0: wave-loop runs by script path, the copy linked into the project (install.sh links the loop's workflows to
+// <repo>/.claude/workflows), not by name: a name resolves from the session's directory, and a session started in the
+// loop checkout resolved a pinned old copy. args.waveLoop overrides it (a { scriptPath } or a name). Every wave result
+// must report this script's LOOP_VERSION, or the chain stops with an error that names both versions.
+const LOOP_VERSION = '2.3.0'
+const WAVE_LOOP = args.waveLoop || (P.repo ? { scriptPath: `${P.repo}/.claude/workflows/wave-loop.js` } : 'wave-loop')
+
 phase('Waves')
-return await runChain({ project: P, waves: args.waves, workflow, log, gates: args.gates })
+return await runChain({ project: P, waves: args.waves, workflow, log, gates: args.gates, waveLoop: WAVE_LOOP, loopVersion: LOOP_VERSION })

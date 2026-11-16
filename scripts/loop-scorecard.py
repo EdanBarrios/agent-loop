@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Write a per-wave scorecard for the agent loop (Appendix C) from a Workflow output file.
 
-Usage: python3 -I scripts/loop-scorecard.py <wave> <date> <workflow-output.json>... [--out <path>] > <path>
+Usage: python3 -I scripts/loop-scorecard.py <wave> <date> <workflow-output.json>... [--out <path>] [--escaped <n>] > <path>
 
 Pass the path the scorecard is redirected to as --out, e.g. docs/<project>/<date>-wave-<wave>-loop.md. The script
 only reads it: the scorecards found beside it (earlier file names, *-wave-*-loop.md) give the median that the
@@ -26,10 +26,18 @@ duration. The scorecard records, per role, the signals used to decide whether a 
 effort should move up or down a notch:
 
 - worker:  first-pass MERGE rate; fix items by cause (defect, spec_miss, loop)
-- critic:  misses (main red after a MERGE, i.e. a revert), STOP verdicts, escalations
+- critic:  misses (main red after a MERGE, i.e. a revert, plus escaped defects), STOP verdicts, escalations
 - merger:  failed or reverted merges
 - all:     tokens and minutes per role, the model each role requested and the model that served it
            (a difference prints a MODEL MISMATCH line; an unrecorded served model prints "unknown")
+
+--escaped <n>: the number of fix commits made after the wave that trace to a task the wave merged (defects the critic
+let through that reached the default branch without a revert). Count them from the default branch's history when
+writing the scorecard; they add to the critic's misses. Without it the scorecard says escaped defects were not counted.
+
+From loop 2.3.0 the result also carries the critic's findings (each round record's `findings`, severity high, medium
+or low) and `integration`, the integration review of the whole wave's diff. The scorecard lists every high and
+medium finding of both.
 
 `loopVersion` (wave-loop 2.2.0 and later) prints on the Date line; a run without it raises a LOOP VERSION flag,
 because an older wave-loop ran and the sections it does not record read as empty, not as zero.
@@ -164,7 +172,7 @@ def load(path):
 def merge_results(paths):
     """Merge several output files of one wave: agents accumulate, a task's later record replaces its earlier
     one (rounds accumulate), escalations and reality gaps from every run are kept, decisions are keyed by id."""
-    result = {"gate": "?", "models": {}, "tasks": {}, "escalations": [], "decisions": [], "reality": None, "timings": {}, "loopVersions": []}
+    result = {"gate": "?", "models": {}, "tasks": {}, "escalations": [], "decisions": [], "reality": None, "timings": {}, "loopVersions": [], "integration": None}
     agents = []
     decisions = {}
     anon = 0
@@ -193,6 +201,9 @@ def merge_results(paths):
         reality = r.get("reality")
         if reality is not None:
             result["reality"] = merge_reality(result["reality"], reality)
+        integration = r.get("integration")
+        if isinstance(integration, dict):
+            result["integration"] = integration
     result["decisions"] = list(decisions.values())
     return result, agents
 
@@ -241,7 +252,55 @@ def ledger(decisions):
     return accepted, asked, reversed_, rate
 
 
-def main(wave, date, paths, out_path=None):
+LISTED_SEVERITIES = ("high", "medium")
+
+
+def critic_findings(tasks):
+    """High and medium critic findings of every task and round, high first. A finding repeated in a later round of the
+    same task is listed once, with the first round it appeared in."""
+    rows = []
+    seen = set()
+    for tid, t in tasks.items():
+        for rd in t.get("rounds", []):
+            for f in rd.get("findings") or []:
+                sev = f.get("severity")
+                if sev not in LISTED_SEVERITIES:
+                    continue
+                key = (tid, sev, f.get("what", ""), f.get("where", ""))
+                if key in seen:
+                    continue
+                seen.add(key)
+                rows.append((tid, rd.get("round"), sev, f.get("what", ""), f.get("where", "")))
+    return sorted(rows, key=lambda r: LISTED_SEVERITIES.index(r[2]))
+
+
+def integration_lines(integration):
+    """The Integration review section body: high and medium findings, high first, and a count of low ones."""
+    out = []
+    if not integration:
+        return ["Not run (a loop older than 2.3.0, or project.integrationReview is false)."]
+    if not integration.get("ran"):
+        return [f"Not run: {cell(integration.get('skipped') or integration.get('error') or 'no reason given')}."]
+    if integration.get("summary"):
+        out.append(cell(integration["summary"]))
+        out.append("")
+    every = integration.get("findings") or []
+    listed = sorted((f for f in every if f.get("severity") in LISTED_SEVERITIES), key=lambda f: LISTED_SEVERITIES.index(f["severity"]))
+    if listed:
+        out.append("| Severity | Area | What | Where |")
+        out.append("| --- | --- | --- | --- |")
+        for f in listed:
+            out.append(f"| {f['severity']} | {cell(f.get('area', 'other'))} | {cell(f.get('what', ''))} | {cell(f.get('where', ''))} |")
+    else:
+        out.append("No high or medium findings.")
+    low = len(every) - len(listed)
+    if low:
+        out.append("")
+        out.append(f"Low findings not listed: {low}.")
+    return out
+
+
+def main(wave, date, paths, out_path=None, escaped=None):
     result, agents = merge_results(paths)
     runs = len(paths)
 
@@ -329,6 +388,21 @@ def main(wave, date, paths, out_path=None):
     else:
         out.append("None.")
     out.append("")
+    out.append("## Critic findings")
+    out.append("")
+    found = critic_findings(tasks)
+    if found:
+        out.append("| Task | Round | Severity | What | Where |")
+        out.append("| --- | --- | --- | --- | --- |")
+        for tid, rd, sev, what, where in found:
+            out.append(f"| {cell(tid)} | {rd} | {sev} | {cell(what)} | {cell(where)} |")
+    else:
+        out.append("None at high or medium severity.")
+    out.append("")
+    out.append("## Integration review")
+    out.append("")
+    out.extend(integration_lines(result.get("integration")))
+    out.append("")
     out.append("## Roles")
     out.append("")
     out.append("| Role | Requested | Served | Runs | Tokens | Share | Minutes |")
@@ -385,7 +459,10 @@ def main(wave, date, paths, out_path=None):
     n = len(tasks)
     out.append(f"- Worker first-pass MERGE: {first_pass}/{n}")
     out.append(f"- Fix items: " + ", ".join(f"{k} {v}" for k, v in sorted(cause_counts.items())) if cause_counts else "- Fix items: none")
-    out.append(f"- Critic misses (revert after MERGE): {reverts}")
+    if escaped is None:
+        out.append(f"- Critic misses: {reverts} (reverts after MERGE {reverts}; escaped defects not counted, pass --escaped)")
+    else:
+        out.append(f"- Critic misses: {reverts + escaped} (reverts after MERGE {reverts}, escaped defects {escaped})")
     out.append(f"- Merge failures: {merge_failures}")
     out.append(f"- Escalations: {len(escalations)}" + ("" if not escalations else " (" + "; ".join(f"{e.get('task')}: {e.get('what')}" for e in escalations) + ")"))
     out.append(f"- Total tokens: {total_tokens:,}")
@@ -394,7 +471,7 @@ def main(wave, date, paths, out_path=None):
     out.append("")
     out.append("## Decision rule")
     out.append("")
-    out.append("Two waves in a row trigger a change. Worker: first-pass MERGE under half with defect-cause items, bump up; only spec_miss items, fix the prompt. Critic: zero misses for two waves with only cosmetic findings, bump down. Merger: any failure traced to the model, bump up. Loop-cause items are fixed in the workflow script, not by a model change. A model-mismatch flag means the run is not a clean baseline for the role: fix the cause before reading its numbers.")
+    out.append("Two waves in a row trigger a change. Worker: first-pass MERGE under half with defect-cause items, bump up; only spec_miss items, fix the prompt. Critic: a miss is a revert after MERGE or an escaped defect (a fix commit after the wave that traces to a task the wave merged, counted with --escaped); misses in two waves in a row, add the missed kind to the checklist or bump up; zero misses for two waves with only low findings, bump down. Merger: any failure traced to the model, bump up. Loop-cause items are fixed in the workflow script, not by a model change. A model-mismatch flag means the run is not a clean baseline for the role: fix the cause before reading its numbers.")
     print("\n".join(out))
 
 
@@ -508,14 +585,25 @@ def timings_report(paths):
     print("\n".join(out))
 
 
+def parse_escaped(value):
+    if value is None or not re.fullmatch(r"\d+", value):
+        sys.exit("--escaped needs a whole number (fix commits after the wave that trace to a merged task)")
+    return int(value)
+
+
 def parse_args(argv):
     out_path = None
+    escaped = None
     rest = []
     it = iter(argv)
     for a in it:
         if a == "--timings":
             continue
-        if a == "--out":
+        if a == "--escaped":
+            escaped = parse_escaped(next(it, None))
+        elif a.startswith("--escaped="):
+            escaped = parse_escaped(a[len("--escaped="):])
+        elif a == "--out":
             out_path = next(it, None)
             if not out_path:
                 sys.exit("--out needs a path")
@@ -523,11 +611,11 @@ def parse_args(argv):
             out_path = a[len("--out="):]
         else:
             rest.append(a)
-    return rest, out_path
+    return rest, out_path, escaped
 
 
 if __name__ == "__main__":
-    args, out_path = parse_args(sys.argv[1:])
+    args, out_path, escaped = parse_args(sys.argv[1:])
     if "--timings" in sys.argv[1:]:
         if not args:
             sys.exit(__doc__)
@@ -535,4 +623,4 @@ if __name__ == "__main__":
         sys.exit(0)
     if len(args) < 3:
         sys.exit(__doc__)
-    main(args[0], args[1], args[2:], out_path)
+    main(args[0], args[1], args[2:], out_path, escaped)

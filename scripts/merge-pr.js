@@ -6,7 +6,8 @@
 //   revertPrUrl, message, logTail, ciWaitMs, mergeMs, mainCheckMs, revertMs, elapsedMs, mainCheck }
 // (--dry-run prints outcome 'dry-run', `wouldRun`: the write calls it did not make, and `load`: the machine-load
 // warning { load1, cores, threshold, high }, threshold = project.loadWarnFactor (default 4) x cores), and `loopVersion`:
-// the loop's package.json version, which wave-loop's preflight compares with its own).
+// the loop's package.json version, which wave-loop's preflight compares with its own, and `baseSha`: origin's HEAD, the
+// wave's base for the integration review, or null).
 // mainCheck 'skipped:unchanged': the merged tree is the tree CI checked, so main's check is not waited for.
 // --defer-main (only with project.mainCi): merge, then return mainCheck 'deferred' without waiting for main's run; the
 // caller releases its merge lock and runs --verify-main <mergeSha>, which waits for that run and reverts once on red.
@@ -94,6 +95,7 @@ if (dryRun) {
   const cores = typeof availableParallelism === 'function' ? availableParallelism() : cpus().length;
   result.load = machineLoad(loadavg()[0], cores, project.loadWarnFactor);
   result.loopVersion = loopVersion();
+  result.baseSha = await remoteHead(repo);
 }
 console.log(JSON.stringify(result));
 process.exitCode = result.exit;
@@ -101,6 +103,14 @@ process.exitCode = result.exit;
 function fail(message) {
   console.log(JSON.stringify({ outcome: 'error', exit: 4, mergeSha: null, mainSha: null, ciState: null, failing: [], conflictFiles: [], revertPrUrl: null, message }));
   process.exit(4);
+}
+
+// The default branch's head on origin (git ls-remote origin HEAD), read only; wave-loop records it as the wave's base for
+// the integration review. null when it cannot be read.
+async function remoteHead(cwd) {
+  const r = await run('git ls-remote origin HEAD', { cwd });
+  const m = r.code === 0 ? /^([0-9a-f]{40,64})\s+HEAD$/m.exec(r.stdout) : null;
+  return m ? m[1] : null;
 }
 
 // The loop's version from its package.json, beside this script's real path (a linked scripts directory resolves to the

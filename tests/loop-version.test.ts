@@ -89,6 +89,32 @@ describe('loop version stamp', { timeout: 120_000 }, () => {
       const line = JSON.parse(String(res.stdout).trim().split('\n').pop() as string);
       expect(line.outcome).toBe('error');
       expect(line.loopVersion).toBe(VERSION);
+      expect(line.baseSha).toBeNull(); // not a git repository: no origin to read
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('merge-pr.js --dry-run prints origin HEAD as baseSha (the wave base for the integration review)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'loop-base-'));
+    const git = (cwd: string, ...a: string[]) => run('git', a, { cwd });
+    try {
+      mkdirSync(join(dir, 'origin'));
+      mkdirSync(join(dir, 'bin'));
+      await git(join(dir, 'origin'), 'init', '-q', '-b', 'trunk');
+      await git(join(dir, 'origin'), '-c', 'user.name=t', '-c', 'user.email=t@example.test', 'commit', '-q', '--allow-empty', '-m', 'one');
+      const head = (await git(join(dir, 'origin'), 'rev-parse', 'HEAD')).stdout.trim();
+      await git(dir, 'clone', '-q', join(dir, 'origin'), 'repo');
+      mkdirSync(join(dir, 'repo', '.claude'));
+      writeFileSync(join(dir, 'repo', '.claude', 'loop.local.json'), '{"name":"X"}');
+      writeFileSync(join(dir, 'bin', 'gh'), '#!/bin/sh\necho "no pull requests found" >&2\nexit 1\n');
+      chmodSync(join(dir, 'bin', 'gh'), 0o755);
+      const res = await run('node', [join(ROOT, 'scripts', 'merge-pr.js'), '0', '--repo', join(dir, 'repo'), '--dry-run'], {
+        env: { ...process.env, PATH: `${join(dir, 'bin')}:${process.env.PATH}` },
+      }).catch((e: { stdout: string }) => e);
+      const line = JSON.parse(String(res.stdout).trim().split('\n').pop() as string);
+      expect(line.loopVersion).toBe(VERSION);
+      expect(line.baseSha).toBe(head);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

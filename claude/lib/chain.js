@@ -52,14 +52,18 @@ export function shouldContinue(waveResult, project, nextWave, firstPassRate) {
 }
 
 /**
- * Run waves in order through the runtime's workflow('wave-loop', ...), one call per wave. A wave-loop call that
+ * Run waves in order through the runtime's workflow(waveLoop, ...), one call per wave. A wave-loop call that
  * throws or returns nothing stops the chain and is reported once; it is never retried. `gates` (the parsed gate
  * checklist, an array) is forwarded unchanged on every child call; when it is undefined the child args carry no
  * `gates` key (the v1 shape). The session re-reads the gate file and relaunches the chain to pick up changes.
- * @param {{ project: any, waves: Array<{ wave: string, tasks: any[], tail?: any }>, workflow: (name: string, args: any) => Promise<any>, log?: (s: string) => void, gates?: any[] }} io
+ * `waveLoop` is what workflow() is called with: the name 'wave-loop' (the default) or `{ scriptPath }`. A name resolves
+ * from the session's own .claude/workflows, which can be another copy of the loop (loop 2.3.0). `loopVersion`, when
+ * given, must equal every wave result's loopVersion; a wave that reports another one (or none) stops the chain as a
+ * child_error that names both versions, so a stale wave-loop never runs a second wave.
+ * @param {{ project: any, waves: Array<{ wave: string, tasks: any[], tail?: any }>, workflow: (ref: any, args: any) => Promise<any>, log?: (s: string) => void, gates?: any[], waveLoop?: string | { scriptPath: string }, loopVersion?: string }} io
  * @returns {Promise<{ waves: any[], stoppedBecause: string, remaining: string[], error?: { wave: string, message: string } }>}
  */
-export async function runChain({ project, waves, workflow, log = () => {}, gates }) {
+export async function runChain({ project, waves, workflow, log = () => {}, gates, waveLoop = 'wave-loop', loopVersion }) {
   if (!Array.isArray(waves) || waves.length === 0) throw new Error('args.waves is missing or empty: pass [{ wave, tasks, tail }] in the order to run.');
   waves.forEach((w, i) => {
     if (!w || w.wave === undefined || w.wave === null || w.wave === '') throw new Error(`args.waves[${i}].wave is missing.`);
@@ -74,8 +78,12 @@ export async function runChain({ project, waves, workflow, log = () => {}, gates
       /** @type {any} */
       const childArgs = { project, wave: ids[i], tasks: w.tasks || [], tail: w.tail ?? null };
       if (gates !== undefined) childArgs.gates = gates;
-      result = await workflow('wave-loop', childArgs);
+      result = await workflow(waveLoop, childArgs);
       if (!result || typeof result !== 'object') throw new Error('wave-loop returned nothing');
+      if (loopVersion !== undefined && result.loopVersion !== loopVersion) {
+        const where = typeof waveLoop === 'string' ? `the workflow named '${waveLoop}'` : `${waveLoop.scriptPath}`;
+        throw new Error(`chain-loop is loop ${loopVersion}, but ${where} reported ${result.loopVersion ? `loop ${result.loopVersion}` : 'no loop version'}: another copy of the loop ran this wave. Pass args.waveLoop = { scriptPath: '<the loop checkout>/claude/workflows/wave-loop.js' } or relink the project's .claude/workflows, then relaunch`);
+      }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       log(`Chain stopped: wave ${ids[i]} failed to run (${message}); not retried`);

@@ -18,7 +18,9 @@
 // An open item with before <= this wave returns { gate: 'BLOCKED', blockedBy: [ids] } before any agent starts.
 // project.realityCheck: { command, readOnly: true, timeoutSec }: run after the machine gate through a small
 // haiku/low agent; a block gap (or a check that does not run cleanly) fails the gate with a reality_gap escalation.
-// Result: { project, wave, gate, models, state, tasks, escalations, reality, decisions, timings, loopVersion }. reality is null when no
+// Result: { project, wave, gate, models, state, tasks, escalations, reality, decisions, timings, loopVersion, findings,
+// integration }. findings: every critic finding as { task, round, severity, what, where }; integration: null when
+// project.integrationReview is false, else { ran, baseSha, findings, summary, skipped?, error? }. reality is null when no
 // check is configured, else { ok, gaps, error? }; decisions are the workers' `id | choice | reason | reversible` lines.
 // timings[taskId] = { ciWaitMs, mergeMs, mainCheckMs } copied from the scripts' JSON lines, plus localCheckMs from the
 // worker's structured result (this script has no clock). tasks[id].merge.script.mainCheck is 'skipped:unchanged' when
@@ -29,6 +31,12 @@
 // loop scripts it ran; a different or missing one fails the wave, because the Workflow tool resolves 'wave-loop' from the
 // session's own .claude/workflows, which can be another copy of the loop than the project's linked scripts. The result
 // carries loopVersion so a scorecard can tell which loop ran.
+// v2.3: the critic returns findings[] ({ severity: high|medium|low, what, where }) beside its verdict; a high finding is
+// also a FIX item (a MERGE that carries one is turned into FIX in code). Each round record keeps its findings and the
+// result lists them all in findings[]. After the tail, one read-only integration agent on the critic model reviews
+// git diff <wave base sha>..origin/main (the base is the default branch's head recorded by the preflight dry run) and
+// returns findings as result.integration; it never edits and never changes the gate. project.integrationReview: false
+// turns it off.
 
 export const meta = {
   name: 'wave-loop',
@@ -40,6 +48,7 @@ export const meta = {
     { title: 'Review', detail: 'Critic applies the checklist beside a wait-ci.js relay; FIX returns to a worker, max 3 rounds' },
     { title: 'Merge', detail: 'Serialized merge-pr.js relay: sync if needed, wait CI, merge; the check on main is skipped when the merged tree is the tree CI checked, else watched outside the lock; revert once', model: 'sonnet' },
     { title: 'Tail', detail: 'The tail task runs alone after every parallel task is merged or parked' },
+    { title: 'Integration', detail: 'One read-only agent reviews the whole wave diff for duplication, layering, security, performance and dead code; never blocks the gate' },
   ],
 }
 
@@ -822,7 +831,7 @@ const REALITY_MODEL = { model: 'claude-haiku-5-5', effort: 'low', ...((P.models 
 const CRITIC_FALLBACK = { model: 'opus', effort: 'high' }
 
 const NAME = P.name
-const LOOP_VERSION = '2.2.2'
+const LOOP_VERSION = '2.3.0'
 const REPO = P.repo
 const WT = P.worktrees
 const SPEC = P.spec
@@ -922,6 +931,7 @@ if (args.gates !== undefined) {
       escalations: [],
       reality: null,
       decisions: [],
+      loopVersion: LOOP_VERSION, // chain-loop checks it on every wave result (loop 2.3.0)
     }
   }
 }
@@ -966,6 +976,22 @@ const WORKER_SCHEMA = {
   required: ['status', 'branch', 'worktree', 'filesChanged', 'checkCommand', 'checkExitCode', 'decisions', 'questions'],
 }
 
+// v2.3: every problem a reviewer sees goes here with a severity, so none is lost in free-text notes (wave 2 of Warden:
+// five problems sat in MERGE notes and three of them shipped as defects).
+const SEVERITIES_FOUND = ['high', 'medium', 'low']
+const FINDINGS_SCHEMA = {
+  type: 'array',
+  items: {
+    type: 'object',
+    properties: {
+      severity: { type: 'string', enum: SEVERITIES_FOUND, description: 'high = would break, leak or corrupt something in use and must be fixed before merge; medium = a real problem that can follow in a later task; low = a nit' },
+      what: { type: 'string' },
+      where: { type: 'string', description: 'file:line, or the file when no line applies' },
+    },
+    required: ['severity', 'what', 'where'],
+  },
+}
+
 const CRITIC_SCHEMA = {
   type: 'object',
   properties: {
@@ -997,9 +1023,10 @@ const CRITIC_SCHEMA = {
       },
     },
     stopSection: { type: 'string' },
+    findings: FINDINGS_SCHEMA,
     notes: { type: 'string' },
   },
-  required: ['verdict', 'checklist', 'fixItems', 'notes'],
+  required: ['verdict', 'checklist', 'fixItems', 'findings', 'notes'],
 }
 
 const REALITY_SCHEMA = {
@@ -1132,6 +1159,9 @@ async function finishIfUnfinished(t, w, ph, tag) {
   return w
 }
 
+// v2.3: wave 2 of Warden shipped a database connection without TLS that no checklist item asked about.
+const SECURITY_ITEM = `Security, when the task's owned paths or its diff touch the network, a database, environment variables, auth or secrets: TLS on every connection (no sslmode=disable, no http:// to a remote host, no turned-off certificate checks); least-privilege roles (no service, admin or owner role where a narrower one serves); no secret in a log line, error message or URL; SQL is parameterized (no values put into SQL text by string building); an allowlist is checked before any fetch of a URL that comes from data or input. Each violation is a FIX item. Record n/a when the task touches none of these.`
+
 function criticChecklist() {
   const core = [
     `The acceptance test exists and its commit precedes the implementation commits. Verify "fails on main" by checking that the paths or behaviour the test exercises do not exist at the PR's merge-base (git cat-file -e origin/main:<path>, or reasoning from the diff). Every test that asserts a rejection, refusal, quarantine or error also has a positive control in the same file: the same function, called the same way, accepting the unaltered valid input. A negative-only test passes for the wrong reason when arguments are swapped or a path does not exist (a 50-case mutation test in another project passed this way); a missing control fails this item.`,
@@ -1144,6 +1174,7 @@ function criticChecklist() {
       ? `Each of the project's own critic checks, in order (one result for this item, with each check's result in the evidence; it fails if any listed check fails):\n${CRITIC_EXTRA.map((s, i) => `   7.${i + 1} ${s}`).join('\n')}`
       : `The project's own critic checks (criticChecks): the project defines none, so record n/a.`,
     `Every entry in the PR body's \`Decisions:\` block (lines of the form id | choice | reason | reversible) is inside the decision envelope as the 'Decision envelope' section of ${SPEC} defines it: reversible by one revert PR or one config edit, within the cost cap, no project invariant or fixed decision touched, not in a human-only category. A decision outside the envelope is a FIX item. Record n/a when the PR took no decisions.`,
+    SECURITY_ITEM,
   ]
   return core.map((s, i) => `${i + 1}. ${s}`).join('\n')
 }
@@ -1156,7 +1187,8 @@ Owned paths for this task: ${t.owns}. Task notes given to the worker: ${t.notes 
 Work from ${REPO} on main without checking anything out: gh pr diff ${w.prNumber}, gh pr view ${w.prNumber}, gh pr view ${w.prNumber} --json commits,files, and PR comments if round > 1. Read the spec sections the task names and compare the diff against them line by line. Do not run ${CHECK} locally and do not edit any file or branch.
 Apply the checklist in order and record pass/fail with evidence for each item; record "n/a" with pass when an item does not apply to this task:
 ${criticChecklist()}
-Verdict: MERGE if every applicable item passes. FIX lists numbered items each with the check that proves it and a cause (defect, spec_miss or loop); be complete in one pass, the worker gets at most ${FIX_ROUNDS} rounds. STOP only if the spec itself is wrong or contradictory; name the section. Do not watch or wait for CI and do not look at its status: the workflow waits for CI itself and combines the result with your verdict.`
+Verdict: MERGE if every applicable item passes. FIX lists numbered items each with the check that proves it and a cause (defect, spec_miss or loop); be complete in one pass, the worker gets at most ${FIX_ROUNDS} rounds. STOP only if the spec itself is wrong or contradictory; name the section.
+Findings: record every problem you see in findings, whatever the verdict, each with a severity, what is wrong, and where (file:line). high: it would break, leak or corrupt something in use; every high finding is also a FIX item, so a high finding means the verdict is not MERGE. medium: a real problem a later task can fix. low: a nit. Medium and low findings go in findings only and do not change the verdict. An empty list means you saw no problem. notes is a short summary for the record; never put a problem only in notes, because nothing reads notes for problems. Do not watch or wait for CI and do not look at its status: the workflow waits for CI itself and combines the result with your verdict.`
 }
 
 function mergerPrompt(t, w, critic) {
@@ -1247,6 +1279,30 @@ function roundRecord(round, critic, ci) {
     fixItems: critic ? critic.fixItems : [],
     notes: critic ? critic.notes : null,
     checklist: critic ? critic.checklist : [],
+    findings: critic ? cleanFindings(critic.findings) : [],
+  }
+}
+
+// Findings as the critic returned them, keeping only well-formed entries (a malformed one is dropped, not guessed at).
+function cleanFindings(list) {
+  if (!Array.isArray(list)) return []
+  return list
+    .filter((f) => f && SEVERITIES_FOUND.includes(f.severity) && typeof f.what === 'string' && f.what.trim())
+    .map((f) => ({ severity: f.severity, what: f.what, where: typeof f.where === 'string' ? f.where : '' }))
+}
+
+// A high finding is a FIX item. A critic that returns MERGE with a high finding is turned into FIX here, with each high
+// finding as an item (cause defect), so it cannot ship as a remark. A FIX or STOP verdict is left as returned.
+function routeHighFindings(t, critic) {
+  if (!critic || critic.verdict !== 'MERGE') return critic
+  const high = cleanFindings(critic.findings).filter((f) => f.severity === 'high')
+  if (!high.length) return critic
+  log(`${t.id}: critic said MERGE with ${high.length} high finding${high.length === 1 ? '' : 's'}; turned into FIX`)
+  return {
+    ...critic,
+    verdict: 'FIX',
+    fixItems: high.map((f, i) => ({ n: i + 1, what: `${f.what}${f.where ? ` (${f.where})` : ''}`, provedBy: 'the critic\'s high finding no longer applies', cause: 'defect' })),
+    notes: `MERGE turned into FIX by the workflow: high findings are FIX items. ${critic.notes || ''}`.trim(),
   }
 }
 
@@ -1419,7 +1475,7 @@ async function ciOnlySince(t, w, tag, ph, since) {
 async function reviewRound(t, w, tag, ph, approved) {
   const st = taskState(t)
   const rec = (critic, ci, extra) => results[t.id].rounds.push({ ...roundRecord(tag, critic, ci), ...(extra || {}) })
-  const criticCall = () => callCritic(criticPrompt(t, w, tag), { label: `critic:${t.id} ${roundLabel(tag)}`, phase: ph.review, schema: CRITIC_SCHEMA })
+  const criticCall = async () => routeHighFindings(t, await callCritic(criticPrompt(t, w, tag), { label: `critic:${t.id} ${roundLabel(tag)}`, phase: ph.review, schema: CRITIC_SCHEMA }))
   let critic = null
   let ci = null
   let ciP = null
@@ -1766,6 +1822,9 @@ async function runTask(t, ph) {
 // Preflight: before any worker starts, one relay runs merge-pr.js against PR 0 in dry-run mode. It proves the script is
 // linked and the relay may run it. PR 0 does not exist, so an `error` outcome that is not about the config is the
 // expected answer. A block, a missing script or an unreadable config fails the wave now, not after a whole wave of work.
+// The default branch's head when the wave starts, from the dry run's baseSha (loop 2.3.0); the integration review diffs
+// from it. null when the dry run did not report one (or project.merger is 'agent', which runs no preflight).
+let waveBase = null
 async function preflightMerge() {
   const command = `node ${SCRIPTS}/merge-pr.js 0 --repo ${REPO} --dry-run`
   const fail = (why) => {
@@ -1790,6 +1849,8 @@ async function preflightMerge() {
     return fail(`this wave-loop script is loop ${LOOP_VERSION}, but the loop scripts in ${SCRIPTS} report ${line.loopVersion ? `loop ${line.loopVersion}` : 'no version'}. The session resolved another copy of the loop: 'wave-loop' comes from the .claude/workflows of the directory the session started in. Start the session in the project repo (or relink that copy), then run the wave again`)
   }
   warnLoad(line.load)
+  waveBase = SHA_RE.test(String(line.baseSha || '')) ? line.baseSha : null
+  if (waveBase) log(`wave base: ${waveBase}`)
   return true
 }
 // The dry run reports the machine's 1-minute load average; above the threshold (project.loadWarnFactor, default 4, x the
@@ -1861,6 +1922,63 @@ if (TAIL) {
   }
 }
 
+// Integration review (v2.3): the critic reviews one PR at a time, so nothing looked at the wave as a whole (wave 2 of
+// Warden: duplicated helpers across tasks, a connection without TLS, an import too slow at real data sizes). One
+// read-only agent on the critic model reads the whole wave's diff once. It never edits, never escalates and never
+// changes the gate; its findings are returned as result.integration for the scorecard and the human.
+const INTEGRATION_ON = P.integrationReview !== false
+const INTEGRATION_AREAS = ['duplication', 'layering', 'security', 'performance', 'dead_code', 'other']
+const INTEGRATION_SCHEMA = {
+  type: 'object',
+  properties: {
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          severity: { type: 'string', enum: SEVERITIES_FOUND, description: 'high = would break, leak or corrupt something in use; medium = a real problem to fix in a later task; low = a nit' },
+          area: { type: 'string', enum: INTEGRATION_AREAS },
+          what: { type: 'string' },
+          where: { type: 'string', description: 'file:line' },
+        },
+        required: ['severity', 'area', 'what', 'where'],
+      },
+    },
+    summary: { type: 'string' },
+  },
+  required: ['findings', 'summary'],
+}
+function integrationPrompt(base, merged) {
+  return `You are the integration reviewer for the ${NAME} repository. This wave merged ${merged.length} PR${merged.length === 1 ? '' : 's'} (${merged.map((r) => `${r.task} ${r.title}`).join('; ')}). Each was reviewed alone; you review them together.
+Work read-only from ${REPO}: run git fetch origin, then read git diff ${base}..origin/main (and git log --oneline ${base}..origin/main). Read the surrounding code where the diff needs context. Do not edit, create or delete any file, branch, PR, comment or setting; do not run the project's check or tests; do not check anything out.
+Look for, across the whole diff:
+1. duplication: the same helper, query, constant or logic written more than once, in different tasks or beside existing code that already does it;
+2. layering: a module reaching past its layer (UI or route code running SQL, a library reading env or the network directly, an import cycle);
+3. security: a connection without TLS, a role broader than needed, a secret in a log line, error or URL, SQL built from strings, a fetch of a URL from data or input without an allowlist check;
+4. performance at real data sizes: per-row queries or requests in a loop, a whole table or file read into memory, a missing index or limit, work repeated per call that could run once;
+5. dead code: exports, files, flags or branches nothing uses.
+Return findings, each with severity (high: it would break, leak or corrupt something in use; medium: a real problem to fix in a later task; low: a nit), area, what is wrong, and where as file:line. Report only what the diff shows; an empty list is a valid answer. summary is two or three sentences on the wave as a whole.`
+}
+async function integrationReview(merged) {
+  if (!INTEGRATION_ON) return null
+  if (!merged.length) return { ran: false, baseSha: waveBase, findings: [], summary: '', skipped: 'no task merged' }
+  if (!waveBase) return { ran: false, baseSha: null, findings: [], summary: '', skipped: MERGER_AGENT ? 'no wave base sha (project.merger is agent, so no preflight ran)' : 'no wave base sha (the preflight dry run reported none)' }
+  phase('Integration')
+  try {
+    const r = await agent(integrationPrompt(waveBase, merged), { label: 'integration:wave', phase: 'Integration', schema: INTEGRATION_SCHEMA, model: criticModel.model, effort: criticModel.effort })
+    if (!r) return { ran: false, baseSha: waveBase, findings: [], summary: '', error: 'the integration agent returned nothing' }
+    const findings = (Array.isArray(r.findings) ? r.findings : [])
+      .filter((f) => f && SEVERITIES_FOUND.includes(f.severity) && typeof f.what === 'string' && f.what.trim())
+      .map((f) => ({ severity: f.severity, area: INTEGRATION_AREAS.includes(f.area) ? f.area : 'other', what: f.what, where: typeof f.where === 'string' ? f.where : '' }))
+    const high = findings.filter((f) => f.severity === 'high').length
+    log(`Wave ${WAVE} integration review: ${findings.length} finding${findings.length === 1 ? '' : 's'} (${high} high); the gate does not change`)
+    return { ran: true, baseSha: waveBase, findings, summary: typeof r.summary === 'string' ? r.summary : '' }
+  } catch (e) {
+    return { ran: false, baseSha: waveBase, findings: [], summary: '', error: String(e && e.message ? e.message : e) }
+  }
+}
+const integration = await integrationReview(Object.values(results).filter((r) => r.merged))
+
 const everyMerged = Object.values(state).every((s) => s === 'merged')
 const last = TAIL ? tail : Object.values(results).slice(-1)[0]
 const checkGreen = !!(last && last.merge && last.merge.checkOnMainExitCode === 0)
@@ -1914,5 +2032,12 @@ for (const r of Object.values(results)) {
   }
 }
 
-const models = { ...MODELS, ...(MERGER_AGENT ? {} : { merger: RELAY_MODEL }), relay: RELAY_MODEL, critic: criticModel, ...(realityModel ? { reality: realityModel } : {}) }
-return { project: NAME, wave: WAVE, gate: gate ? 'PASS' : 'FAIL', models, state, tasks: results, escalations, reality, decisions, timings, loopVersion: LOOP_VERSION }
+const models = { ...MODELS, ...(MERGER_AGENT ? {} : { merger: RELAY_MODEL }), relay: RELAY_MODEL, critic: criticModel, ...(realityModel ? { reality: realityModel } : {}), ...(integration && integration.ran ? { integration: { model: criticModel.model, effort: criticModel.effort } } : {}) }
+// Every critic finding of every task and round, flattened (each round record keeps its own as well).
+const findings = []
+for (const r of Object.values(results)) {
+  for (const rd of r.rounds || []) {
+    for (const f of rd.findings || []) findings.push({ task: r.task, round: rd.round, ...f })
+  }
+}
+return { project: NAME, wave: WAVE, gate: gate ? 'PASS' : 'FAIL', models, state, tasks: results, escalations, reality, decisions, timings, loopVersion: LOOP_VERSION, findings, integration }
