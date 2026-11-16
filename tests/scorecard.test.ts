@@ -175,3 +175,83 @@ describe('loop-scorecard.py', { timeout: 120_000 }, () => {
   });
 });
 
+// Loop 2.3.0: critic findings, the integration review and escaped defects.
+describe('loop-scorecard.py: findings, integration, escaped defects', { timeout: 120_000 }, () => {
+  async function withResult(extra: (r: Record<string, any>) => Record<string, any>, args: string[] = []) {
+    const dir = mkdtempSync(join(tmpdir(), 'scorecard-findings-'));
+    const doc = JSON.parse(readFileSync(fixture('scorecard-v2-decisions.json'), 'utf8'));
+    const result = typeof doc.result === 'string' ? JSON.parse(doc.result) : doc.result;
+    doc.result = JSON.stringify(extra(result));
+    const path = join(dir, 'result.json');
+    writeFileSync(path, JSON.stringify(doc));
+    return scorecard(['3', '2026-11-16', path, ...args]);
+  }
+  const finding = (severity: string, what: string, where: string) => ({ severity, what, where });
+  const withFindings = (r: Record<string, any>) => {
+    const tasks = JSON.parse(JSON.stringify(r.tasks));
+    const [first] = Object.keys(tasks);
+    tasks[first].rounds = [
+      { round: 1, verdict: 'FIX', ci: 'green', fixItems: [], notes: '', checklist: [], findings: [finding('high', 'connection without TLS', 'src/db.ts:12'), finding('low', 'typo in a comment', 'src/db.ts:3')] },
+      { round: 2, verdict: 'MERGE', ci: 'green', fixItems: [], notes: '', checklist: [], findings: [finding('medium', 'helper duplicated', 'src/a.ts:40'), finding('high', 'connection without TLS', 'src/db.ts:12')] },
+    ];
+    return { ...r, tasks, loopVersion: '2.3.0' };
+  };
+
+  it('lists every high and medium critic finding once, high first, and leaves low ones out', async () => {
+    const md = await withResult(withFindings);
+    const section = md.slice(md.indexOf('## Critic findings'), md.indexOf('## Integration review'));
+    expect(section).toContain('| high | connection without TLS | src/db.ts:12 |');
+    expect(section).toContain('| medium | helper duplicated | src/a.ts:40 |');
+    expect(section).not.toContain('typo in a comment');
+    expect(section.match(/connection without TLS/g)).toHaveLength(1);
+    expect(section.indexOf('| high |')).toBeLessThan(section.indexOf('| medium |'));
+  });
+
+  it('says so when there are no high or medium findings, and when no integration review ran', async () => {
+    const md = await withResult((r) => r);
+    expect(md).toContain('## Critic findings\n\nNone at high or medium severity.');
+    expect(md).toContain('## Integration review\n\nNot run (a loop older than 2.3.0, or project.integrationReview is false).');
+  });
+
+  it('prints the integration review: summary, high and medium findings with area, and a count of low ones', async () => {
+    const integration = {
+      ran: true,
+      baseSha: 'a'.repeat(40),
+      summary: 'Two tasks wrote the same fetch helper.',
+      findings: [
+        { severity: 'medium', area: 'duplication', what: 'fetch helper written twice', where: 'src/a.ts:10' },
+        { severity: 'high', area: 'security', what: 'service role used for reads', where: 'src/b.ts:5' },
+        { severity: 'low', area: 'dead_code', what: 'unused export', where: 'src/c.ts:1' },
+      ],
+    };
+    const md = await withResult((r) => ({ ...r, integration }));
+    const section = md.slice(md.indexOf('## Integration review'), md.indexOf('## Roles'));
+    expect(section).toContain('Two tasks wrote the same fetch helper.');
+    expect(section).toContain('| high | security | service role used for reads | src/b.ts:5 |');
+    expect(section).toContain('| medium | duplication | fetch helper written twice | src/a.ts:10 |');
+    expect(section.indexOf('| high |')).toBeLessThan(section.indexOf('| medium |'));
+    expect(section).not.toContain('unused export');
+    expect(section).toContain('Low findings not listed: 1.');
+  });
+
+  it('prints why an integration review did not run', async () => {
+    const md = await withResult((r) => ({ ...r, integration: { ran: false, baseSha: null, findings: [], summary: '', skipped: 'no task merged' } }));
+    expect(md).toContain('## Integration review\n\nNot run: no task merged.');
+  });
+
+  it('adds --escaped to the critic misses, and says when escaped defects were not counted', async () => {
+    const without = await withResult((r) => r);
+    expect(without).toMatch(/- Critic misses: \d+ \(reverts after MERGE \d+; escaped defects not counted, pass --escaped\)/);
+    const counted = await withResult((r) => r, ['--escaped', '3']);
+    const m = /- Critic misses: (\d+) \(reverts after MERGE (\d+), escaped defects 3\)/.exec(counted);
+    expect(m).toBeTruthy();
+    expect(Number(m![1])).toBe(Number(m![2]) + 3);
+    expect(await withResult((r) => r, ['--escaped=2'])).toMatch(/escaped defects 2\)/);
+    expect(counted).toMatch(/Critic: a miss is a revert after MERGE or an escaped defect/);
+  });
+
+  it('refuses an --escaped that is not a whole number', async () => {
+    await expect(withResult((r) => r, ['--escaped', 'x'])).rejects.toMatchObject({ stderr: expect.stringContaining('--escaped needs a whole number') });
+  });
+});
+

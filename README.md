@@ -36,6 +36,15 @@ operating manual. Read it fully before running a wave.
    reverted once and the task reopened once. A worker that returns before its check has finished
    (`checkExitCode` -1) is sent back to finish it, at most two times, instead of escalating.
    Anything else parks the task with an escalation.
+   Since 2.3.0 the critic also returns `findings`, every problem it saw with a severity (`high`, `medium`, `low`) and a
+   file:line. A high finding is a FIX item: a MERGE that carries one is turned into FIX by the workflow. Medium and low
+   findings do not change the verdict; they go into the result and the scorecard instead of being lost in the notes.
+   The checklist's item 9 is security, for tasks that touch the network, a database, env, auth or secrets: TLS on every
+   connection, least-privilege roles, no secrets in logs or URLs, parameterized SQL, an allowlist before any fetch.
+   After the tail, one read-only integration review on the critic model reads `git diff <wave base>..origin/main` (the
+   base is origin's head, recorded by the preflight dry run) for duplication across tasks, layering, security,
+   performance at real data sizes and dead code. It never edits and never changes the gate; its findings are
+   `result.integration`. `project.integrationReview: false` turns it off.
 4. The wave gate: every task merged or parked, check green on main, the wave's replay passes,
    no open escalations. The session reports the gate and the escalations; the human decides.
 5. The session writes the wave scorecard and reads it before changing any role's model or effort.
@@ -48,6 +57,10 @@ started in `~/dev/agent-loop` gets that repo's own pinned copy (`.claude/` there
 `~/dev/agent-loop-stable`), not the loop the project links. The preflight compares the workflow's
 `LOOP_VERSION` with the version the project's linked scripts print and fails the wave when they
 differ; a wave-loop older than 2.2.0 has no such check, and its scorecard carries a LOOP VERSION flag.
+From `~/dev/agent-loop`, launch the loop workflows by `scriptPath` (`~/dev/agent-loop/claude/workflows/<name>.js`).
+`chain-loop` runs each wave through `workflow({ scriptPath: '<repo>/.claude/workflows/wave-loop.js' })`, the copy
+linked into the project, not by name (`args.waveLoop` overrides it), and stops with an error that names both versions
+when a wave reports another `loopVersion` than its own.
 
 Build the args from the spec instead of by hand:
 
@@ -69,14 +82,23 @@ verbatim from the spec. `tail` has the same shape or is `null`. A parked task is
 passing only the parked tasks again; a task whose draft PR should be continued after an escalation
 was answered gets `resume: { prNumber, prUrl, worktree, items: [what to do], notes }`.
 
-The result is `{ project, wave, gate, models, state, tasks, escalations, reality, decisions, timings, loopVersion }`. Save it as JSON in the
-session scratchpad, then write the scorecard:
+The result is `{ project, wave, gate, models, state, tasks, escalations, reality, decisions, timings, loopVersion, findings, integration }`.
+Save it as JSON in the session scratchpad, then write the scorecard:
 
 ```
-python3 -I ~/dev/agent-loop/scripts/loop-scorecard.py <wave> <date> <result.json>... > ~/dev/agent-loop/docs/<project>/<date>-wave-<n>-loop.md
+python3 -I ~/dev/agent-loop/scripts/loop-scorecard.py <wave> <date> <result.json>... --escaped <n> --out <scorecard path> > <scorecard path>
 ```
 
-Several result files for one wave (a relaunch after an escalation) merge into one scorecard.
+Several result files for one wave (a relaunch after an escalation) merge into one scorecard. `--escaped <n>` is the
+number of fix commits made after the wave that trace to a task it merged: defects the critic let through. Count them
+from the default branch's history (for the previous wave, when the scorecard is written late). The scorecard lists
+every high and medium critic finding and the integration review's findings.
+
+Decision rule (printed at the end of each scorecard): two waves in a row trigger a change. Worker: first-pass MERGE
+under half with defect-cause items, bump up; only spec_miss items, fix the prompt. Critic: a miss is a revert after
+MERGE or an escaped defect (`--escaped`); misses in two waves in a row, add the missed kind to the checklist or bump up;
+zero misses for two waves with only low findings, bump down. Merger: any failure traced to the model, bump up.
+Loop-cause items are fixed in the workflow script, not by a model change.
 
 ## Rules the session keeps
 
@@ -123,6 +145,7 @@ Several result files for one wave (a relaunch after an escalation) merge into on
 | `syncConflicts` | the only files a sync merge may resolve, and how |
 | `checkMutates` | files the check rewrites on main that the merger restores |
 | `criticChecks` | project invariants appended to the critic checklist |
+| `integrationReview` | `false` turns off the read-only integration review of the whole wave's diff after the tail (on by default since 2.3.0) |
 | `workerNotes`, `notes` | text added to worker prompts, or to every prompt |
 | `maxBuilders`, `maxChains`, `fixRounds`, `finishRounds`, `models`, `trailer` | loop knobs; defaults 2 check slots, 6 chains, 3 fix rounds, 2 finish rounds, the roles above, `Co-Authored-By: Claude <noreply@anthropic.com>` |
 | `mainCi` | name of the CI workflow that runs the check on pushes to main; when set, the merger waits for that run instead of running the check on this machine |
@@ -143,16 +166,18 @@ Several result files for one wave (a relaunch after an escalation) merge into on
   only inside a task.
 - `claude/agents/`: producer, critic and merger role definitions, for use through the Agent tool
   outside a wave (a single task, a single review).
-- `claude/hookify.*.local.md`: hookify rules that block force pushes, secrets in file writes, and
-  commits or pushes that name the default branch.
+- `claude/hookify.*.local.md`: hookify rules that block force pushes, secrets in file writes (Anthropic, GitHub and
+  AWS keys, Postgres URLs with a password, Supabase `sb_secret_`/`sb_publishable_` keys, JWTs), and commits or pushes
+  that name the default branch.
 - `scripts/slot.sh`: the machine-wide check semaphore, linked into each repo as `.claude/slot.sh`.
 - `scripts/merge-pr.js`, `scripts/wait-ci.js`, `scripts/ci-only.js`: the merge, the CI wait and the CI-only delta check,
   run by relay agents from `.claude/scripts`. `merge-pr.js --defer-main` merges and leaves main's run to
   `merge-pr.js --verify-main <sha>`, which waits for it and reverts once on red.
 - `scripts/spec-lint.js`: structural check of a spec, plus the wave and task shape warnings above.
-- `scripts/loop-scorecard.py`: per-wave scorecard (rounds, fix items by cause, tokens and minutes
-  per role, and the decision rule for moving a role's model or effort).
-- `tests/hookify.test.ts`: checks that the three rules exist and are well formed.
+- `scripts/loop-scorecard.py`: per-wave scorecard (rounds, fix items by cause, critic findings, the integration
+  review, tokens and minutes per role, critic misses including escaped defects, and the decision rule for moving a
+  role's model or effort).
+- `tests/hookify.test.ts`: checks that the three rules exist and are well formed, and runs the secrets pattern on samples.
 - `templates/loop.local.json`: the project config template.
 - `docs/<project>/`: records from each project (spec reviews, scorecards, handoffs, the loop
   appendices as first written for Pilot).
@@ -184,5 +209,5 @@ installs alone; `legacy-peer-deps=true` in the project's `.npmrc` makes the full
    check that proves each fix item. Verdicts are MERGE, FIX or STOP; STOP names the spec section.
 3. Deterministic control flow decides what runs next; models decide only inside a task.
 4. Machine gate per wave; humans read between early waves, then the gate chains.
-5. Measure each role (first-pass merge rate, fix causes, critic misses, tokens) and move models one
+5. Measure each role (first-pass merge rate, fix causes, critic misses including escaped defects, tokens) and move models one
    notch at a time, one role per wave, so the baseline stays readable.

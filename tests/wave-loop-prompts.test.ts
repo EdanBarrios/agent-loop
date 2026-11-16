@@ -110,10 +110,10 @@ describe('4.2 critic checklist', () => {
     return prompt.split('\n').filter((l) => /^\d+\. /.test(l));
   }
 
-  it('has 8 items in order and item 8 checks the PR Decisions against the envelope', async () => {
+  it('has 9 items in order, item 8 checks the PR Decisions against the envelope and item 9 is security', async () => {
     const { prompts } = await runWave(allRoles);
     const list = items(prompts['critic:9.1 r1']);
-    expect(list.map((l) => Number(l.split('.')[0]))).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(list.map((l) => Number(l.split('.')[0]))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(list[0]).toMatch(/acceptance test/i);
     expect(list[1]).toMatch(/owned paths/i);
     expect(list[2]).toMatch(/network or a paid API/i);
@@ -124,12 +124,16 @@ describe('4.2 critic checklist', () => {
     expect(list[7]).toContain('Decisions:');
     expect(list[7]).toMatch(/inside the (decision )?envelope/i);
     expect(list[7]).toMatch(/FIX/);
+    expect(list[8]).toMatch(/^9\. Security, when the task's owned paths or its diff touch the network, a database, environment variables, auth or secrets/);
+    for (const rule of [/TLS on every connection/, /least-privilege roles/, /no secret in a log line, error message or URL/, /SQL is parameterized/, /allowlist is checked before any fetch/, /FIX item/, /n\/a when the task touches none/]) {
+      expect(list[8]).toMatch(rule);
+    }
   });
 
-  it('still has 8 items when the project adds critic checks, which stay under item 7 in order', async () => {
+  it('still has 9 items when the project adds critic checks, which stay under item 7 in order', async () => {
     const { prompts } = await runWave(allRoles, { criticChecks: ['Evidence rule holds.', 'Ledger is reserved.'] });
     const prompt = prompts['critic:9.1 r1'];
-    expect(items(prompt)).toHaveLength(8);
+    expect(items(prompt)).toHaveLength(9);
     expect(prompt.indexOf('Evidence rule holds.')).toBeGreaterThan(prompt.indexOf('7. '));
     expect(prompt.indexOf('Evidence rule holds.')).toBeLessThan(prompt.indexOf('Ledger is reserved.'));
     expect(prompt.indexOf('Ledger is reserved.')).toBeLessThan(prompt.indexOf('8. '));
@@ -186,13 +190,24 @@ describe('4.2 agent files', () => {
     expect(frontMatter('critic.md').tools).toBe('Read, Bash, Glob, Grep');
   });
 
-  it('critic.md has 8 numbered items in order, item 8 about Decisions', () => {
+  it('critic.md has 9 numbered items in order, item 8 about Decisions and item 9 about security', () => {
     const nums = body('critic.md')
       .split('\n')
       .filter((l) => /^\d+\. /.test(l));
-    expect(nums.map((l) => Number(l.split('.')[0]))).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(nums.map((l) => Number(l.split('.')[0]))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(nums[7]).toContain('Decisions:');
     expect(nums[7]).toMatch(/FIX/);
+    expect(nums[8]).toMatch(/^9\. Security/);
+    expect(nums[8]).toMatch(/TLS on every connection/);
+    expect(nums[8]).toMatch(/SQL is parameterized/);
+  });
+
+  it('critic.md names the critic model the workflow uses (Fable) and asks for findings', () => {
+    expect(frontMatter('critic.md').model).toBe('fable');
+    const c = body('critic.md');
+    expect(c).toMatch(/`findings`/);
+    expect(c).toMatch(/every high finding is also a FIX item/);
+    expect(c).toMatch(/positive control/);
   });
 
   it('critic.md has no CI wait, no pending-means-FIX sentence, and item 5 is supplied by the workflow', () => {
