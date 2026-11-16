@@ -6,6 +6,10 @@
 // A wave of 1 to 3 tasks that all have lane 'fast' and no scan hit skips the reviewers (the file is written with skipped: true).
 // All decision logic is in claude/lib/review.js; this script only wires the runtime's agent() and log() to it.
 // The review file goes to ~/dev/agent-loop/docs/<project>/<date>-wave-<n>-review.json. Nothing in the project is edited.
+// v2.3.1: scripts cannot write files, and a Haiku agent retyping the file cost about 126K tokens (Warden wave 2). By
+// default the result carries reviewPath and writeBy 'session', and the session writes the file with one command:
+//   node ~/dev/agent-loop/scripts/write-review.js <this run's output file>
+// project.reviewWriter: 'agent' keeps the old writer agent.
 
 export const meta = {
   name: 'spec-review',
@@ -15,7 +19,7 @@ export const meta = {
     { title: 'Review', detail: 'Reviewer reads the wave against the spec; one extra pass if a recommendation is blocked', model: 'sonnet' },
     { title: 'Spikes', detail: 'One low-effort agent per external fact, answers checked by their recorded source', model: 'haiku' },
     { title: 'Adversary', detail: 'Strongest model, spec and recommendations only, prefers evidence over argument', model: 'fable' },
-    { title: 'Write', detail: 'The review JSON goes to the loop repo docs' },
+    { title: 'Write', detail: 'The review JSON goes to the loop repo docs (written by the session with scripts/write-review.js, or by a writer agent when project.reviewWriter is agent)' },
   ],
 }
 
@@ -580,7 +584,7 @@ const REC_SHAPE = `Each recommendation has: id, kind (defect|question), text (th
 
 /**
  * @param {{ project: any, specPath: string, wave: string, tasks?: any[] }} c
- * @param {{ pass: 1|2|3, spikes?: Spike[], blocked?: Array<{ rec: any, adversary: any }> }} p
+ * @param {{ pass: 1|2|3, spikes?: Spike[], recs?: any[], blocked?: Array<{ rec: any, adversary: any }> }} p
  */
 function reviewerPrompt(c, p) {
   const name = c.project.name;
@@ -592,19 +596,24 @@ ${REC_SHAPE}
 Blocked:
 ${JSON.stringify(p.blocked, null, 2)}`;
   }
-  const rerun =
-    p.pass === 2
-      ? `
-This is the re-run. Spike agents researched the external facts you listed; each answer has a recorded source. Revise your recommendations with them, set dependsOn on any recommendation that still relies on an open fact, and keep every other part of your first review.
+  if (p.pass === 2) {
+    // v2.3.1: a targeted pass. It revises only the recommendations that rely on an external fact, instead of re-running
+    // the whole review (Warden wave 2: 13.4 min and 142K tokens to absorb 7 spike answers); every other first-pass
+    // recommendation is kept as it was.
+    return `${head}
+This is the re-run after the spikes. Spike agents researched the external facts you listed; each answer has a recorded source. Revise only the recommendations listed below, which rely on those facts: return each one revised with the same id (set dependsOn to the facts it still relies on that are open), or leave it out if a spike answer shows it is wrong. Do not repeat or re-review any other recommendation; they are kept as they were. Add a new recommendation only when a spike answer itself shows a defect or a question that none of your recommendations covers. Return recs (externalFacts and gates may be empty arrays).
+${REC_SHAPE}
+Recommendations to revise:
+${JSON.stringify(p.recs ?? [], null, 2)}
 Spike results:
-${JSON.stringify(p.spikes, null, 2)}
-`
-      : '';
+${JSON.stringify(p.spikes, null, 2)}`;
+  }
   return `${head}
 Review every wave ${c.wave} task against the spec for defects (ambiguity, contradiction, a missing owner or test, a dependency that is not listed) and for questions only a human can settle. Return each as a recommendation.
 ${REC_SHAPE}
 externalFacts: facts outside the repository that you could not settle (a vendor limit, a price, an API behaviour). Give each an id F1, F2, ... and one question. Do not guess them.
-gates: scan every task and every fixed decision for secrets, accounts, quotas, vendor plans, legal text and irreversible production steps. Return one gate item for each, with what, why, before (the wave id of the first task that needs it), leadTime (minutes, hours or days; days for anything with an approval queue or a quota request), task and kind (secret|account|quota|plan|legal|irreversible).${rerun}`;
+Also check whether any task's change breaks a test file that another task owns (often an earlier wave's tail test that pins an exact result shape with toEqual, or an import path); a worker may edit only the paths it owns, so if one does, recommend who edits that test and record it in the spec's owner table.
+gates: scan every task and every fixed decision for secrets, accounts, quotas, vendor plans, legal text and irreversible production steps. Return one gate item for each, with what, why, before (the wave id of the first task that needs it), leadTime (minutes, hours or days; days for anything with an approval queue or a quota request), task and kind (secret|account|quota|plan|legal|irreversible).`;
 }
 
 /** @param {{ specPath: string, wave: string, project: any }} c @param {Rec[]} recs */
@@ -722,7 +731,6 @@ async function runSpecReview(input) {
   // (1) and (1b): first reviewer pass.
   const r1 = await agent(reviewerPrompt(ctx, { pass: 1 }), { label: 'reviewer r1', phase: 'Review', schema: REVIEWER_SCHEMA, ...models.reviewer });
   if (!r1 || !Array.isArray(r1.recs)) throw new Error('spec-review: the reviewer returned nothing; nothing to combine');
-  let pass = r1;
   let gates = [...(r1.gates ?? [])];
 
   // (2): one spike per external fact, concurrently, none retried.
@@ -731,17 +739,29 @@ async function runSpecReview(input) {
   const openCount = spikes.filter((s) => s.status === 'open').length;
   if (spikes.length) log(`spikes: ${spikes.length - openCount} answered, ${openCount} open`);
 
-  // (3): the reviewer once more, only if there were facts to give it.
+  // (3): a targeted reviewer pass, only if there were facts to give it: it revises the recommendations that rely on a
+  // fact (dependsOn) and may add new ones a spike answer shows; every other first-pass recommendation is kept as it was.
+  let recs = r1.recs;
   if (facts.length) {
-    const r2 = await agent(reviewerPrompt(ctx, { pass: 2, spikes }), { label: 'reviewer r2', phase: 'Review', schema: REVIEWER_SCHEMA, ...models.reviewer });
+    const factIds = new Set(facts.map((f) => f.id));
+    const dependent = r1.recs.filter((r) => Array.isArray(r.dependsOn) && r.dependsOn.some((d) => factIds.has(d)));
+    const r2 = await agent(reviewerPrompt(ctx, { pass: 2, spikes, recs: dependent.map(stripRec) }), { label: 'reviewer r2', phase: 'Review', schema: REVIEWER_SCHEMA, ...models.reviewer });
     if (r2 && Array.isArray(r2.recs)) {
-      pass = r2;
+      // In first-pass order: a revised recommendation takes its original's place (or is dropped when pass 2 left it
+      // out); one pass 2 repeats without being asked is ignored; new ones go at the end.
+      const revisedIds = new Set(dependent.map((r) => r.id));
+      const firstIds = new Set(r1.recs.map((r) => r.id));
+      const fromR2 = new Map(r2.recs.map((r) => [r.id, r]));
+      recs = [
+        ...r1.recs.flatMap((r) => (revisedIds.has(r.id) ? (fromR2.has(r.id) ? [fromR2.get(r.id)] : []) : [r])),
+        ...r2.recs.filter((r) => !firstIds.has(r.id)),
+      ];
       gates = [...gates, ...(r2.gates ?? [])];
+      log(`reviewer r2 revised ${dependent.length} recommendation${dependent.length === 1 ? '' : 's'} that rely on a fact; ${r1.recs.length - dependent.length} kept from the first pass`);
     } else {
       log('reviewer re-run returned nothing; keeping the first pass');
     }
   }
-  const recs = pass.recs;
 
   // (4): adversarial review. It sees the spec and the stripped recommendations only.
   const adv = await agent(adversaryPrompt(ctx, recs), { label: 'adversary', phase: 'Adversary', schema: ADVERSARY_SCHEMA, ...models.adversary });
@@ -785,9 +805,17 @@ async function runSpecReview(input) {
 }
 // @bundle-end review
 
-// Scripts cannot touch the filesystem, so the review file is written by a small agent that is told the exact
-// text and path and then re-reads the file to confirm it parses.
+// Scripts cannot touch the filesystem. By default (v2.3.1) the file is left to the session: this records the path, and
+// the session runs scripts/write-review.js on the run's output file, which writes exactly this text. With
+// project.reviewWriter 'agent', a small agent is told the exact text and path and re-reads the file to confirm it parses.
+const AGENT_WRITER = P.reviewWriter === 'agent'
+let sessionWrite = null
 async function write(path, text) {
+  if (!AGENT_WRITER) {
+    sessionWrite = { path, bytes: text.length }
+    log(`review file not written by the workflow: write it with node ~/dev/agent-loop/scripts/write-review.js <this run's output file> (${path})`)
+    return
+  }
   const models = { ...DEFAULT_MODELS, ...(P.models || {}) }
   const res = await agent(
     `Write the file ${path} with exactly the text between the markers below and nothing else (no markers, no added newline). Expand a leading ~ to the home directory and create parent directories first (mkdir -p). Then confirm it parses with python3 -I -c "import json,sys; json.load(open(sys.argv[1]))" <the expanded path>. Do not edit any other file. Return { path, bytes } with the expanded path and the byte size.
@@ -799,7 +827,7 @@ ${text}<<<END>>>`,
 }
 
 phase('Review')
-return await runSpecReview({
+const reviewOut = await runSpecReview({
   project: P,
   specPath: args.specPath || P.spec,
   wave: String(args.wave),
@@ -809,3 +837,4 @@ return await runSpecReview({
   write,
   log,
 })
+return sessionWrite ? { ...reviewOut, writeBy: 'session' } : reviewOut

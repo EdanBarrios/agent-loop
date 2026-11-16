@@ -105,7 +105,7 @@ const mergeRan = (over: Json = {}) => {
   return ran(line, line.exit);
 };
 const blocked = (note = 'Permission to run this command was denied.') => ({ status: 'blocked', note });
-const preflightOk = ran({ outcome: 'error', exit: 4, mergeSha: null, message: 'could not read PR #0: no pull requests found', loopVersion: '2.3.0' }, 4);
+const preflightOk = ran({ outcome: 'error', exit: 4, mergeSha: null, message: 'could not read PR #0: no pull requests found', loopVersion: '2.3.1' }, 4);
 
 const green = ciOf('green');
 // Chunked CI wait: chunk 1 keeps the base label, later chunks add ' c<n>'.
@@ -235,13 +235,71 @@ describe('2.1 relay results are parsed in code', () => {
 
   it('a relay that only says it merged is not believed: no JSON line from merge-pr.js escalates with the PR state and is not re-run', async () => {
     const { out, calls, escalations } = await runWave({ ...happy, 'merger:9.1': { status: 'ran', exitCode: 0, stdout: 'Merged PR 7 successfully.' } });
-    expect(calls.filter((c) => c.startsWith('merger:'))).toEqual(['merger:9.1']);
+    // 2.3.1: one read-only state relay runs (here it returns nothing); the merge itself is never re-run.
+    expect(calls.filter((c) => c.startsWith('merger:'))).toEqual(['merger:9.1', 'merger:9.1 state']);
     expect(out.gate).toBe('FAIL');
     expect(out.tasks['9.1'].merged).toBe(false);
     expect(escalations).toHaveLength(1);
     expect(escalations[0].what).toMatch(/merge-pr/);
     expect(escalations[0].question).toMatch(/PR #7/);
     expect(escalations[0].question).toMatch(/state/i);
+  });
+
+  describe('2.3.1 a lost merge output is settled by the PR state, never by re-running the merge', () => {
+    const killed = { status: 'ran', exitCode: 144, stdout: '' };
+    const stateLine = (state: string, mergeSha: string | null = 'm9') => ran({ outcome: 'state', exit: 0, state, mergeSha });
+
+    it('a killed merge relay on a PR that did merge counts as merged, and main is then checked as after any deferred merge', async () => {
+      const { out, calls, prompts, escalations } = await runWave({
+        ...happy,
+        'merger:9.1': killed,
+        'merger:9.1 state': stateLine('MERGED'),
+        'main:9.1': mergeRan({ mergeSha: 'm9', mainSha: 'm9', mainCheck: 'green' }),
+      });
+      expect(calls).toEqual(['preflight:merge', 'worker:9.1', 'ci:9.1 r1', 'critic:9.1 r1', 'merger:9.1', 'merger:9.1 state', 'main:9.1']);
+      expect(prompts['merger:9.1 state'][0]).toContain('/tmp/sim/.claude/scripts/merge-pr.js 7 --repo /tmp/sim --state');
+      expect(prompts['main:9.1'][0]).toContain('--verify-main m9');
+      expect(escalations).toEqual([]);
+      expect(out.gate).toBe('PASS');
+      expect(out.tasks['9.1'].merged).toBe(true);
+      expect(out.tasks['9.1'].merge).toMatchObject({ outcome: 'merged', mergeSha: 'm9' });
+    });
+
+    it('a relay that returned nothing is settled the same way', async () => {
+      const { out, calls } = await runWave({
+        ...happy,
+        'merger:9.1': null,
+        'merger:9.1 state': stateLine('MERGED'),
+        'main:9.1': mergeRan({ mergeSha: 'm9', mainSha: 'm9', mainCheck: 'green' }),
+      });
+      expect(calls.filter((c) => c.startsWith('merger:'))).toEqual(['merger:9.1', 'merger:9.1 state']);
+      expect(out.tasks['9.1'].merged).toBe(true);
+    });
+
+    it('without a main CI workflow the recovered merge is recorded as unverified on main, with no verify relay', async () => {
+      const { out, calls } = await runWave(
+        { ...happy, 'merger:9.1': killed, 'merger:9.1 state': stateLine('MERGED') },
+        { project: { mainCi: '' } },
+      );
+      expect(calls).not.toContain('main:9.1');
+      expect(out.tasks['9.1'].merged).toBe(true);
+      expect(out.tasks['9.1'].merge.script).toMatchObject({ recovered: true, mainCheck: 'unverified' });
+    });
+
+    it.each([
+      ['an open PR', stateLine('OPEN', null)],
+      ['a merged PR with no merge sha', stateLine('MERGED', null)],
+      ['a state relay with no JSON line', { status: 'ran', exitCode: 144, stdout: '' }],
+      ['a blocked state relay', blocked()],
+    ])('%s still escalates, naming the PR, and nothing is re-run', async (_name, state) => {
+      const { out, calls, escalations } = await runWave({ ...happy, 'merger:9.1': killed, 'merger:9.1 state': state });
+      expect(calls.filter((c) => c.startsWith('merger:'))).toEqual(['merger:9.1', 'merger:9.1 state']);
+      expect(calls).not.toContain('main:9.1');
+      expect(out.tasks['9.1'].merged).toBe(false);
+      expect(out.gate).toBe('FAIL');
+      expect(escalations).toHaveLength(1);
+      expect(escalations[0].question).toMatch(/PR #7/);
+    });
   });
 
   it('the JSON line is found after other output, and the last JSON line wins', async () => {
@@ -683,5 +741,54 @@ describe('relay timeouts: chunked CI wait and the foreground-timeout prompt', ()
       expect(p, label).toContain('at most 30 reads');
       expect(p.indexOf('timeout=600000'), label).toBeLessThan(p.indexOf('Run exactly this command'));
     }
+  });
+});
+
+describe('2.3.1 relaunches', () => {
+  it('a dependency that is not in this run counts as merged earlier: the task starts and never deadlocks', async () => {
+    const { out, calls, escalations } = await runWave(
+      { 'worker:9.2': w2, 'ci:9.2 r1': green, 'critic:9.2 r1': criticMerge, 'merger:9.2': mergeRan() },
+      { tasks: [task('9.2', { deps: ['9.1', '3.3'] })] },
+    );
+    expect(calls).toEqual(['preflight:merge', 'worker:9.2', 'ci:9.2 r1', 'critic:9.2 r1', 'merger:9.2']);
+    expect(escalations).toEqual([]);
+    expect(out.gate).toBe('PASS');
+    expect(out.state['9.2']).toBe('merged');
+  });
+
+  it('a dependency inside the run still orders the tasks, and its parking still parks the dependant', async () => {
+    const { out, calls, escalations } = await runWave(
+      { 'worker:9.1': w1, 'ci:9.1 r1': green, 'critic:9.1 r1': criticStop },
+      { tasks: [task('9.1'), task('9.2', { deps: ['9.1', '3.3'] })] },
+    );
+    expect(calls).not.toContain('worker:9.2');
+    expect(out.state['9.2']).toBe('parked');
+    expect(escalations.find((e) => e.task === '9.2')?.what).toBe('dependency 9.1 parked');
+  });
+
+  it('the critic sees the session answers of a relaunched task, and is told an outside edit still needs a recorded exception', async () => {
+    const resume = {
+      prNumber: 7,
+      prUrl: 'https://example.test/pull/7',
+      worktree: '/tmp/sim-wt/9.1',
+      items: ['Merge origin/main first.', 'Answer: you may rename the variable in test/old.test.ts; CONTRACT.md records it.'],
+      notes: 'Second relaunch.',
+    };
+    const { prompts } = await runWave(
+      { 'worker:9.1 resume': w1, 'ci:9.1 r1': green, 'critic:9.1 r1': criticMerge, 'merger:9.1': mergeRan() },
+      { tasks: [{ ...task('9.1'), resume } as TaskArg] },
+    );
+    const p = prompts['critic:9.1 r1'][0];
+    expect(p).toContain('Session answers for this relaunch');
+    expect(p).toContain('1. Merge origin/main first.');
+    expect(p).toContain('2. Answer: you may rename the variable in test/old.test.ts; CONTRACT.md records it.');
+    expect(p).toContain('Notes: Second relaunch.');
+    expect(p).toMatch(/authoritative/);
+    expect(p).toMatch(/record in a read-first file/);
+  });
+
+  it('a task without resume gets no session answers in the critic prompt', async () => {
+    const { prompts } = await runWave(happy);
+    expect(prompts['critic:9.1 r1'][0]).not.toContain('Session answers for this relaunch');
   });
 });

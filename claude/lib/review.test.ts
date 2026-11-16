@@ -187,11 +187,12 @@ describe('runSpecReview: spikes', () => {
 
   it('runs one low-effort haiku spike per fact and gives the answers to the re-run', async () => {
     const s = stub({
-      'reviewer r1': reviewerOut([rec('D1')], facts),
+      'reviewer r1': reviewerOut([rec('D1', { dependsOn: ['F1'] }), rec('D2', { text: 'First-pass D2' })], facts),
       'spike:F1': { fact: 'Does vendor X allow 10 req/s?', answer: 'yes, 20 req/s', source: 'https://example.test/limits', retrieved: '2026-10-30' },
       'spike:F2': { fact: 'Is the API free?', answer: 'free tier 1000/mo', source: 'https://example.test/pricing', retrieved: '2026-10-30' },
-      'reviewer r2': reviewerOut([rec('D1', { text: 'Revised D1' })]),
-      adversary: agree('D1'),
+      // A repeated D2 is ignored: pass 2 revises only the recommendations that rely on a fact.
+      'reviewer r2': reviewerOut([rec('D1', { text: 'Revised D1' }), rec('D2', { text: 'Repeated D2' }), rec('D3', { text: 'New from a spike' })]),
+      adversary: agree('D1', 'D2', 'D3'),
     });
     const out = await run(s);
     const spikes = s.calls.filter((c) => c.label.startsWith('spike:'));
@@ -202,10 +203,28 @@ describe('runSpecReview: spikes', () => {
       expect(c.opts.schema).toBeTruthy();
       expect(c.prompt).toMatch(/never a recommendation/i);
     }
-    expect(s.calls.find((c) => c.label === 'reviewer r2')!.prompt).toMatch(/20 req\/s/);
+    const r2 = s.calls.find((c) => c.label === 'reviewer r2')!.prompt;
+    expect(r2).toMatch(/20 req\/s/);
+    // v2.3.1: the re-run is targeted: it is given only the recommendations that rely on a fact, not a full re-review.
+    expect(r2).toMatch(/Revise only the recommendations listed below/);
+    expect(r2).toContain('"id": "D1"');
+    expect(r2).not.toContain('"id": "D2"');
+    expect(r2).not.toMatch(/Review every wave/);
     expect(out.spikes.map((x: Any) => [x.id, x.status])).toEqual([['F1', 'answered'], ['F2', 'answered']]);
-    // The re-run supersedes the first pass.
-    expect(out.accepted[0].text).toBe('Revised D1');
+    const text = Object.fromEntries(out.accepted.map((r: Any) => [r.id, r.text]));
+    expect(text).toEqual({ D1: 'Revised D1', D2: 'First-pass D2', D3: 'New from a spike' });
+  });
+
+  it('a first pass whose recommendations rely on no fact still gets the targeted re-run, and keeps every recommendation', async () => {
+    const s = stub({
+      'reviewer r1': reviewerOut([rec('D1')], facts),
+      'spike:F1': { fact: 'Does vendor X allow 10 req/s?', answer: 'yes', source: 'https://example.test/limits', retrieved: '2026-10-30' },
+      'spike:F2': { fact: 'Is the API free?', answer: 'yes', source: 'https://example.test/pricing', retrieved: '2026-10-30' },
+      'reviewer r2': reviewerOut([]),
+      adversary: agree('D1'),
+    });
+    const out = await run(s);
+    expect(out.accepted.map((r: Any) => r.id)).toEqual(['D1']);
   });
 
   it('reports a failing spike as an open fact and does not retry it', async () => {
@@ -361,7 +380,25 @@ describe('the spec-review workflow script', () => {
     .replace("import('../lib/review.js')", 'Promise.resolve(reviewModule)');
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 
-  it('runs the review through agent() and has the writer agent write the file', async () => {
+  it('by default (2.3.1) runs no writer agent: the result names the file and says the session writes it', async () => {
+    const calls: Call[] = [];
+    const logs: string[] = [];
+    const answers: Record<string, any> = { 'reviewer r1': reviewerOut([rec('D1')]), adversary: agree('D1') };
+    const agent = async (prompt: string, opts: Any) => {
+      calls.push({ label: opts.label, prompt, opts });
+      return answers[opts.label] ?? null;
+    };
+    const out = await new AsyncFunction('reviewModule', 'agent', 'parallel', 'pipeline', 'phase', 'log', 'args', source)(
+      reviewModule, agent, async () => [], async () => [], () => {}, (m: string) => logs.push(m),
+      { project, specPath: 'docs/spec/tasks.md', wave: 3, date: '2026-10-30' },
+    );
+    expect(calls.map((c) => c.label)).toEqual(['reviewer r1', 'adversary']);
+    expect(out.reviewPath).toBe('~/dev/agent-loop/docs/pilot/2026-10-30-wave-3-review.json');
+    expect(out.writeBy).toBe('session');
+    expect(logs.join('\n')).toMatch(/scripts\/write-review\.js/);
+  });
+
+  it('with project.reviewWriter agent, runs the review through agent() and has the writer agent write the file', async () => {
     const calls: Call[] = [];
     const answers: Record<string, any> = {
       'reviewer r1': reviewerOut([rec('D1')]),
@@ -374,8 +411,9 @@ describe('the spec-review workflow script', () => {
     };
     const out = await new AsyncFunction('reviewModule', 'agent', 'parallel', 'pipeline', 'phase', 'log', 'args', source)(
       reviewModule, agent, async () => [], async () => [], () => {}, () => {},
-      { project, specPath: 'docs/spec/tasks.md', wave: 3, date: '2026-10-30' },
+      { project: { ...project, reviewWriter: 'agent' }, specPath: 'docs/spec/tasks.md', wave: 3, date: '2026-10-30' },
     );
+    expect(out.writeBy).toBeUndefined();
     expect(out.accepted.map((r: Any) => r.id)).toEqual(['D1']);
     expect(calls.map((c) => c.label)).toEqual(['reviewer r1', 'adversary', 'writer']);
     const writer = calls[2];

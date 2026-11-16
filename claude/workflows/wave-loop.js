@@ -831,7 +831,7 @@ const REALITY_MODEL = { model: 'claude-haiku-5-5', effort: 'low', ...((P.models 
 const CRITIC_FALLBACK = { model: 'opus', effort: 'high' }
 
 const NAME = P.name
-const LOOP_VERSION = '2.3.0'
+const LOOP_VERSION = '2.3.1'
 const REPO = P.repo
 const WT = P.worktrees
 const SPEC = P.spec
@@ -1179,11 +1179,25 @@ function criticChecklist() {
   return core.map((s, i) => `${i + 1}. ${s}`).join('\n')
 }
 
+// v2.3.1: a relaunched task carries the session's answers in t.resume (items, notes). The worker gets them as fix items;
+// the critic gets them here too, so it does not STOP on a question the session already answered (Warden 3.12, wave 3).
+function sessionAnswers(t) {
+  const r = t && t.resume
+  if (!r) return ''
+  const items = (Array.isArray(r.items) ? r.items : []).filter((x) => typeof x === 'string' && x.trim())
+  if (!items.length && !(r.notes && String(r.notes).trim())) return ''
+  const list = items.map((x, i) => `${i + 1}. ${x}`).join('\n')
+  return `
+Session answers for this relaunch (the session's answers to questions the worker asked when it stopped; treat them as authoritative for those questions, and check the PR against them):
+${list}${r.notes ? `${list ? '\n' : ''}Notes: ${r.notes}` : ''}
+An answer that lets the task edit a path it does not own still needs a record in a read-first file (for example CONTRACT.md); without that record, the outside edit fails checklist item 2 as before.`
+}
+
 function criticPrompt(t, w, round) {
   return `You are the critic for the ${NAME} repository. ${COMMON_RULES}
 Review PR #${w.prNumber} (${w.prUrl || ''}, branch ${w.branch}) for task ${t.id}: ${t.title}, review round ${round}.
 Task text: ${t.text}
-Owned paths for this task: ${t.owns}. Task notes given to the worker: ${t.notes || 'none'}
+Owned paths for this task: ${t.owns}. Task notes given to the worker: ${t.notes || 'none'}${sessionAnswers(t)}
 Work from ${REPO} on main without checking anything out: gh pr diff ${w.prNumber}, gh pr view ${w.prNumber}, gh pr view ${w.prNumber} --json commits,files, and PR comments if round > 1. Read the spec sections the task names and compare the diff against them line by line. Do not run ${CHECK} locally and do not edit any file or branch.
 Apply the checklist in order and record pass/fail with evidence for each item; record "n/a" with pass when an item does not apply to this task:
 ${criticChecklist()}
@@ -1628,17 +1642,23 @@ async function mergeStep(t, w, rr, ph, reopen) {
   if (rr0.status === 'blocked') {
     return failedMerge(r, `merge relay blocked: ${command}`, `The permission system refused ${command}${rr0.note ? ` (${rr0.note})` : ''}. It was not retried and no other way was tried. Allow it or merge PR #${w.prNumber} by hand, then relaunch.`)
   }
-  if (rr0.status === 'none') {
-    r.merge = null
-    return { kind: 'failed', what: 'merge relay returned nothing', question: `Check the state of PR #${w.prNumber} by hand and relaunch; the merge was not re-run.` }
-  }
-  let line = parseJsonLine(rr0.stdout)
+  let line = rr0.status === 'none' ? null : parseJsonLine(rr0.stdout)
   if (!line || typeof line.outcome !== 'string') {
-    return failedMerge(
-      r,
-      `merge-pr.js printed no JSON line (not re-run): ${command}`,
-      `The merge was not re-run, because a second run on a merged PR reports "refused". Check the state of PR #${w.prNumber} (gh pr view ${w.prNumber} --json state,mergeCommit) and the default branch by hand. Relay exit code ${rr0.exitCode}; output tail: ${tailOf(rr0.stdout, 300) || '(empty)'}`,
-    )
+    // v2.3.1: the merge's output was lost (the relay returned nothing, or its Bash was killed: exit 144 in Warden wave 3,
+    // where PR #45 had merged). The merge is never re-run; a read-only state check decides instead.
+    const recovered = await stateAfterLostMerge(t, w, ph, label)
+    if (!recovered) {
+      if (rr0.status === 'none') {
+        r.merge = null
+        return { kind: 'failed', what: 'merge relay returned nothing', question: `Check the state of PR #${w.prNumber} by hand and relaunch; the merge was not re-run.` }
+      }
+      return failedMerge(
+        r,
+        `merge-pr.js printed no JSON line (not re-run): ${command}`,
+        `The merge was not re-run, because a second run on a merged PR reports "refused". Check the state of PR #${w.prNumber} (gh pr view ${w.prNumber} --json state,mergeCommit) and the default branch by hand. Relay exit code ${rr0.exitCode}; output tail: ${tailOf(rr0.stdout, 300) || '(empty)'}`,
+      )
+    }
+    line = recovered
   }
   addTiming(t.id, 'ciWaitMs', line.ciWaitMs)
   addTiming(t.id, 'mergeMs', line.mergeMs)
@@ -1682,6 +1702,22 @@ async function mergeStep(t, w, rr, ph, reopen) {
     return failedMerge(r, pending ? `merge refused: CI still pending (pending-CI timeout)` : 'merge failed', message, line)
   }
   return failedMerge(r, `merge failed (exit ${exit})`, message, line)
+}
+
+// After a lost merge output: merge-pr.js --state through one relay. A MERGED PR with a merge sha becomes a merged line:
+// with a main CI workflow its main check is 'deferred', so the --verify-main relay below checks main as after any merge;
+// without one the check on main did not run here and is reported 'unverified'. Anything else returns null (escalate).
+async function stateAfterLostMerge(t, w, ph, label) {
+  const command = `node ${SCRIPTS}/merge-pr.js ${w.prNumber} --repo ${REPO} --state`
+  const x = await relay(command, `${label} state`, ph.merge)
+  if (x.status !== 'ran') return null
+  const s = parseJsonLine(x.stdout)
+  if (!s || s.outcome !== 'state' || s.state !== 'MERGED' || typeof s.mergeSha !== 'string' || !s.mergeSha) {
+    log(`${t.id}: merge output lost; PR #${w.prNumber} state ${s && s.state ? s.state : 'unknown'}, so the task escalates`)
+    return null
+  }
+  log(`${t.id}: merge output lost, but PR #${w.prNumber} is MERGED at ${s.mergeSha}; counted as merged${MAIN_CI ? ' and main is checked next' : ' (check on main not verified)'}`)
+  return { outcome: 'merged', exit: 0, mergeSha: s.mergeSha, mainSha: s.mergeSha, message: `merge output lost; PR state MERGED (read by merge-pr.js --state)`, mainCheck: MAIN_CI ? 'deferred' : 'unverified', recovered: true }
 }
 
 // The deferred check on main: merge-pr.js --verify-main, run outside the merge lock. A call that reports 'pending' (its
@@ -1867,6 +1903,15 @@ if (!MERGER_AGENT && !(await preflightMerge())) {
 phase('Build')
 const state = {}
 for (const t of TASKS) state[t.id] = 'pending'
+// v2.3.1: a relaunch passes only the parked tasks, so a dependency can name a task that is not in this run. Such a
+// dependency merged in an earlier run of the wave (it is not re-run), so it counts as satisfied; it is logged once per task.
+// Before 2.3.1 such a task never started and was parked as 'unschedulable' at the end.
+const IN_RUN = new Set(TASKS.map((t) => t.id))
+const runDeps = (t) => (t.deps || []).filter((d) => IN_RUN.has(d))
+for (const t of TASKS) {
+  const outside = (t.deps || []).filter((d) => !IN_RUN.has(d))
+  if (outside.length) log(`${t.id}: dependenc${outside.length === 1 ? 'y' : 'ies'} ${outside.join(',')} not in this run; treated as merged in an earlier run`)
+}
 const running = new Map()
 const PH = { build: 'Build', review: 'Review', merge: 'Merge' }
 while (true) {
@@ -1874,13 +1919,13 @@ while (true) {
   if (!pending.length && !running.size) break
   for (const t of pending) {
     if (running.size >= MAX_CHAINS) break
-    if ((t.deps || []).some((d) => state[d] === 'parked')) {
+    if (runDeps(t).some((d) => state[d] === 'parked')) {
       state[t.id] = 'parked'
       results[t.id] = { task: t.id, title: t.title, pr: null, rounds: [], merge: null, reopened: false, merged: false }
-      escalate(t.id, `dependency ${t.deps.join(',')} parked`, 'Resolve the dependency first; relaunch re-runs parked tasks.')
+      escalate(t.id, `dependency ${runDeps(t).filter((d) => state[d] === 'parked').join(',')} parked`, 'Resolve the dependency first; relaunch re-runs parked tasks.')
       continue
     }
-    if (!(t.deps || []).every((d) => state[d] === 'merged')) continue
+    if (!runDeps(t).every((d) => state[d] === 'merged')) continue
     state[t.id] = 'running'
     log(`starting ${t.id} ${t.title} (${running.size + 1}/${MAX_CHAINS} chains; ${MAX_BUILDERS} check slots machine-wide)`)
     const p = runTask(t, PH).then(

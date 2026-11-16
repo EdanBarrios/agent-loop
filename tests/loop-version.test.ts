@@ -95,6 +95,47 @@ describe('loop version stamp', { timeout: 120_000 }, () => {
     }
   });
 
+  describe('merge-pr.js --state (2.3.1): the read-only PR state after a lost merge output', () => {
+    const withGh = async (ghBody: string, extra: string[] = []) => {
+      const dir = mkdtempSync(join(tmpdir(), 'loop-state-'));
+      try {
+        mkdirSync(join(dir, 'repo', '.claude'), { recursive: true });
+        mkdirSync(join(dir, 'bin'));
+        writeFileSync(join(dir, 'repo', '.claude', 'loop.local.json'), '{"name":"X"}');
+        writeFileSync(join(dir, 'bin', 'gh'), `#!/bin/sh\n${ghBody}\n`);
+        chmodSync(join(dir, 'bin', 'gh'), 0o755);
+        const res = await run('node', [join(ROOT, 'scripts', 'merge-pr.js'), '45', '--repo', join(dir, 'repo'), '--state', ...extra], {
+          env: { ...process.env, PATH: `${join(dir, 'bin')}:${process.env.PATH}` },
+        }).catch((e: { stdout: string }) => e);
+        return JSON.parse(String(res.stdout).trim().split('\n').pop() as string);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    };
+
+    it('prints the state and merge sha of a merged PR', async () => {
+      const line = await withGh(`echo '{"state":"MERGED","mergeCommit":{"oid":"80d675b3"}}'`);
+      expect(line).toEqual({ outcome: 'state', exit: 0, state: 'MERGED', mergeSha: '80d675b3' });
+    });
+
+    it('prints an open PR with no merge sha', async () => {
+      const line = await withGh(`echo '{"state":"OPEN","mergeCommit":null}'`);
+      expect(line).toEqual({ outcome: 'state', exit: 0, state: 'OPEN', mergeSha: null });
+    });
+
+    it('reports an error when gh cannot read the PR', async () => {
+      const line = await withGh('echo "could not resolve" >&2\nexit 1');
+      expect(line).toMatchObject({ outcome: 'error', exit: 4 });
+      expect(line.message).toMatch(/could not read PR #45/);
+    });
+
+    it('refuses --state with another mode', async () => {
+      const line = await withGh(`echo '{}'`, ['--dry-run']);
+      expect(line).toMatchObject({ outcome: 'error', exit: 4 });
+      expect(line.message).toMatch(/usage/);
+    });
+  });
+
   it('merge-pr.js --dry-run prints origin HEAD as baseSha (the wave base for the integration review)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'loop-base-'));
     const git = (cwd: string, ...a: string[]) => run('git', a, { cwd });

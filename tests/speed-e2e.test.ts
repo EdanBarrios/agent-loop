@@ -146,7 +146,7 @@ const mergeRan = (over: Json = {}) => {
   return ran(line, line.exit);
 };
 const blocked = (note = 'Permission to run this command was denied.') => ({ status: 'blocked', note });
-const preflightOk = ran({ outcome: 'error', exit: 4, mergeSha: null, message: 'could not read PR #0: no pull requests found', loopVersion: '2.3.0' }, 4);
+const preflightOk = ran({ outcome: 'error', exit: 4, mergeSha: null, message: 'could not read PR #0: no pull requests found', loopVersion: '2.3.1' }, 4);
 const green = ciOf('green');
 
 // The read-only facts the fast-lane relay gathers: the changed files stay inside Owns and the test count rises.
