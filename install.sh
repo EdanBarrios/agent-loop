@@ -50,5 +50,5 @@ fi
 cat <<'MSG'
 
 Next: fill in .claude/loop.local.json, write the task spec it points at, then open Claude Code in the repo
-and ask for a wave. The session reads ~/dev/agent-loop/README.md first (see ~/.claude/CLAUDE.md).
+and ask for a wave. The session reads ~/dev/agent-loop/docs/OPERATING.md first (see ~/.claude/CLAUDE.md).
 MSG

@@ -1,0 +1,32 @@
+[
+  {
+    "id": "H1",
+    "what": "Create the private GitHub repo for agent-loop and push",
+    "why": "the loop merges through PRs; branch protection is unavailable on this plan, so the hookify rules are the guard",
+    "owner": "human",
+    "before": "0",
+    "leadTime": "minutes",
+    "status": "done",
+    "evidence": "https://github.com/EdanBarrios/agent-loop (private); branch protection refused with 403 (needs Pro or public)"
+  },
+  {
+    "id": "H2",
+    "what": "Tag v1 and create the ~/dev/agent-loop-stable worktree",
+    "why": "bootstrapping: the running loop must not be the copy being edited",
+    "owner": "human",
+    "before": "0",
+    "leadTime": "minutes",
+    "status": "done",
+    "evidence": "tag v1 at 48ed56e; worktree ~/dev/agent-loop-stable"
+  },
+  {
+    "id": "H3",
+    "what": "Cut tag v1.1 after wave 3 and move the stable link to it",
+    "why": "wave 4 edits wave-loop.js, the file every wave runs; it must run from a released copy, not the live one",
+    "owner": "human",
+    "before": "4",
+    "leadTime": "minutes",
+    "status": "done",
+    "evidence": "tag v1.1 at afe8679; ~/dev/agent-loop-stable checked out at v1.1 (2026-11-01)"
+  }
+]

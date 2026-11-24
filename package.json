@@ -1,7 +1,13 @@
 {
   "name": "agent-loop",
-  "private": true,
   "version": "2.3.1",
+  "description": "Build a codebase with parallel Claude Code agents: a worker per task, a separate critic per PR, CI-gated merges and a scorecard per wave.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EdanBarrios/agent-loop.git"
+  },
+  "private": true,
   "type": "module",
   "scripts": {
     "check:syntax": "find claude -type f \\( -name '*.js' -o -name '*.mjs' -o -name '*.cjs' \\) -print0 | xargs -0 -r -n1 sh -c 'node --check --input-type=module - < \"$0\" 2>/dev/null || { echo \"(async function(){\"; sed \"s/^export //\" \"$0\"; echo \"})\"; } | node --check --input-type=commonjs - || { echo \"syntax error in $0\" >&2; exit 1; }'",

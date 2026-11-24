@@ -880,7 +880,7 @@ const EXTRA_RULES = (P.extraRules || []).length ? ' ' + P.extraRules.join(' ') :
 const SIDE_FILES = P.sideFiles || 'No generated files are expected to change beyond what the task touches.'
 const SIDE_FILES_SHORT = P.sideFiles ? `the side files the project allows (${P.sideFiles})` : 'nothing else'
 // Edits outside a task's owned files follow the project's own rule (its CLAUDE.md or another readFirst file). Six stops
-// in waves 6 to 12 of Pilot were 1-to-20-line test, replay or generated-file edits the task's own change forced.
+// in waves 6 to 12 of the pilot project were 1-to-20-line test, replay or generated-file edits the task's own change forced.
 const OUTSIDE_EDITS = 'Edits outside owned files'
 const OWN_RULE = `Edits outside these paths follow the project's own rule on them (in the read-first files). If that rule allows small mechanical edits outside a task's files (for example to a test, replay script or generated block that breaks only because of your change), make each edit it allows, within its limit and with no assertion removed or weakened, and list each one under "${OUTSIDE_EDITS}" in the PR body (file, lines changed, and why your change forces it) instead of stopping. Anything else outside your paths, or any outside edit when the project has no such rule, is an ownership question: do not edit it; stop (status blocked) and report it in the PR body.`
 const SYNC_CONFLICTS = P.syncConflicts
@@ -1123,7 +1123,7 @@ ${
 }
 
 // A worker that returns before its check has finished (checkExitCode -1) is sent back to finish it, at most
-// FINISH_ROUNDS times, instead of being escalated. Wave 5 of Pilot (28 Oct 2026) lost a whole relaunch to this:
+// FINISH_ROUNDS times, instead of being escalated. Wave 5 of the pilot project (28 Oct 2026) lost a whole relaunch to this:
 // nine tasks queued on two check slots and a sleeping laptop made two workers give up and report "blocked".
 function checkUnfinished(w) {
   return !!w && typeof w.checkExitCode === 'number' && w.checkExitCode < 0

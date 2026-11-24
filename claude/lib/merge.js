@@ -68,7 +68,7 @@ export const LOAD_WARN_FACTOR = 4
 
 /**
  * The machine-load warning the preflight dry run reports: a 1-minute load average above `factor` times the core count
- * means other heavy jobs are running, which slowed waves 3 to 4 times (Pilot wave 12). It warns; it never blocks.
+ * means other heavy jobs are running, which slowed waves 3 to 4 times (wave 12 of the pilot project). It warns; it never blocks.
  * @param {number} load1 the 1-minute load average @param {number} cores @param {number} [factor]
  * @returns {{ load1: number, cores: number, threshold: number, high: boolean }}
  */

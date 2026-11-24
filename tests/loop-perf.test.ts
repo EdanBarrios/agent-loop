@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-// The loop perf fixes of 3 Nov 2026 (docs/pilot/2026-11-03-loop-performance.md), as wave-loop sees them:
+// The loop perf fixes of 3 Nov 2026, as wave-loop sees them:
 //  1. a load warning at wave start (from the preflight dry run);
 //  3. the check on main: skipped when the merged tree is the tree CI checked, else watched outside the merge lock;
 //  6. no second critic round after a MERGE when the only later changes are CI-only.

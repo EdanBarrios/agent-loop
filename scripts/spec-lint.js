@@ -5,7 +5,7 @@
 //
 // Exit 0: spec passes (tasks that need human review, and shape warnings, are listed on stdout).
 // Exit 1: at least one item is missing; each message names the section or the task id (stderr).
-// Warnings never change the exit code. They flag wave and task shapes that made waves slow (Pilot waves 9 and 12):
+// Warnings never change the exit code. They flag wave and task shapes that made waves slow (waves 9 and 12 of the pilot project):
 //  - a wave whose dependency chain is more than MAX_CHAIN_DEPTH tasks deep (tail not counted): each hop costs about
 //    15 min of review, CI and merge before the next worker starts; do chain-shaped work as one PR with stacked commits;
 //  - a wave of MAX_SMALL_WAVE tasks or fewer (tail counted): send them as single PRs, not a wave;

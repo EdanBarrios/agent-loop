@@ -5,7 +5,7 @@
 //   node scripts/wave-args.js --repo <path> --wave <id> [--spec <path>] [--tail <task id>] [--notes <text>]
 //
 // Prints { project, wave, tasks, tail } as JSON on stdout: project is <repo>/.claude/loop.local.json, whole; each task
-// is { id, title, branch, deps, text, owns, notes, lane } as README "Running a wave" describes. The spec is
+// is { id, title, branch, deps, text, owns, notes, lane } as docs/OPERATING.md "Running a wave" describes. The spec is
 // project.spec (relative to the repo) unless --spec is given. text is the task bullet verbatim (continuation lines
 // joined with newlines, the leading "- " dropped); owns is the Owns clause's backticked paths; deps keeps only ids in
 // the same wave (earlier waves are merged before a wave runs); lane is the `Lane:` value or 'normal'; branch is
