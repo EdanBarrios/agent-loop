@@ -2,7 +2,7 @@
 
 What the loop did on a real project, taken from the per-wave scorecards in [`docs/warden/`](docs/warden/).
 [Warden](https://govwarden.vercel.app) is my own civic-data site (Next.js, Postgres; live, code private); the loop
-opened 99 of its 145 merged PRs. Measurements come first, then what I concluded from them, kept apart on purpose.
+opened 61 of its 145 merged PRs (waves 1 to 4). Measurements come first, then what I concluded from them, kept apart on purpose.
 
 ## Measurements: Warden waves 1 to 3 (13 to 16 Nov 2026)
 
