@@ -1,0 +1,905 @@
+{
+  "project": "agent-loop",
+  "wave": "1",
+  "accepted": [
+    {
+      "id": "R1",
+      "kind": "defect",
+      "task": "1.5",
+      "category": "dependency",
+      "text": "1.5 needs the test-file matcher that the Fixed decisions put in `claude/lib/testedits.js`, which 1.2 owns. Wave 1 says 'all in parallel' and 1.5 lists no dependency. Parallel workers branch from the same main, so 1.5 cannot import 1.2's matcher. It would write its own copy, which breaks the 'one matcher' rule. Recommend 1.5 `Depends on 1.2`. The chain is 1.2 to 1.5, two deep, which is within spec-lint's limit. Update the wave heading to match.",
+      "evidence": "Spec Fixed decisions: \"One matcher, in `claude/lib/testedits.js`, is exported and used by every task that needs it.\" 1.5 says \"every test file in the repo (`git ls-files`, filtered by the test-file matcher)\" and its Owns list has no testedits.js. Heading: \"## Wave 1: pure modules (all in parallel)\". `node scripts/spec-lint.js` accepts a dependency here (MAX_CHAIN_DEPTH = 2).",
+      "reverseCost": "Revert the spec edit. The wave runs 1.5 after 1.2 instead of beside it, which costs roughly 15 minutes of wall time.",
+      "wouldBeWrongIf": "1.5 is meant to carry its own glob matcher, or the matcher moves into a file no task owns.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "## Wave 1: pure modules (all in parallel)",
+          "replace": "## Wave 1: pure modules (1.5 after 1.2; the rest in parallel)"
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "- **1.5 Test-impact map.** Owns `claude/lib/impact.js`",
+          "replace": "- **1.5 Test-impact map.** Depends on 1.2 (the test-file matcher). Owns `claude/lib/impact.js`"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category dependency is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Spec read at ~/dev/agent-loop-public/docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md (it is not in the session cwd). Lines 57-58 put the one matcher in claude/lib/testedits.js (owned by 1.2); line 81 has 1.5 filter by it; 1.5 lists no dependency. wave-loop.js:1928 starts a task only when every in-run dep is 'merged'. Applied both edits to a scratch copy and ran scripts/spec-lint.js: OK, no chain warning; specTasks/taskDeps on the copy give 1.5 deps ['1.2']. Both find strings occur exactly once.",
+        "reason": "The dependency is real: scripts/impact.js (owned by 1.5) must import a file that only exists after 1.2 merges. The chain 1.2 -> 1.5 is 2 deep, which is within MAX_CHAIN_DEPTH. The edit parses as intended."
+      }
+    },
+    {
+      "id": "R2",
+      "kind": "defect",
+      "task": "1.2",
+      "category": "ambiguity",
+      "text": "The test-file matcher has no export name, no glob semantics and no owner for reading `testGlobs`. The repo has no glob dependency. `node:path` `matchesGlob` exists on the Node 24 that CI and the loop use. 1.2 and 1.5 are CLIs that get only `--repo`, and neither says where `testGlobs` comes from. Recommend naming `isTestFile(path, globs)` and `testGlobsOf(project)` in testedits.js, fixing the glob semantics, and having both CLIs read `<repo>/.claude/loop.local.json`.",
+      "evidence": "Spec: \"A path is a test file when it matches the project's `testGlobs` ... One matcher, in `claude/lib/testedits.js`, is exported\". Neither task's CLI line mentions the config. `package.json` has no glob package, and picomatch is only a transitive dependency of vite. `node -e \"require('path').matchesGlob('a.test.ts','**/*.test.*')\"` on v24.1.0 returns true with no warning.",
+      "reverseCost": "Revert the spec edit before 1.2 merges. Afterwards, one small PR changes the matcher.",
+      "wouldBeWrongIf": "The loop is meant to run on a Node older than 22.5, where `matchesGlob` is missing.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "One matcher, in `claude/lib/testedits.js`, is exported and",
+          "replace": "One matcher, `isTestFile(path, globs)` in `claude/lib/testedits.js`, and a reader `testGlobsOf(project)` that returns the field or the default, are exported (globs are matched with `node:path` `matchesGlob` against repo-relative POSIX paths; `**/` matches zero or more directories; the CLIs of 1.2 and 1.5 read the field from `<repo>/.claude/loop.local.json`, and a missing file or field gives the default), and are"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category ambiguity is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Ran on node v24.1.0 (CI pins node 24 in .github/workflows/check.yml): path.matchesGlob('a.test.ts','**/*.test.*') true, 'tests/sub/a.ts' vs 'tests/**' true, 'pkg/tests/a.ts' vs 'tests/**' false, '.h/a.test.ts' vs '**/*.test.*' false; no warning printed. node_modules has only picomatch/tinyglobby (transitive). grep of claude/lib/*.js: every existing import is a sibling lib, none from node:. scripts/wave-args.js already reads <repo>/.claude/loop.local.json the same way.",
+        "reason": "The gap is real and the fix is workable. Two caveats for the worker, neither blocking: (1) testedits.js becomes the first claude/lib file with a node: import, so bundle-workflows.js would reject it if it were ever bundled (today 2.2 reaches it only through the CLI); (2) matchesGlob does not match dot-directories, so a test under .github/ or .storybook/ is not a test file."
+      }
+    },
+    {
+      "id": "R3",
+      "kind": "defect",
+      "text": "The command form that 1.1 checks is under-specified in two ways, and both make the check wrong. (1) `<scripts dir>` is not defined. `.claude/scripts` is a symlink to the loop checkout, so `import.meta.url` gives the link target but the relay types the link path. The spike (F4) shows Claude Code matches a Bash rule against the command text Claude writes, after compound-command splitting and wrapper stripping, with no documented `~` expansion or symlink resolution for Bash rules. So the check must use `process.argv[1]` as given and must not expand `~`; the rule's path has to be absolute and spelled as typed. (2) The dry run and the `<n>`-only form are not what the merge relay runs. The real forms add `--worktree <path>`, `--defer-main`, `--verify-main <sha> --timeout-min 9` and `--state`. An exact rule that matches only the dry run would pass preflight and still refuse the merge, which is the Warden wave 4 failure. F1 found nothing in the docs that explains why a dry run passes where the real run is refused, so the spec should not assume the dry-run form is representative. Recommend `allowed` is true only when every real form is allowed.",
+      "evidence": "Spike F4: \"Matching is on the command text Claude writes, after compound commands are split and wrappers stripped. Commands in a different form ... are not matched\"; the docs state no tilde expansion or symlink resolution for Bash rule text. Local command run: a symlink to a script printing `process.argv[1]` and `import.meta.url` gave `.../b.mjs file:///.../a.mjs`, so link path and target differ. wave-loop.js:898 `const SCRIPTS = P.loopScripts || `${REPO}/.claude/scripts``; :1632 `node ${SCRIPTS}/merge-pr.js ${w.prNumber} --repo ${REPO} --worktree ... --defer-main`; :1728 `--verify-main`; :1711 `--state`; :1865 `merge-pr.js 0 --repo ${REPO} --dry-run`. Spike F1(b): docs say nothing about why a dry run would pass where the real run is refused.",
+      "reverseCost": "Revert the spec edit before 1.1 starts. Afterwards, one PR to merge-pr.js and permission.js.",
+      "wouldBeWrongIf": "Claude Code resolves symlinks in the command text before it matches a Bash rule. The docs do not say either way for Bash rules, so this is still open; then `import.meta.url` would be the right base (F4).",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "category": "ambiguity",
+      "task": "1.1",
+      "dependsOn": [
+        "F4"
+      ],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "for the command form the workflow runs (`node <scripts dir>/merge-pr.js <n> --repo",
+          "replace": "for the command forms the workflow runs, with `<scripts dir>` the directory of `process.argv[1]` as given (never `import.meta.url`: `.claude/scripts` is a link and the relay types the link path; no `~` expansion) and `<repo>` the `--repo` value as given: the merge with `--worktree <path>` (and `--defer-main` when `project.mainCi` is set), `--verify-main <sha> --timeout-min 9`, and `--state`; `allowed` is true only when every form is allowed, `rule` and `source` come from the first form that is not, and each form begins (`node <scripts dir>/merge-pr.js <n> --repo"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category ambiguity is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Fetched code.claude.com/docs/en/permissions.md: 'A Bash rule matches the command text Claude writes, after Claude Code splits compound commands and strips wrappers. It doesn't match the same program invoked in a different form'; symlink resolution is described only for file-path rules. Ran a script through a symlinked directory: process.argv[1] keeps the link path, import.meta.url gives the real path. wave-loop.js:898, 1632, 1711, 1728, 1865 match the quoted forms; CI_RELAY_MAX_MIN = 9 (line 904). merge-pr.js:59 does repo = resolve(repo) and reads loop.local.json, so mainCi is available. Warden wave 1d record quotes the blocked command with the link path and --worktree ... --defer-main.",
+        "reason": "Both halves hold. One wording defect in the edit should be fixed when applying: '`rule` and `source` come from the first form that is not [allowed]' leaves `rule` undefined when every form is allowed, yet 1.1's Test expects 'allowed true with a matching rule'. The placeholders <path> and <sha> are also not said to stand for any value, as <n> is."
+      }
+    },
+    {
+      "id": "R5",
+      "kind": "defect",
+      "task": "1.1",
+      "category": "logging",
+      "text": "The spec says a malformed settings file is 'listed in `checked` with an error'. If that error is the JSON parser's message, it can quote the file content. `~/.claude/settings.json` can hold an `env` block with tokens, and the dry-run line goes to relay output, escalations and the session log. Recommend a fixed error string (`missing` or `unparseable`) and a test that a secret-like string in a broken file appears nowhere in the output.",
+      "evidence": "Command run: `JSON.parse('sk-secret-123 {')` throws `Unexpected token 's', \"sk-secret-123 {\" is not valid JSON`. Spec 1.1: \"a missing or unparseable file is listed in `checked` with an error and skipped\".",
+      "reverseCost": "Revert the spec edit, or one small PR.",
+      "wouldBeWrongIf": "The parser message is not included in `checked`, or settings files are known never to hold secrets.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "in `checked` with an error and skipped)",
+          "replace": "in `checked` with a fixed `error` string, `missing` or `unparseable`, never the parser's message, which can quote file content; and skipped)"
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "a missing file and a malformed file listed in `checked`;",
+          "replace": "a missing file and a malformed file listed in `checked` (a secret-like string inside the malformed file appears nowhere in the returned or printed JSON);"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category logging is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Ran node -e JSON.parse('sk-secret-123 {'): message is `Unexpected token 's', \"sk-secret-123 {\" is not valid JSON`, which quotes the content. Spec line 107-108 says only 'listed in `checked` with an error'. Both find strings occur once.",
+        "reason": "The leak path is real (the dry-run line goes to relay output and escalations) and the fixed strings plus the test close it at no cost."
+      }
+    },
+    {
+      "id": "R6",
+      "kind": "defect",
+      "task": "1.2",
+      "category": "ambiguity",
+      "text": "1.2 takes 'the branch's commits' and 'merge commits are skipped' from `gh pr view --json commits`, but that JSON has no parent information, so merge commits cannot be detected from it. The CLI also reads `testFirstCommit..headRefOid` from git, so the head commit has to be in the local object database. Recommend `git rev-list --reverse --parents origin/<baseRefName>..<headRefOid>` for order and merge detection, and one `git fetch origin pull/<pr>/head` when the head commit is missing.",
+      "evidence": "Command run: `gh pr view 4 --json commits` returned commit keys [\"authoredDate\",\"authors\",\"committedDate\",\"messageBody\",\"messageHeadline\",\"oid\"], with no `parents`. Spec: \"The branch's commits come from `gh pr view <pr> --json commits,...`; merge commits are skipped.\"",
+      "reverseCost": "Revert the spec edit before 1.2 starts.",
+      "wouldBeWrongIf": "The fake `gh` in the tests is meant to supply parents, or the CLI always runs in the worker's worktree, where the objects exist.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "baseRefName,headRefOid`; merge commits are skipped.",
+          "replace": "baseRefName,headRefOid`; the commit order and the merge commits (two parents; skipped) come from `git rev-list --reverse --parents origin/<baseRefName>..<headRefOid>`, because `gh` lists no parents, and a `headRefOid` missing from the repo is fetched once with `git fetch origin pull/<pr>/head`."
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category ambiguity is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Ran `gh pr view 4 --json commits --jq '.commits[0] | keys'` in the spec repo: [authoredDate, authors, committedDate, messageBody, messageHeadline, oid], no parents. No fixture in tests/fixtures carries a commits list. Spec line 93 takes commits from gh and says merge commits are skipped.",
+        "reason": "The claim holds and the edit is workable. Notes for the worker: the range depends on a fresh origin/<base> (a stale ref pulls other tasks' commits into the range and can pick the wrong testFirstCommit), it is empty once the PR is merged, and the edit leaves two sources for the commit set (gh and rev-list) without saying which wins or how --base interacts. `git rev-list --parents --no-walk <gh oids>` would avoid all three."
+      }
+    },
+    {
+      "id": "R7",
+      "kind": "defect",
+      "task": "1.2",
+      "category": "ambiguity",
+      "text": "The pairing rule for 'changed' is undefined. It does not say how N removed assertion lines pair with M added lines in a hunk. Any added line counts as a replacement, so `expect(x).toBe(1)` replaced by an unrelated `const y = 2` counts as 'changed', not 'removed'. Renames and whole-file deletion are not covered, and a deleted test file is the biggest weakening there is. It is also unclear whether `removed` lists every removed line or only assertion lines. Recommend pairing in order, counting 'changed' only when the added line is itself an assertion line, using `-M`, and counting every assertion line of a deleted file as removed.",
+      "evidence": "Spec 1.2: \"A removed assertion line with no replacement in the same hunk counts in `assertionsRemoved`; a removed assertion line replaced in the same hunk by a different line counts in `assertionsChanged`\"; output shape \"files: [{ path, removed: [line], changed: [{ before, after }] }]\". The Test line has no rename or deleted-file case.",
+      "reverseCost": "Revert the spec edit before 1.2 starts.",
+      "wouldBeWrongIf": "Any replacement line, assertion or not, is meant to count as 'changed'.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "A removed assertion line with no replacement in the same hunk",
+          "replace": "The diff uses `-M`; a test file deleted after `testFirstCommit` counts every assertion line in it as removed; `removed` lists removed assertion lines only; within a hunk the i-th removed assertion line pairs with the i-th added line, and the pair is 'changed' only when the added line is itself an assertion line, otherwise the removed line counts as removed. A removed assertion line with no replacement in the same hunk"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category ambiguity is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Spec lines 97-99 define removed/changed with no pairing rule, no rename or deleted-file rule; the Test line has neither case. 2.2's gate uses assertionsRemoved + assertionsChanged, so the split between the two never changes the gate. Find string occurs once.",
+        "reason": "The ambiguity is real and the rules are implementable. Weak spots to tidy, not reasons to reject: pairing the i-th removed assertion with the i-th added line of any kind (not the i-th added assertion) will report an edited assertion as 'removed' when a setup line changes above it; a per-file diff with a pathspec defeats -M; and a re-indented assertion (a test wrapped in describe) still counts as changed. R8's new Test cases (renamed file, deleted file) depend on this edit, so the two should be applied together."
+      }
+    },
+    {
+      "id": "R8",
+      "kind": "defect",
+      "task": "1.2",
+      "category": "ambiguity",
+      "text": "The rule for ignoring what the branch took from main only drops a hunk when its removed and added lines 'both appear' in the merge diff. A pure deletion that main made in a test file has no added line, so it would not be dropped and would count as the worker's removal. The Test line also covers only one kind of main-side change. Recommend dropping lines one for one and testing the three kinds (adds, removes, edits), a rename and a deleted file.",
+      "evidence": "Spec 1.2: \"(a hunk whose removed and added lines both appear in `git diff <merge parent 1>..<merge commit>` for that file is dropped)\"; Test: \"a test file changed only by a merge from main (zero counts)\".",
+      "reverseCost": "Revert the spec edit before 1.2 starts.",
+      "wouldBeWrongIf": "Main never deletes assertion lines from a test file that a task branch also touches. That is unlikely but possible when tasks share a test file.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "(a hunk whose removed and added lines both appear in `git diff <merge",
+          "replace": "(a removed or added line that also appears as removed or added, one for one, in `git diff <merge"
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "from main (zero counts);",
+          "replace": "from main that adds, removes and edits an assertion (zero counts each); a renamed test file (counts unchanged); a deleted test file (every assertion line removed);"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category ambiguity is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Spec line 96-97: a hunk is dropped only when its 'removed and added lines both appear'; Test line 102-103 has one merge case. loop.local.json has syncPolicy 'conflict' and wave-loop.js:1692 sends sync conflicts back to the worker, so worker-authored merge commits are routine. Both find strings occur once.",
+        "reason": "The pure-deletion gap and the thin test coverage are real, and line-level one-for-one dropping also fixes hunks that mix main's change with the worker's. One hole survives the rewrite and is worth a follow-up: `git diff <merge parent 1>..<merge commit>` includes the worker's own conflict resolution, so an assertion weakened inside a merge commit is dropped as if main had made it. Comparing with merge-base..parent 2 (what main changed) would close it. Apply together with R7."
+      }
+    },
+    {
+      "id": "R11",
+      "kind": "defect",
+      "task": "1.3",
+      "category": "integration",
+      "text": "1.3 'matches the existing `isUsageLimit` pattern in `wave-loop.js`', but that is a private function inside the workflow file. A bundled lib cannot import it. 2.1 will bundle pause.js, and nothing in wave 1 tests that it is bundle-safe. A lib with an `import`, an `export default` or a top-level name equal to one already in wave-loop.js (for example `isUsageLimit`) only fails in 2.1. Recommend copying the pattern literally, having 2.1 route `isUsageLimit` through `classifyFailure`, and a wave-1 test that runs `bundleSource` on the lib.",
+      "evidence": "wave-loop.js:1238 `function isUsageLimit(e) { return /usage limit|limit reached|rate.?limit|quota|\\b429\\b/i.test(...)`. bundle-workflows.js: bundled libs 'may contain no `import` and no `require`', and it only detects top-level name collisions between bundled libs, not with wave-loop's own declarations. The bundle check runs only on regions already present in a workflow, so a new lib that is not yet bundled is unchecked.",
+      "reverseCost": "Revert the spec edit before 1.3 starts.",
+      "wouldBeWrongIf": "1.3 is meant to be CLI-only and never bundled. 2.1 says it uses `classifyFailure` in wave-loop.js, so that is unlikely.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "the text matches the existing `isUsageLimit` pattern in `wave-loop.js` or `weekly limit`;",
+          "replace": "the text matches `/usage limit|limit reached|rate.?limit|quota|\\b429\\b|weekly limit/i` (the pattern of `isUsageLimit` in `wave-loop.js`, copied, because a bundled lib cannot import from the workflow; 2.1 makes `isUsageLimit` call `classifyFailure`);"
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "a plan with merged, parked, failed-on-limit and unstarted tasks.",
+          "replace": "a plan with merged, parked, failed-on-limit and unstarted tasks; `bundleSource` from `scripts/bundle-workflows.js` reports no problem on the lib source, and the lib declares no top-level name that `claude/workflows/wave-loop.js` already declares."
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category integration is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "wave-loop.js:1238-1239 is a private function with the quoted pattern. bundle-workflows.js: bundleFile only checks libs that already have a marker region, bundleSource is exported, and the file has a main guard, so a test can import it. pause is not among the regions in wave-loop.js today. Ran the proposed pattern on the messages in the Claude Code error reference: it is false for \"You've hit your limit · resets 7am (UTC)\", \"You've hit your session limit\" and \"You've hit your Opus limit\", true only for the weekly message and the runtime-wrapped 'failed: usage limit; ...' form.",
+        "reason": "The bundle-safety gap and the test hold up. Two notes: the sentence '2.1 makes isUsageLimit call classifyFailure' sits in 1.3's bullet, which the 2.1 worker never receives, so it needs repeating in 2.1 at the wave 2 review; and the copied pattern classifies the unwrapped short-limit messages as 'other', which makes most of R13's wider reset grammar unreachable unless `hit your (\\w+ )?limit` is added."
+      }
+    },
+    {
+      "id": "R12",
+      "kind": "defect",
+      "task": "1.3",
+      "category": "ambiguity",
+      "text": "`pausePlan({ tasks, state, failedOnLimit })` has no input shapes. wave-loop's states are 'merged', 'reverted' and 'parked', with a missing id meaning not started. The spec says nothing about 'reverted' or about a task that is still running. 2.1 pauses a wave with 'one running (finishes)', so the contract for running tasks matters. Recommend stating the shapes, and that reverted and running tasks are in neither list.",
+      "evidence": "wave-loop.js:1744 \"Returns { w, state: 'merged'|'reverted'|'parked' }\" and :1922 `state[d] === 'parked'`. Spec 1.3: \"tasks not started and tasks whose agent failed on the limit are paused; tasks parked for any other reason stay parked; merged tasks are in neither.\" 2.1 Test: \"one merged, one running (finishes) and two not started\".",
+      "reverseCost": "Revert the spec edit before 1.3 starts.",
+      "wouldBeWrongIf": "A running task is meant to be listed as paused. Then 2.1's 'agents already running finish' needs a rule for what the task's final state becomes.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "`pausePlan({ tasks, state, failedOnLimit })` returns `{ paused: [ids], parked: [ids] }`: tasks not",
+          "replace": "`pausePlan({ tasks, state, failedOnLimit })` (`tasks` the ids including the tail, `state` a map id to `'merged'|'reverted'|'parked'|'running'` where a missing id means not started, `failedOnLimit` a list of ids) returns `{ paused: [ids], parked: [ids] }`: tasks not"
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "stay parked; merged",
+          "replace": "stay parked; reverted tasks and tasks still `running` are in neither (a running task's result is recorded when it finishes), and merged"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category ambiguity is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "wave-loop.js:1744 returns state 'merged'|'reverted'|'parked'; line 1907-1928 treats ids by state and a missing dep as not in the run. Spec line 121-123 gives no input shapes and no rule for reverted or running tasks; 2.1's Test (line 157) has 'one running (finishes)'. Both find strings occur once.",
+        "reason": "The contract is missing exactly where 2.1 depends on it, and the stated shapes match the states the workflow already uses. 'running' is a new value that 2.1 must supply; that is a fair lib contract."
+      }
+    },
+    {
+      "id": "R13",
+      "kind": "defect",
+      "text": "The reset-time grammar rests on one sample, and the spike shows the sample is the odd one. Every quoted reset message in public reports (F6) has no 'at' and no date (`resets 7am (UTC)`, `resets 2:10am (Asia/Jerusalem)`), some capitalised (`Resets 2pm (Australia/Sydney)`), with `UTC` as a zone. The only quoted source for `resets Nov 19 at 12pm` is the Warden wave 4 string in this repo. The spec's no-date form requires 'at', so the commonest real form would not parse. Relative forms also exist (`resets in 1h`, `Resets in 23 hr 36 min`). A parse miss silently turns a far-out limit into a normal one when no clock is available. Recommend a tolerant superset: case-insensitive, `at` optional, optional comma, `UTC` accepted as a zone, a relative form that needs `nowMs`. State the year, 12am/12pm and bad-zone rules.",
+      "evidence": "Spike F6 quotes: \"You've hit your limit · resets 7am (UTC)\", \"resets 2:10am (Asia/Jerusalem)\", \"Resets 2pm (Australia/Sydney)\", banner \"resets in 1h\"; \"The 'at' form with a date ('Nov 19 at 12pm') appears in no quoted source\". Spec 1.3: \"`resets <Mon> <d> at <h>[:mm]am|pm (<IANA zone>)` or `resets at <h>[:mm]am|pm (<zone>)`\".",
+      "reverseCost": "Revert the spec edit before 1.3 starts.",
+      "wouldBeWrongIf": "The runtime that wraps the failure always rewrites the text to one of the spec's two forms (F6 covers only user-reported CLI messages, not the Workflow runtime's wording).",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "category": "ambiguity",
+      "task": "1.3",
+      "dependsOn": [
+        "F6"
+      ],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "`resets <Mon> <d> at <h>[:mm]am|pm (<IANA zone>)` or `resets at <h>[:mm]am|pm (<zone>)`",
+          "replace": "`resets <Mon> <d>[,][ at] <h>[:mm]am|pm (<zone>)` or `resets[ at] <h>[:mm]am|pm (<zone>)` or the relative `resets in <n>h` / `<n> hr <m> min` (matched case-insensitively; `<zone>` is any IANA name or `UTC`; 12am is hour 0 and 12pm is noon; a date without a year is the next such date on or after `nowMs`; a zone the runtime rejects gives `resetsAt` null; the relative form needs `nowMs`; the time-only form is the next such time)"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category ambiguity is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Web search of public issue reports (untrusted, used as samples): 'resets 7am (UTC)', 'resets 11am (Europe/Madrid)', 'resets Jul 25, 9pm (America/New_York)', 'resets in 6d', and also 'resets Mar 5 at 10pm (America/Los_Angeles)' (claude-code issue 30187) and 'resets Oct 25 at 4pm (America/Toronto)' (issue 104365). Ran a regex built from the proposed grammar on 11 samples: it matches all dated, undated, comma and hr/min forms; it misses 'resets in 6d', zone-less 'resets 3:45pm', 'resets Mon 12:00am' and the older 'will reset at 1pm (Etc/GMT+5)'.",
+        "reason": "The superset is right and needed: the time-only form without 'at' is common and the spec's grammar rejects it. One evidence claim is wrong: the dated 'at' form does appear in public reports, so the Warden sample is not the odd one; the edit keeps that form, so nothing breaks. Gaps to add when applying: a day unit in the relative form, and Test cases for the new forms, since 1.3's Test line is not extended. Misses fall back to resetsAt null, which is safe."
+      }
+    },
+    {
+      "id": "R14",
+      "kind": "defect",
+      "task": "1.4",
+      "category": "ambiguity",
+      "text": "The estimate arithmetic has gaps. (1) `tasks` could mean the wave's tasks with or without the tail, while `tokensPerTask` divides by Tasks-table rows that include the tail. (2) 'Median of the newest three' with two usable scorecards is undefined. (3) It is not said whether zero-token scorecards are skipped before or after the newest three are chosen. (4) 'Newest by file name' sorts same-day waves `wave-10` before `wave-9`. (5) The unit and rounding of `<n>M` are not stated. Recommend stating each, so the Test's 'expected median' is computable.",
+      "evidence": "Spec 1.4: \"divided by the number of rows in the `Tasks` table, skips scorecards whose total is 0 ... (median of the newest three by file name; `basis` lists them)\" and \"`wave-args: estimated <n>M tokens for <k> tasks`\". Fixture: docs/warden/2026-11-16-wave-3-loop.md has 30 rows including `3.T` and \"- Total tokens: 986,498\"-style comma-grouped values. Wave 1b's Tasks table has 4 rows.",
+      "reverseCost": "Revert the spec edit before 1.4 starts.",
+      "wouldBeWrongIf": "The estimate is meant to exclude the tail. Both choices work, but the numerator and denominator must match.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "divided by the number of rows in the `Tasks` table, skips scorecards whose total is 0, and adds",
+          "replace": "(comma-grouped digits) divided by the number of rows in the `## Tasks` section only (tail row included), skips scorecards whose total is 0 or missing before it picks the newest three (by file name, descending; a name sorts by its date prefix, then by wave id compared as text), and adds"
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "(median of the newest three by file name; `basis`",
+          "replace": "(`tasks` is the wave's task count including the tail; `tokensPerTask` is the median of up to three values, the mean of the two when only two are usable; `estimate` is `tasks` times it, rounded to the nearest thousand; the printed `<n>` is `estimate` in millions with one decimal; `basis`"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category ambiguity is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "docs/warden scorecards: each has '## Tasks' and '- Total tokens: 986,498'-style lines (loop-scorecard.py:370, 468); wave-3 has 30 task rows and 'Total tokens: 0'; wave-1b has 4 rows. Same-day names wave-1, wave-1b, wave-1c sort correctly as text. Both find strings occur once.",
+        "reason": "Each of the five gaps is real and each is now stated, so the expected median is computable. Note that item 4 is stated, not fixed: 'wave id compared as text' still orders wave-10 before wave-9 on the same day; that is deterministic and rare. '`basis` lists them' loses its antecedent after the edit and should say 'the files used'."
+      }
+    },
+    {
+      "id": "R15",
+      "kind": "defect",
+      "task": "1.4",
+      "category": "ownership",
+      "text": "1.4's Test needs 'three fixture scorecards', plus a zero-token one, but its Owns line lists no fixture path. A worker may edit only owned paths, so it must either write them to a temp dir at test time or break ownership. 2.4 shows the convention by listing `tests/fixtures/scorecard-pool-*.json`. Recommend owning `tests/fixtures/wave-scorecard-*.md`.",
+      "evidence": "Spec 1.4: \"Owns `scripts/wave-args.js`, `tests/wave-args.test.ts`.\" and \"Test: three fixture scorecards give the expected median; a zero-token scorecard is skipped\". Spec 2.4: \"Owns ... `tests/fixtures/scorecard-pool-*.json`\".",
+      "reverseCost": "Revert the spec edit.",
+      "wouldBeWrongIf": "The test builds its scorecards in a temp dir. Then the edit is harmless extra ownership.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "Owns `scripts/wave-args.js`, `tests/wave-args.test.ts`.",
+          "replace": "Owns `scripts/wave-args.js`, `tests/wave-args.test.ts`, `tests/fixtures/wave-scorecard-*.md`."
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category ownership is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Spec line 127 owns no fixture path; 2.4 (line 185-186) owns a fixture glob. tests/wave-args.test.ts:103 already builds its repo with mkdtempSync, so a temp dir is the file's existing convention. --scorecards reads only `*-loop.md`. spec-lint on the edited copy: 1.4 owns 3 paths, no warning; repo-hygiene.test.ts has no rule on fixtures.",
+        "reason": "Harmless extra ownership that also lets 1.T reuse the fixtures. One catch for the worker: a file under `tests/fixtures/wave-scorecard-*.md` is only read by --scorecards when its name also ends in `-loop.md`, and such names have no date prefix for R14's sort rule. A subdirectory glob such as `tests/fixtures/scorecards/*-loop.md` would fit better."
+      }
+    },
+    {
+      "id": "R16",
+      "kind": "defect",
+      "task": "2.1",
+      "category": "ownership",
+      "text": "End goal 3 ('the session sees a token estimate before it launches') only holds if the session runs `wave-args.js --scorecards <dir>`. The user's CLAUDE.md procedure passes the config, `wave`, `tasks` and `tail` by hand. No task documents the flag: 1.4 owns no docs, and 2.1, which owns docs/OPERATING.md, lists other items. Recommend 2.1 documents it.",
+      "evidence": "Spec 2.1: \"`docs/OPERATING.md` documents `mergePermission`, `ciChunkMin`, `testGlobs`, the `PAUSED` gate and H2.\" `grep -n scorecards docs/OPERATING.md` is empty. wave-args.js usage line has no `--scorecards`.",
+      "reverseCost": "Revert the spec edit.",
+      "wouldBeWrongIf": "The session is meant to find the flag from the wave-args.js header comment.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "`mergePermission`, `ciChunkMin`, `testGlobs`, the `PAUSED` gate and H2.",
+          "replace": "`mergePermission`, `ciChunkMin`, `testGlobs`, the `PAUSED` gate, H2, and `wave-args.js --scorecards <dir>` (the token estimate to read before launching a wave)."
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category ownership is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "docs/OPERATING.md:76 documents `wave-args.js --repo <repo> --wave <id> [--tail] [--notes]` with no --scorecards; grep for 'scorecards' finds only the docs/<project>/ records line. Spec line 154-155 lists what 2.1 documents; 1.4 owns no docs. Find string occurs once.",
+        "reason": "End goal 3 depends on the session knowing the flag, and 2.1 already owns the file. The edit adds one item to an existing list."
+      }
+    },
+    {
+      "id": "R17",
+      "kind": "defect",
+      "task": "1.5",
+      "category": "coverage",
+      "text": "1.5 ignores 'bare package specifiers', which drops path aliases (`@/lib/x`). It also lists only `import ... from`, `import()`, `require` and `export ... from`, so it misses side-effect imports, multi-line imports and `vi.mock('<p>')`. A `./a.js` specifier that resolves to `a.ts` is also not listed. The map is the fix for relaunches caused by 'tests owned by earlier tasks', so misses defeat its purpose. Recommend resolving `compilerOptions.paths` from tsconfig, adding the missing forms, and testing them.",
+      "evidence": "Spec 1.5: \"bare package specifiers are ignored\". The Warden repo's tsconfig.json has `\"paths\": { \"@/*\": [\"./src/*\"] }`. 12 of its 124 test files import from `@/...`. RED-TEAM finding 6: \"Relaunches cost 45% of Warden wave 3 ... caused by tests owned by earlier tasks\".",
+      "reverseCost": "Revert the spec edit before 1.5 starts. Later, one PR to impact.js.",
+      "wouldBeWrongIf": "Impact maps are only wanted for projects without aliases. Then 1.5 would be right as written, and this loop's own repo qualifies.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "specifiers are ignored. An owned path",
+          "replace": "specifiers are ignored, except an alias from `compilerOptions.paths` in `<repo>/tsconfig.json` (a `prefix/*` pattern mapped to a directory, relative to its `baseUrl` or the tsconfig), which resolves like a relative path. A specifier ending `.js`, `.mjs` or `.cjs` also tries the same name ending `.ts`, `.tsx`, `.mts` or `.cts`; side-effect imports (`import '<p>'`), imports that span lines, `import type` and `vi.mock('<p>')` count. An owned path"
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "an owned directory, an `index.ts` resolution,",
+          "replace": "an owned directory, an `index.ts` resolution, a tsconfig `@/` alias, a `./a.js` specifier that resolves to `a.ts`, a multi-line import, a side-effect import,"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category coverage is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "~/dev/warden/tsconfig.json has paths {\"@/*\": [\"./src/*\"]}; git ls-files there shows 124 test/spec files, 12 of which import from '@/'. Spec line 84-85 ignores every bare specifier. This repo's own tests import '../scripts/wave-args.js' style paths. Both find strings occur once.",
+        "reason": "Without aliases the map misses about a tenth of the tests in the project it was written for. The additions are bounded and each has a Test case. The worker should treat a tsconfig that does not parse as JSON (comments, extends) as having no aliases; the edit does not say so."
+      }
+    },
+    {
+      "id": "R18",
+      "kind": "question",
+      "text": "H2 says the merge permission rule is needed 'before the first wave on 2.4'. Waves 1 and 2 of this spec run on loop 2.3.1, and its merge relays run the same `merge-pr.js` through `.claude/scripts`. The user's `~/.claude/settings.json` has no `permissions` object, only `autoMode`. Should the rule be added before wave 1, as a human step? The spike says a narrow rule for one script path should stay active in auto mode (broad rules are dropped), and subagents follow the same allow rules as the parent. But the docs do not mention Workflow relays, and nothing explains why Warden wave 4's dry run passed while the real merge was refused (F1). So the rule is the best available step, not a proven fix. Recommend adding it before wave 1, in the space form `Bash(node <path>/merge-pr.js *)` (the current docs' form; the `:*` form is documented as equivalent but not shown in examples), with the path exactly as the relay types it (absolute, no `~`, the link path not its target). If wave 1's first merge is still refused, escalate at that point.",
+      "evidence": "Spec H2: \"| H2 | before the first wave on 2.4 | Add a `permissions.allow` rule for the merge script\". Command run: python3 -I on `~/.claude/settings.json` printed keys `['model','statusLine','enabledPlugins','effortLevel','modelSettings','tui','skipDangerousModePermissionPrompt','skipWorkflowUsageWarning','theme','autoMode']` and no `permissions`. Spike F1: \"Narrow rules such as Bash(npm test) stay in effect\"; \"The docs do not mention Workflow, dynamic workflow, or background runs\"; \"The docs contain nothing about --dry-run ... or why a dry-run would pass where the real run is refused\". wave-loop.js:898 `SCRIPTS = P.loopScripts || ${REPO}/.claude/scripts`. RED-TEAM finding 5: wave 4 and wave 1d were refused at the merge.",
+      "reverseCost": "Remove the rule from settings.json. The change is a one-line edit by the human.",
+      "wouldBeWrongIf": "Warden waves 1 to 3 merged with no rule, so the refusal is intermittent or context-dependent and H2 may not be needed until the 2.4 preflight. Or Workflow relay subagents are judged by a path the allow rule does not reach, so the rule does not change the verdict (F1 is not settled for Workflow).",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "category": "permission",
+      "task": "1.1",
+      "dependsOn": [
+        "F1"
+      ],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "| H2 | before the first wave on 2.4 |",
+          "replace": "| H2 | before wave 1 |"
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "e.g. `Bash(node /path/to/repo/.claude/scripts/merge-pr.js:*)`",
+          "replace": "e.g. `Bash(node /path/to/repo/.claude/scripts/merge-pr.js *)` (the path exactly as `project.repo` plus `/.claude/scripts` spells it, absolute and not the link's target)"
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "2.1's preflight fails without it; permission settings are human-only",
+          "replace": "every wave merges through that script, and Warden wave 4 was refused there; 2.1's preflight fails without it; permission settings are human-only"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category permission is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "~/.claude/settings.json keys (read by name only): no `permissions`; `autoMode` has allow (5), soft_deny (4), environment (30), none naming merge-pr. No project, local or managed settings file exists. Warden wave 1d record: the auto-mode classifier refused `merge-pr.js 22 ... --defer-main` ('Destructive or Unwanted Actions') minutes after the same command merged another PR. Fetched permission-modes.md: actions matching allow rules 'resolve immediately' before the classifier; subagent actions go through 'the same decision order as in the parent session, with the same block and allow rules'; 'Narrow rules like Bash(npm test) stay in effect'; permissions.md: `:*` is equivalent to a trailing ` *`.",
+        "reason": "A fair question for the human, and the evidence supports asking before wave 1: the refusal is an intermittent classifier verdict that a matching allow rule bypasses. Three things the human should weigh: (1) the rule approves any arguments, so any --repo and any PR number, and the script path is a link into ~/dev/agent-loop, where a session's file edits need no approval, so the rule is only as narrow as that file is stable; (2) the docs do not say whether a `node <path> *` rule counts as a 'wildcarded interpreter' that auto mode drops; (3) changing the row to 'before wave 1' drops the per-project requirement before each project's first wave on 2.4, and both should be stated."
+      }
+    },
+    {
+      "id": "R20",
+      "kind": "defect",
+      "text": "For the wave 2 review, not wave 1. 2.2(c) treats a critic verdict whose `items` miss a checklist number as 'nothing' and retries. Nine existing test files build critic results with no `items`, so every one of those critic stubs would hit the retry path and fail. 2.2 owns only tests/wave-loop-prompts.test.ts, and listing nine files would exceed spec-lint's six-path limit. The spike (F7) says the runtime enforces `required` keys with retries and then an error, so a real critic cannot omit `items`; only stubs do. But it also says enforcement is by type, so a real critic can return a placeholder `items` such as an empty array. Recommend retrying only when an `items` array is present but incomplete, and recording a verdict with no `items` key as having no per-item data.",
+      "evidence": "tests/wave-loop.test.ts:56 `const merge = { verdict: 'MERGE', prHeadSha: 'abc', checklist: [], fixItems: [], notes: '' }`; tests/wave-loop-relay.test.ts:78 is the same shape. `verdict: 'MERGE'` stubs also appear in chain-e2e, loop-perf, speed-e2e, wave-loop-findings, wave-loop-gates, wave-loop-prompts and wave1-integration. Spec 2.2(c): \"a verdict whose `items` miss a checklist number is treated as the critic returning nothing\". Spike F7: \"after five failed attempts the call errors instead of returning a verdict missing a required key\"; \"required keys are enforced by type, not content\". MAX_OWNED_PATHS = 6 in spec-lint.",
+      "reverseCost": "Revert the spec edit.",
+      "wouldBeWrongIf": "The runtime does not enforce required keys after all. F7's per-key rule comes from a user bug report, not the docs text, so a real critic might then skip `items` and the lenient path would let it.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "category": "ownership",
+      "task": "2.2",
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "`items` miss a checklist number is treated as the critic returning nothing (the existing retry path).",
+          "replace": "`items` array misses a checklist number is treated as the critic returning nothing (the existing retry path); a verdict with no `items` key is recorded without per-item data and logged (the schema requires the key of a real critic; nine existing test files stub critic results without it)."
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category ownership is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "grep finds critic stubs without `items` in the nine files named (wave-loop, wave-loop-relay, chain-e2e, loop-perf, speed-e2e, wave-loop-findings, wave-loop-gates, wave-loop-prompts, wave1-integration). The workflow-authoring reference says of agent() with a schema: 'validation happens at the tool-call layer so the model retries on mismatch', so a real critic cannot omit a required key. wave-loop.js:995-1029: CRITIC_SCHEMA already requires `checklist: [{ item, pass, evidence }]`, and the stubs pass `checklist: []`.",
+        "reason": "On the spec as written the lenient path is safe: only stubs can omit the key, and an empty or partial array is still retried. One fact the wave 2 review must take up: the schema already has a required per-item `checklist` with the same shape as the new `items`. If 2.2(c) is resolved by reusing `checklist`, the stubs' `checklist: []` is present-but-incomplete and all nine files hit the retry path again, so this edit would need redoing."
+      }
+    }
+  ],
+  "asked": [
+    {
+      "id": "R4",
+      "kind": "defect",
+      "text": "The permission-rules decision leaves holes, and the spike answers sharpen them. (1) Rules are evaluated deny, then ask, then allow, first match wins (F4, F5). A matching `permissions.ask` rule therefore prompts even when an allow rule also matches. A relay cannot answer a prompt, so treat a matching ask rule as blocking. The docs do not say how a subagent handles an ask prompt (F5), so blocking is the safe reading. (2) The bare rules `Bash` and `Bash(*)` match every command (F4), but the docs say blanket `Bash(*)` allow rules are dropped on entering auto mode (F1, F4). Counting them as allowing would pass preflight and still refuse the merge. Recommend a blanket-only allow gives `allowed` false with `broad` set to the rule, and 2.1 advises adding the narrow rule. (3) Claude Code also accepts `Bash(<prefix>*)` with no space, which has no word boundary (F4). The spec's three forms leave it out, so a user with that rule gets a false 'not allowed'. Recommend evaluating it as a fourth form. (4) The return shape has no types, so state them. 2.1 needs a deny told apart from a missing allow, because 'add the rule' is wrong advice when a deny rule blocks. Managed settings can add deny or ask rules that no user file overrides (F5); the file is absent on this machine, so list its path in `checked` if present and apply its deny and ask rules. This changes the Permission rules fixed decision, so a human decides.",
+      "evidence": "Spec: \"Only the documented `permissions.allow` and `permissions.deny` rule forms are evaluated: `Bash(<exact command>)`, `Bash(<prefix>:*)` and `Bash(<prefix> *)`.\" and \"returns `{ allowed, rule, source, denied, autoModeRules, checked }`\". Spike F4: \"Evaluation order: deny, then ask, then allow; first match wins\"; \"`Bash(ls*)` with no space matches both `ls -la` and `lsof`\"; \"in auto mode, blanket `Bash(*)` allow rules are dropped\". Spike F5: \"A matching ask rule prompts even when a more specific allow rule also matches\"; \"a managed deny or ask cannot be overridden by an allow in the other files\". 2.1(a): \"one escalation that names the rule to add (H2)\".",
+      "reverseCost": "Revert the spec edit before 1.1 starts. Afterwards, one PR to permission.js.",
+      "wouldBeWrongIf": "Claude Code never prompts on an ask rule inside a Workflow relay (F5: subagent handling is not documented), or the runtime keeps blanket Bash allow rules in a Workflow relay under auto mode (F1).",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [
+        "fixed_decision"
+      ],
+      "category": "ambiguity",
+      "task": "1.1",
+      "dependsOn": [
+        "F1",
+        "F5"
+      ],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "A matching deny rule wins over any allow rule.",
+          "replace": "A matching deny rule wins over any allow rule, and a matching `permissions.ask` rule also blocks (a relay cannot answer a prompt). `Bash(<prefix>*)` with no space is a fourth evaluated form (no word boundary). The bare rules `Bash` and `Bash(*)` match every command but are dropped in auto mode, so they never make `allowed` true: they are returned as `broad`. `checkPermission` returns `rule` (the narrow allow rule that matched, else null), `source` (its file path), `denied` (the deny rule that matched, else null), `ask` (the ask rule that matched, else null), `broad` (a bare allow rule, else null), `autoModeRules` (a count) and `checked` (a list of `{ path, ok, error }`, including the managed settings path when that file exists)."
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: touches fixed_decision; adversary disagree: Points 1 and 4 are right, but the edit is incomplete against the docs it cites. (a) 'A fourth evaluated form' still misses mid-pattern wildcards, so a careful rule such as `Bash(node /p/merge-pr.js * --repo /r *)` gets the same false 'not allowed' that point 3 sets out to remove; a general `*` matcher is simpler and complete. (b) `broad` covers only `Bash` and `Bash(*)`, but auto mode also drops wildcarded interpreters, so `Bash(node *)` or `Bash(node*)` would pass preflight and still be dropped: the exact failure point 2 names. (c) Treating blanket rules as never allowing is wrong outside auto mode. (d) The task text and Test line are not updated. It changes a fixed decision, so a human decides anyway; it should be reworked first. (Fetched permissions.md: 'Rules are evaluated in order: deny, then ask, then allow'; 'A `*` can go anywhere in the rule: at the start, in the middle, or at the end' (table rows `Bash(git * main)`, `Bash(* --version)`); 'A `*` at the end, with a space before it, also matches the bare command'. Fetched permission-modes.md: auto mode drops 'Blanket Bash(*)', 'Wildcarded interpreters like Bash(python*)', 'Shell rules that start with a wildcard', 'Some wildcarded paths'. Spec line 106 still lists the return shape without `ask` and `broad`, and 1.1's Test line gets no case for ask, broad, the no-space form or managed settings. ~/.claude/settings.json has an autoMode block, so auto mode is in use here.)",
+      "adversary": {
+        "verdict": "disagree",
+        "evidence": "Fetched permissions.md: 'Rules are evaluated in order: deny, then ask, then allow'; 'A `*` can go anywhere in the rule: at the start, in the middle, or at the end' (table rows `Bash(git * main)`, `Bash(* --version)`); 'A `*` at the end, with a space before it, also matches the bare command'. Fetched permission-modes.md: auto mode drops 'Blanket Bash(*)', 'Wildcarded interpreters like Bash(python*)', 'Shell rules that start with a wildcard', 'Some wildcarded paths'. Spec line 106 still lists the return shape without `ask` and `broad`, and 1.1's Test line gets no case for ask, broad, the no-space form or managed settings. ~/.claude/settings.json has an autoMode block, so auto mode is in use here.",
+        "reason": "Points 1 and 4 are right, but the edit is incomplete against the docs it cites. (a) 'A fourth evaluated form' still misses mid-pattern wildcards, so a careful rule such as `Bash(node /p/merge-pr.js * --repo /r *)` gets the same false 'not allowed' that point 3 sets out to remove; a general `*` matcher is simpler and complete. (b) `broad` covers only `Bash` and `Bash(*)`, but auto mode also drops wildcarded interpreters, so `Bash(node *)` or `Bash(node*)` would pass preflight and still be dropped: the exact failure point 2 names. (c) Treating blanket rules as never allowing is wrong outside auto mode. (d) The task text and Test line are not updated. It changes a fixed decision, so a human decides anyway; it should be reworked first."
+      }
+    },
+    {
+      "id": "R9",
+      "kind": "defect",
+      "task": "1.2",
+      "category": "quality",
+      "text": "The `isAssertionLine` regex in the Fixed decisions matches non-assertions. `\\.(to[A-Z]\\w*)` matches `.toISOString()`, `.toLowerCase()`, `.toFixed()` and `.toString()`, and the regex matches commented-out assertions. In 2.2 the gate is deterministic: any removed or changed assertion line without a `Test edits:` section forces FIX whatever the critic said. Every false positive then costs a fix round on an ordinary test edit. Recommend a matcher-name whitelist, treating comment lines as non-assertions, and negatives in the 12-line test. This changes a fixed decision.",
+      "evidence": "Command run: the spec regex on `const d = new Date(x).toISOString();` is true; `name.toLowerCase()` is true; `x.toFixed(2)` is true; `// expect(a).toBe(1)` is true. The proposed regex with comment exclusion gives false for all four and true for `await expect(p).rejects.toThrow()`, `.toEqual({a:1})`, `.toBeGreaterThan(0)`, `.toHaveBeenCalledWith(1)` and `assert.equal(a,b)`.",
+      "reverseCost": "Revert the spec edit before 1.2 starts. Afterwards, one PR to testedits.js.",
+      "wouldBeWrongIf": "Over-flagging is acceptable because the justification costs one line in the PR body. A whitelist could also miss a custom matcher, so a deliberate choice between the two failure modes belongs to the human.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [
+        "fixed_decision"
+      ],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "A line is an assertion line when, after trimming, it matches",
+          "replace": "A line is an assertion line when, after trimming, it does not start with `//`, `/*` or `*` and it matches"
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "`/\\b(expect|assert)\\s*[.(]|\\.(to[A-Z]\\w*|should)\\b|\\bt\\.(is|deepEqual|true|false|throws)\\b/`",
+          "replace": "`/\\b(expect|assert)\\s*[.(]|\\.(to(Be|Equal|StrictEqual|Match|Contain|Have|Throw|Satisfy)\\w*|should)\\b|\\bt\\.(is|deepEqual|true|false|throws)\\b/`"
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "`isAssertionLine` on 12 sample lines.",
+          "replace": "`isAssertionLine` on 12 sample lines, at least 4 of them not assertions (`new Date(x).toISOString()`, `name.toLowerCase()`, a `// expect(a).toBe(1)` comment, `it('x', () => {`)."
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: touches fixed_decision",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Ran both regexes on 26 lines. Spec regex: true for `new Date(x).toISOString()`, `name.toLowerCase()`, `x.toFixed(2)`, `// expect(a).toBe(1)`. Proposed regex with the comment rule: false for all four, true for rejects.toThrow, .toEqual, .toBeGreaterThan, .toHaveBeenCalledWith, assert.equal, t.is, .not.toBe, `}).toThrow()`. It is false for continuation lines `.toReturnWith(3)`, `.toIncludeSameMembers([1])`, `.toStartWith(\"a\")`, `.toPass()`; any line containing `expect(` still matches through the first alternative. The regex find string matches spec line 60 exactly.",
+        "reason": "Every claim reproduces. The misses are limited to chained-matcher continuation lines with matchers outside the whitelist, and a commented-out assertion is still caught as a removal. It changes a fixed decision, so the human picks between the two failure modes, as the recommendation says."
+      }
+    },
+    {
+      "id": "R10",
+      "kind": "defect",
+      "text": "`classifyFailure(errorOrText, nowMs)` needs a clock, and the workflow script has none. The spike on whether the runtime provides `Date` or `Intl.DateTimeFormat` to scripts found no source (F2 is still open), so the design cannot rely on a clock in the script. 2.1 would have to get `nowMs` from somewhere, and the spec does not say where. The Test line says 'a fixed clock' without a value, so the expected `resetsAt` is not pinned. Recommend `nowMs` is optional. When it is null, `resetsAt` is null and `farOut` comes from the text 'too far out' only. Pin the test clock and the expected epoch. Where a worker can supply `nowMs`, the lib uses it. F3 also found no source for the 30 minute `farOut` threshold, so treat it as the spec's own policy, not a runtime fact.",
+      "evidence": "wave-loop.js:26 \"(this script has no clock)\"; :856 \"The workflow has no clock, so the worker times the check.\"; :1370 \"Elapsed times come from the scripts' JSON lines (this script has no clock)\". Spike F2: \"No source I could reach says whether the Workflow runtime exposes Date, Date.now or Intl.DateTimeFormat\". Spike F3: \"The spec's 30-minute farOut assumption therefore has no source support\". Command run: `Date.UTC(2026,10,19,20)` is 1795118400000 and formats as 12:00 PM in America/Los_Angeles; `Date.UTC(2026,10,16,20)` is 1794859200000. Spec Test line: \"with a fixed clock\".",
+      "reverseCost": "Revert the spec edit before 1.3 starts.",
+      "wouldBeWrongIf": "The Workflow runtime provides `Date` or `Date.now` to scripts (F2). The null-clock path is then unnecessary but harmless.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "category": "ambiguity",
+      "task": "1.3",
+      "dependsOn": [
+        "F2"
+      ],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "`classifyFailure(errorOrText, nowMs)` returns",
+          "replace": "`classifyFailure(errorOrText, nowMs)` (the workflow has no clock: `nowMs` may be null, and then `resetsAt` is null and `farOut` comes only from the text `too far out`) returns"
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "with a fixed clock;",
+          "replace": "with the clock at `Date.UTC(2026, 10, 16, 20)` (`resetsAt` is 1795118400000, `farOut` true) and with a null clock (`resetsAt` null, `farOut` true from the text);"
+        }
+      ],
+      "decision": "ask",
+      "reason": "depends on open fact F2",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "The workflow-authoring reference loaded in this session settles the open spike: 'Standard JS built-ins ... are available — EXCEPT Date.now()/Math.random()/argless new Date(), which throw (they would break resume); pass timestamps in via args'. wave-loop.js:26, 856 and 1370 say the script has no clock. Ran node: Date.UTC(2026,10,19,20) = 1795118400000, formatted in America/Los_Angeles as Nov 19, 2026, 12:00 PM; Date.UTC(2026,10,16,20) = 1794859200000.",
+        "reason": "The script cannot read a clock, so a nullable nowMs is required, not just harmless. The pinned test values are correct. The same reference names the supply route the spec lacks: the session passes a timestamp in args."
+      }
+    },
+    {
+      "id": "R19",
+      "kind": "defect",
+      "task": "2.1",
+      "category": "ownership",
+      "text": "For the wave 2 review, not wave 1. 2.1 bumps `LOOP_VERSION` and `package.json` to 2.4.0, but three existing test files hard-code the preflight stub `loopVersion: '2.3.1'`. wave-loop's preflight compares the versions, so those tests fail after the bump. No task owns them, and 2.1 owns only tests/wave-loop-v24.test.ts. Recommend 2.1 owns these three and reads the version from package.json.",
+      "evidence": "tests/loop-perf.test.ts:20, tests/speed-e2e.test.ts:149 and tests/wave-loop-relay.test.ts:108 contain `loopVersion: '2.3.1'`. wave-loop.js:834 `const LOOP_VERSION = '2.3.1'`; tests/loop-version.test.ts:50 pins `LOOP_VERSION` to package.json.",
+      "reverseCost": "Revert the spec edit.",
+      "wouldBeWrongIf": "Those stubs are read from package.json elsewhere. The grep shows literals.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "`package.json`, `docs/OPERATING.md`. Depends on 1.1 and 1.3.",
+          "replace": "`package.json`, `docs/OPERATING.md`, and the `loopVersion: '2.3.1'` preflight stubs in `tests/loop-perf.test.ts`, `tests/speed-e2e.test.ts` and `tests/wave-loop-relay.test.ts` (they read the version from `package.json`). Depends on 1.1 and 1.3."
+        }
+      ],
+      "decision": "ask",
+      "reason": "adversary disagree: The finding is right but the fix is incomplete: after 2.1 bumps wave-loop to 2.4.0, chain-loop still says 2.3.1, so chain-e2e fails and every real chain run stops with a version error. Adding chain-loop.js makes 8 owned paths, past the limit that R20 itself treats as binding. This is a wave 2 item with no cost to waiting; rework it at the wave 2 review (for example a small version task, or stubs that read package.json owned by 2.T). (The three stubs exist as quoted (tests/loop-perf.test.ts:20, speed-e2e.test.ts:149, wave-loop-relay.test.ts:108) and wave-loop.js preflight fails on a version mismatch. But claude/workflows/chain-loop.js:246 also has `const LOOP_VERSION = '2.3.1'`, chain.js:83 throws when a wave result reports another version, and tests/chain-e2e.test.ts runs the real chain-loop over the real wave-loop; grep finds no mention of chain-loop in the spec, so no task owns it. Applied the edit to a scratch copy and ran spec-lint: 'warning: task 2.1: owns 7 paths (more than about 6)'.)",
+      "adversary": {
+        "verdict": "disagree",
+        "evidence": "The three stubs exist as quoted (tests/loop-perf.test.ts:20, speed-e2e.test.ts:149, wave-loop-relay.test.ts:108) and wave-loop.js preflight fails on a version mismatch. But claude/workflows/chain-loop.js:246 also has `const LOOP_VERSION = '2.3.1'`, chain.js:83 throws when a wave result reports another version, and tests/chain-e2e.test.ts runs the real chain-loop over the real wave-loop; grep finds no mention of chain-loop in the spec, so no task owns it. Applied the edit to a scratch copy and ran spec-lint: 'warning: task 2.1: owns 7 paths (more than about 6)'.",
+        "reason": "The finding is right but the fix is incomplete: after 2.1 bumps wave-loop to 2.4.0, chain-loop still says 2.3.1, so chain-e2e fails and every real chain run stops with a version error. Adding chain-loop.js makes 8 owned paths, past the limit that R20 itself treats as binding. This is a wave 2 item with no cost to waiting; rework it at the wave 2 review (for example a small version task, or stubs that read package.json owned by 2.T)."
+      }
+    }
+  ],
+  "spikes": [
+    {
+      "id": "F1",
+      "fact": "Does a `permissions.allow` rule such as `Bash(node <path>/merge-pr.js:*)` in `~/.claude/settings.json` stop the permission refusal of Workflow relay subagents when the session runs in auto mode? The settings have `autoMode` and no `permissions` key. Also: why did Warden wave 4's `--dry-run` preflight pass while the real merge was refused?",
+      "status": "answered",
+      "answer": "(a) Partly settled, not fully. The docs say: in auto mode, allow rules still apply, but broad ones are dropped on entry (blanket Bash(*), wildcarded interpreters such as Bash(python*), Agent allow rules, Monitor allow rules). Narrow rules such as Bash(npm test) stay in effect, and dropped rules are restored when auto mode is left. A rule for one specific script path is narrow, so under this text it should stay active. Subagents: each subagent action goes through the same decision order and the same allow and block rules as the parent session, and a subagent's permissionMode frontmatter is ignored. The docs do not mention Workflow, dynamic workflow, or background runs, so they do not confirm whether Workflow relay subagents are covered. Bash rules match the command text Claude writes, after compound-command splitting and wrapper stripping, and the docs warn that a rule does not cover the same program invoked in another form. The \":*\" suffix in the rule is not the form shown in the current docs, which put a space before the wildcard (for example Bash(npm test *)). The docs do not say whether the \":*\" form matches, so that is unverified. Protected-path writes are not pre-approved by permissions.allow rules in settings files. The autoMode key is documented only in outline (autoMode.allow, autoMode.environment, claude auto-mode defaults); the full schema is on a page I did not read. (b) Not settled. The docs contain nothing about --dry-run of a Workflow or a merge script, or why a dry-run would pass where the real run is refused. I did not find the Warden wave 4 logs, so I could not check what was refused or why.",
+      "source": "https://code.claude.com/docs/en/permissions (sections \"Manage permissions\", \"Wildcard patterns\", \"What a Bash rule doesn't match\", \"Agent (subagents)\", \"Precedence among rules, hooks, and mods\"); https://code.claude.com/docs/en/permission-modes.md (sections \"Eliminate permission prompts with auto mode\", \"How auto mode handles subagents\", \"Actions no mode auto-approves\"); https://code.claude.com/docs/en/auto-mode-config.md (autoMode schema, not read). Local check: grep for dry-run in ~/dev/agent-loop/README.md and ~/dev/agent-loop/docs/warden/ returned no hits.",
+      "retrieved": "2026-11-25",
+      "error": ""
+    },
+    {
+      "id": "F2",
+      "fact": "Does the Workflow runtime give workflow scripts `Date`, `Date.now` and `Intl.DateTimeFormat` with IANA zones? wave-loop.js says three times that the script has no clock.",
+      "status": "open",
+      "answer": "Not settled. No source I could reach says whether the Workflow runtime exposes Date, Date.now or Intl.DateTimeFormat (or IANA zone support) to workflow scripts. The Claude platform docs search for workflow script runtime globals and clock returned nothing on this. The closest page, the Managed Agents \"Workflow runs\" doc, describes dynamic workflows as a server-run program that starts agent threads and reports run events. It says nothing about clock, Date or Intl. Its only time-related content is event timing, not script globals. That page covers the Managed Agents workflow feature, which may not be the same runtime that wave-loop.js runs under. In wave-loop.js itself, the comments at lines 24, 472, 847 and 1300 say the script has no clock and that elapsed times come from the workers and scripts, but they give no runtime documentation for why. I did not run a probe, since none was safe and read-only within this task.",
+      "source": "",
+      "retrieved": "",
+      "error": "no source recorded, so the answer cannot be checked"
+    },
+    {
+      "id": "F3",
+      "fact": "What reset wait makes the Workflow runtime or Claude Code print 'too far out to wait for'? The spec assumes 30 minutes for `farOut` when no such text is present.",
+      "status": "answered",
+      "answer": "Not settled. No source I could reach shows the Workflow runtime or Claude Code printing the text \"too far out to wait for\", and none gives a numeric threshold for it. The only exact-phrase hit is in third-party docs for the sequant tool (a Codex plan-quota note): \"A billing failure means the reset is too far out to wait for.\" That is a different tool, and it gives no threshold; a reset within seven days is treated as a rate limit there, and anything later or unparseable as a billing failure. The local grep of ~/dev/agent-loop (excluding .git) for \"too far out\" and \"farOut\" returned no matches. A wider grep of local install directories was started but did not complete, so it is not evidence either way. Related Claude Code facts that are documented: the interactive auto-continue after a usage limit only starts when the reset is less than 24 hours away (per a third-party guide that quotes Anthropic's docs). The 30-minute figure appears in Anthropic's docs only as the sleep length after which the session shows \"Press enter to continue\" (the limit reset during the sleep), and as an example value for CLAUDE_CODE_RETRY_WATCHDOG_MAX_WAIT_MS (1800000). It is not documented as a farOut threshold. The env-var reference (code.claude.com/docs/en/env-vars) has no \"too far\" or \"farOut\" text, and no CLAUDE_CODE_RETRY_WATCHDOG_MAX_USAGE_LIMIT_WAIT_MS entry was found on that page, though a third-party page says it exists in v2.1.301, with the default \"no cap\". The spec's 30-minute farOut assumption therefore has no source support in what I found.",
+      "source": "https://raw.githubusercontent.com/sequant-io/sequant/HEAD/docs/troubleshooting.md (only exact-phrase hit, third-party, not Workflow/Claude Code); https://code.claude.com/docs/en/env-vars (checked, no match); https://agentpatterns.ai/patterns/agent-design/usage-limit-wait-ceiling (cites the env-var default for MAX_USAGE_LIMIT_WAIT_MS as \"no cap\"); local: grep of ~/dev/agent-loop excluding .git (no match)",
+      "retrieved": "2026-11-24",
+      "error": ""
+    },
+    {
+      "id": "F4",
+      "fact": "How does Claude Code match Bash permission rules? Does `:*` or ` *` require a word boundary? Are `~` or symlinks expanded or resolved in a rule's path? Does the bare rule `Bash` or `Bash(*)` allow every command?",
+      "status": "answered",
+      "answer": "(a) Word boundary: Yes for a trailing wildcard written with a space before it, and for the `:*` form (which the docs say is equivalent). `Bash(ls *)` matches `ls -la` and bare `ls`, but not `lsof`. `Bash(ls*)` with no space matches both `ls -la` and `lsof`. A `*` anywhere else (start, middle) matches any text including spaces, with no boundary. A rule with no `*` matches one exact command. `:*` is only recognized at the end of a pattern; `Bash(git:* push)` treats the colon as a literal. Also, `Bash(* --help *)` matches `npm --help x` but not bare `npm --help`, since the bare-command match only applies when the trailing `*` is the rule's only wildcard. Matching is on the command text Claude writes, after compound commands are split and wrappers stripped. Commands in a different form (e.g. `/usr/bin/curl`, `sh -c '...'`, `git -C . push`) are not matched.\n(b) `~` and symlinks: The docs describe `~/path` only for Read and Edit path rules (gitignore-style: `~/path` = path from home directory, e.g. `Read(~/Documents/*.pdf)` matches `/Users/alice/Documents/*.pdf`). The docs' symlink section says that for a file path Claude requests through a symbolic link, the permission check covers both the requested path and the file it resolves to (macOS, Linux, Windows; Windows junctions too). That section is about file-path permission checks; the docs do not state whether Bash rule text is tilde-expanded or symlink-resolved. Bash rule matching is described as literal text matching, so no expansion is documented for it. Note the docs do give `$HOME/bin/*` as an example of a wildcarded path that auto mode drops, but no expansion rule is stated.\n(c) Bare `Bash` and `Bash(*)`: Both match all Bash commands. The docs say `Bash(*)` is equivalent to `Bash`. As an allow rule, that means every Bash command runs without a prompt (subject to deny and ask rules, which take precedence, and to auto-mode handling: in auto mode, blanket `Bash(*)` allow rules are dropped on entering auto mode). As a deny rule, either form removes the tool from Claude's context entirely. Separately, a sandboxing note says a bare `Bash` ask rule or `Bash(*)` ask is skipped for commands that run sandboxed, but still applies outside the sandbox, and not in plan mode.\nEvaluation order: deny, then ask, then allow; first match wins; specificity does not change order.",
+      "source": "https://code.claude.com/docs/en/permissions (also https://docs.claude.com/en/docs/claude-code/permissions, published 2026-11-23, fetched via Keenable); https://code.claude.com/docs/en/sandboxing (published 2026-11-20); https://docs.anthropic.com/en/docs/claude-code/permission-modes (published 2026-11-23). Secondary, not authoritative: GitHub issue anthropics/claude-code#21140 and #76509 for the word-boundary and colon behavior.",
+      "retrieved": "2026-11-24",
+      "error": ""
+    },
+    {
+      "id": "F5",
+      "fact": "Do a `permissions.ask` rule, managed settings (`/Library/Application Support/ClaudeCode/managed-settings.json`) or `--settings` flags change whether a non-interactive relay subagent is allowed to run a command that the three settings files the spec reads would allow?",
+      "status": "answered",
+      "answer": "Partly settled, not fully. Per the docs: (1) Rules are evaluated deny, then ask, then allow; the first match decides. A matching ask rule prompts even when a more specific allow rule also matches, so a permissions.ask rule overrides an allow rule from the three settings files for the same command. A matching deny rule blocks regardless of allow. (2) Precedence: managed settings are highest, then --settings (command line), then project local, shared project, and user. Nothing in user, project, local or --settings overrides a managed key. Lists such as permissions.allow merge across non-managed scopes, and managed allow rules still apply alongside user/project allow rules unless allowManagedPermissionRulesOnly is set. So a managed file or --settings flag can add or remove rules, but a managed deny or ask cannot be overridden by an allow in the other files. (3) Non-interactive: the docs say that in dontAsk mode, calls that would prompt are auto-denied, and that for a -p run with nothing to answer a prompt, Claude Code denies the call (stated for org-set ask on claude.ai connector tools). Setting permissions.denyInsteadOfPrompting true (honored from ~/.claude/settings.json or --settings even when managed says false) makes calls that would wait on a prompt be denied, so an unattended session keeps working. The docs do not explicitly state how a subagent (Agent tool) handles ask prompts; no source I read settles that case directly. Also, the managed-settings.json file does not exist on this machine (checked 2026-11-25), so only the documented precedence applies to it.",
+      "source": "https://code.claude.com/docs/en/permissions (sections \"Manage permissions\" / rule evaluation order, \"dontAsk\" mode, denyInsteadOfPrompting, and the connector-tool ask note); https://code.claude.com/docs/en/settings (sections \"Settings precedence\", \"Lists merge instead of overriding\", \"Exceptions to managed settings precedence\"); local check: cat \"/Library/Application Support/ClaudeCode/managed-settings.json\" returned no such file",
+      "retrieved": "2026-11-25",
+      "error": ""
+    },
+    {
+      "id": "F6",
+      "fact": "Which reset phrasings does Claude Code emit besides `resets Nov 19 at 12pm (America/Los_Angeles)`? For example `resets 3pm (zone)` without 'at', a comma after the date, or minutes.",
+      "status": "answered",
+      "answer": "Partly settled, from user-reported quotes in public issues and posts, not from an official format spec. Quoted forms seen: (1) \"You've hit your limit · resets 7am (UTC)\" (time only, no 'at', UTC zone in parentheses); (2) \"resets 3pm (UTC)\" and \"resets 12pm (America/Sao_Paulo)\", same form with an IANA zone; (3) \"You've used 97% of your session limit · resets 11am (Europe/London)\" (usage-percent banner, same time-zone form); (4) \"Resets 2pm (Australia/Sydney)\" and \"Resets 9pm (America/Denver)\" in the /usage dialog (capitalised 'Resets', no 'at', no date); (5) \"resets 2:10am (Asia/Jerusalem)\" and \"resets 5:20am (Asia/Hong_Kong)\" (minutes included, no 'at'); (6) \"resets 5am (Asia/Tokyo)\" and \"resets 2am (America/Los_Angeles)\" (time only, no minutes); (7) \"resets 9pm (Asia/Hong_Kong)\". Also seen: a relative form in the claude.ai web Settings > Usage page, \"Resets in 23 hr 36 min\", and a banner that renders \"resets in 1h\" (a floored duration, not a clock time, reported as a bug in claude-code#71925). A feature request (claude-code#33465) asks for a weekday, e.g. \"Resets Thursday 9pm\", but no source shows the CLI emitting a weekday. No source shows a comma after a date. The 'at' form with a date ('Nov 19 at 12pm') appears in no quoted source, so the date-bearing form is unsettled. Sources do not say whether the reset text is always lowercase, or whether other zone spellings such as 'UTC' vs 'GMT' vary.",
+      "source": "https://github.com/anthropics/claude-code/issues/32550 ; https://github.com/anthropics/claude-code/issues/26853 ; https://github.com/anthropics/claude-code/issues/30933 ; https://github.com/anthropics/claude-code/issues/33465 ; https://github.com/anthropics/claude-code/issues/71925 ; https://github.com/anthropics/claude-code/issues/84690 ; https://github.com/nanocoai/nanoclaw/commit/d488a9c541a62703bf49515adb98f0303a63cb79 ; https://github.com/paperclipai/paperclip/issues/18550 ; https://dev.to/jeromefromhk/236-tests-passed-the-release-was-still-broken-5j8 ; search via keenable search_web_pages (query \"Claude Code resets usage limit message reset time timezone\"). Official reference https://code.claude.com/docs/en/errors appeared in search snippets but its reset phrasing was not shown, and I did not fetch it in full.",
+      "retrieved": "2026-11-24",
+      "error": ""
+    },
+    {
+      "id": "F7",
+      "fact": "Does the Workflow runtime enforce the `required` keys of the JSON schema passed to `agent()`, so a critic cannot return a verdict without `items`?",
+      "status": "answered",
+      "answer": "Yes, per the Claude Code Workflows docs: the output is checked against the schema and retried; after five failed attempts the call errors instead of returning a verdict missing a required key. Caveat: the docs do not state the per-key rule verbatim; it is shown by a user bug report (#70645). Bug #76901 shows a schema-satisfying placeholder can be returned after retry exhaustion, so required keys are enforced by type, not content (e.g. items could be a near-empty value unless minLength or pattern is set).",
+      "source": "https://code.claude.com/docs/en/workflows (agent() schema section, via search snippet); https://github.com/anthropics/claude-code/issues/70645 ; https://github.com/anthropics/claude-code/issues/76901",
+      "retrieved": "2026-11-25",
+      "error": ""
+    },
+    {
+      "id": "F8",
+      "fact": "What is the user's current weekly Claude Code usage and reset time? Wave 1 is about 6 tasks, and comparable Warden waves used about 1M tokens (wave 1: 986,498; wave 1b: 1,017,006).",
+      "status": "open",
+      "answer": "Not settled from a source. The user's personal weekly Claude Code usage and reset time are account-specific and are not published in the Claude API docs. A docs search (search_docs, \"Claude Code weekly usage limit reset time\", run 2026-11-24) returned only API rate-limit, usage/cost API, and Claude Code Analytics API pages. Those cover organization-level API usage, not an individual plan's weekly quota or reset time. Claude Code's own limit display (the /usage command, or the account settings page at claude.ai) would show the current figure, but I did not run it, since it is an in-session check and not a read-only probe I can make from here. The wave-cost comparison (about 1M tokens per comparable wave) is taken from the task text, not verified by me.",
+      "source": "",
+      "retrieved": "",
+      "error": "no source recorded, so the answer cannot be checked"
+    }
+  ],
+  "gates": [
+    {
+      "id": "G-wave1-quota",
+      "what": "Claude Code weekly usage headroom for about 1M tokens per wave, so about 2M for waves 1 and 2",
+      "why": "Warden wave 4 spent 2.75M tokens and then hit the weekly limit, which stopped 9 workers. The loop can only pause or park on a limit; it cannot raise it. The spec's Budget is 'the cost is Claude Code usage'.",
+      "owner": "human",
+      "before": "1",
+      "leadTime": "days",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-1.1-account",
+      "what": "Add a `permissions.allow` rule for the merge script to `~/.claude/settings.json`, as `Bash(node <repo>/.claude/scripts/merge-pr.js:*)`, using the exact link path the relay types (H2)",
+      "why": "The merge relay runs `node <repo>/.claude/scripts/merge-pr.js` from wave 1 on. Warden wave 4 and wave 1d were refused at that command. `~/.claude/settings.json` has no `permissions` key today. Permission settings are human-only (Invariant 6).",
+      "owner": "human",
+      "before": "1",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-wave1-account",
+      "what": "GitHub CLI login with `repo` scope as EdanBarrios, for PR creation, CI reads and merges on the public agent-loop repo",
+      "why": "Every task opens a PR and merge-pr.js merges it. Verified: `gh auth status` shows the account logged in with scopes repo, workflow, read:org, gist and delete_repo. The default branch is unprotected, so only the loop's own CI gate stands between a PR and main.",
+      "owner": "human",
+      "before": "1",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    }
+  ],
+  "specEdits": [
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "## Wave 1: pure modules (all in parallel)",
+      "replace": "## Wave 1: pure modules (1.5 after 1.2; the rest in parallel)",
+      "recId": "R1"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "- **1.5 Test-impact map.** Owns `claude/lib/impact.js`",
+      "replace": "- **1.5 Test-impact map.** Depends on 1.2 (the test-file matcher). Owns `claude/lib/impact.js`",
+      "recId": "R1"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "One matcher, in `claude/lib/testedits.js`, is exported and",
+      "replace": "One matcher, `isTestFile(path, globs)` in `claude/lib/testedits.js`, and a reader `testGlobsOf(project)` that returns the field or the default, are exported (globs are matched with `node:path` `matchesGlob` against repo-relative POSIX paths; `**/` matches zero or more directories; the CLIs of 1.2 and 1.5 read the field from `<repo>/.claude/loop.local.json`, and a missing file or field gives the default), and are",
+      "recId": "R2"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "for the command form the workflow runs (`node <scripts dir>/merge-pr.js <n> --repo",
+      "replace": "for the command forms the workflow runs, with `<scripts dir>` the directory of `process.argv[1]` as given (never `import.meta.url`: `.claude/scripts` is a link and the relay types the link path; no `~` expansion) and `<repo>` the `--repo` value as given: the merge with `--worktree <path>` (and `--defer-main` when `project.mainCi` is set), `--verify-main <sha> --timeout-min 9`, and `--state`; `allowed` is true only when every form is allowed, `rule` and `source` come from the first form that is not, and each form begins (`node <scripts dir>/merge-pr.js <n> --repo",
+      "recId": "R3"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "in `checked` with an error and skipped)",
+      "replace": "in `checked` with a fixed `error` string, `missing` or `unparseable`, never the parser's message, which can quote file content; and skipped)",
+      "recId": "R5"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "a missing file and a malformed file listed in `checked`;",
+      "replace": "a missing file and a malformed file listed in `checked` (a secret-like string inside the malformed file appears nowhere in the returned or printed JSON);",
+      "recId": "R5"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "baseRefName,headRefOid`; merge commits are skipped.",
+      "replace": "baseRefName,headRefOid`; the commit order and the merge commits (two parents; skipped) come from `git rev-list --reverse --parents origin/<baseRefName>..<headRefOid>`, because `gh` lists no parents, and a `headRefOid` missing from the repo is fetched once with `git fetch origin pull/<pr>/head`.",
+      "recId": "R6"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "A removed assertion line with no replacement in the same hunk",
+      "replace": "The diff uses `-M`; a test file deleted after `testFirstCommit` counts every assertion line in it as removed; `removed` lists removed assertion lines only; within a hunk the i-th removed assertion line pairs with the i-th added line, and the pair is 'changed' only when the added line is itself an assertion line, otherwise the removed line counts as removed. A removed assertion line with no replacement in the same hunk",
+      "recId": "R7"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "(a hunk whose removed and added lines both appear in `git diff <merge",
+      "replace": "(a removed or added line that also appears as removed or added, one for one, in `git diff <merge",
+      "recId": "R8"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "from main (zero counts);",
+      "replace": "from main that adds, removes and edits an assertion (zero counts each); a renamed test file (counts unchanged); a deleted test file (every assertion line removed);",
+      "recId": "R8"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "the text matches the existing `isUsageLimit` pattern in `wave-loop.js` or `weekly limit`;",
+      "replace": "the text matches `/usage limit|limit reached|rate.?limit|quota|\\b429\\b|weekly limit/i` (the pattern of `isUsageLimit` in `wave-loop.js`, copied, because a bundled lib cannot import from the workflow; 2.1 makes `isUsageLimit` call `classifyFailure`);",
+      "recId": "R11"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "a plan with merged, parked, failed-on-limit and unstarted tasks.",
+      "replace": "a plan with merged, parked, failed-on-limit and unstarted tasks; `bundleSource` from `scripts/bundle-workflows.js` reports no problem on the lib source, and the lib declares no top-level name that `claude/workflows/wave-loop.js` already declares.",
+      "recId": "R11"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "`pausePlan({ tasks, state, failedOnLimit })` returns `{ paused: [ids], parked: [ids] }`: tasks not",
+      "replace": "`pausePlan({ tasks, state, failedOnLimit })` (`tasks` the ids including the tail, `state` a map id to `'merged'|'reverted'|'parked'|'running'` where a missing id means not started, `failedOnLimit` a list of ids) returns `{ paused: [ids], parked: [ids] }`: tasks not",
+      "recId": "R12"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "stay parked; merged",
+      "replace": "stay parked; reverted tasks and tasks still `running` are in neither (a running task's result is recorded when it finishes), and merged",
+      "recId": "R12"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "`resets <Mon> <d> at <h>[:mm]am|pm (<IANA zone>)` or `resets at <h>[:mm]am|pm (<zone>)`",
+      "replace": "`resets <Mon> <d>[,][ at] <h>[:mm]am|pm (<zone>)` or `resets[ at] <h>[:mm]am|pm (<zone>)` or the relative `resets in <n>h` / `<n> hr <m> min` (matched case-insensitively; `<zone>` is any IANA name or `UTC`; 12am is hour 0 and 12pm is noon; a date without a year is the next such date on or after `nowMs`; a zone the runtime rejects gives `resetsAt` null; the relative form needs `nowMs`; the time-only form is the next such time)",
+      "recId": "R13"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "divided by the number of rows in the `Tasks` table, skips scorecards whose total is 0, and adds",
+      "replace": "(comma-grouped digits) divided by the number of rows in the `## Tasks` section only (tail row included), skips scorecards whose total is 0 or missing before it picks the newest three (by file name, descending; a name sorts by its date prefix, then by wave id compared as text), and adds",
+      "recId": "R14"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "(median of the newest three by file name; `basis`",
+      "replace": "(`tasks` is the wave's task count including the tail; `tokensPerTask` is the median of up to three values, the mean of the two when only two are usable; `estimate` is `tasks` times it, rounded to the nearest thousand; the printed `<n>` is `estimate` in millions with one decimal; `basis`",
+      "recId": "R14"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "Owns `scripts/wave-args.js`, `tests/wave-args.test.ts`.",
+      "replace": "Owns `scripts/wave-args.js`, `tests/wave-args.test.ts`, `tests/fixtures/wave-scorecard-*.md`.",
+      "recId": "R15"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "`mergePermission`, `ciChunkMin`, `testGlobs`, the `PAUSED` gate and H2.",
+      "replace": "`mergePermission`, `ciChunkMin`, `testGlobs`, the `PAUSED` gate, H2, and `wave-args.js --scorecards <dir>` (the token estimate to read before launching a wave).",
+      "recId": "R16"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "specifiers are ignored. An owned path",
+      "replace": "specifiers are ignored, except an alias from `compilerOptions.paths` in `<repo>/tsconfig.json` (a `prefix/*` pattern mapped to a directory, relative to its `baseUrl` or the tsconfig), which resolves like a relative path. A specifier ending `.js`, `.mjs` or `.cjs` also tries the same name ending `.ts`, `.tsx`, `.mts` or `.cts`; side-effect imports (`import '<p>'`), imports that span lines, `import type` and `vi.mock('<p>')` count. An owned path",
+      "recId": "R17"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "an owned directory, an `index.ts` resolution,",
+      "replace": "an owned directory, an `index.ts` resolution, a tsconfig `@/` alias, a `./a.js` specifier that resolves to `a.ts`, a multi-line import, a side-effect import,",
+      "recId": "R17"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "| H2 | before the first wave on 2.4 |",
+      "replace": "| H2 | before wave 1 |",
+      "recId": "R18"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "e.g. `Bash(node /path/to/repo/.claude/scripts/merge-pr.js:*)`",
+      "replace": "e.g. `Bash(node /path/to/repo/.claude/scripts/merge-pr.js *)` (the path exactly as `project.repo` plus `/.claude/scripts` spells it, absolute and not the link's target)",
+      "recId": "R18"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "2.1's preflight fails without it; permission settings are human-only",
+      "replace": "every wave merges through that script, and Warden wave 4 was refused there; 2.1's preflight fails without it; permission settings are human-only",
+      "recId": "R18"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "`items` miss a checklist number is treated as the critic returning nothing (the existing retry path).",
+      "replace": "`items` array misses a checklist number is treated as the critic returning nothing (the existing retry path); a verdict with no `items` key is recorded without per-item data and logged (the schema requires the key of a real critic; nine existing test files stub critic results without it).",
+      "recId": "R20"
+    }
+  ],
+  "needsSecondRound": false,
+  "skipped": false,
+  "skipReason": "",
+  "reviewPath": "~/dev/agent-loop/docs/agent-loop/2026-11-24-wave-1-review.json"
+}
