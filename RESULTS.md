@@ -4,7 +4,7 @@ What the loop did on a real project, taken from the per-wave scorecards in [`doc
 [Warden](https://govwarden.vercel.app) is my own civic-data site (Next.js, Postgres; live, code private); the loop
 opened 61 of its 145 merged PRs (waves 1 to 4). Measurements come first, then what I concluded from them, kept apart on purpose.
 
-## Measurements: Warden waves 1 to 3 (13 to 16 Nov 2026)
+## Measurements: Warden waves 1 to 4 (13 to 17 Nov 2026)
 
 | Wave | Loop | Tasks | First-pass MERGE | Fix items by cause | Reverted after MERGE | Gate | Tokens |
 |---|---|---|---|---|---|---|---|
@@ -14,16 +14,27 @@ opened 61 of its 145 merged PRs (waves 1 to 4). Measurements come first, then wh
 | [1d](docs/warden/2026-11-14-wave-1d-loop.md) | 2.2.1 | 2 | 1/2 | defect 1 | 0 | FAIL (1) | 0.58M |
 | [2](docs/warden/2026-11-15-wave-2-loop.md) | 2.2.1 | 7 | 6/7 | defect 3 | 0 | PASS | 2.21M |
 | [3](docs/warden/2026-11-16-wave-3-loop.md) | 2.3.0, 2.3.1 | 30 | 20/30 | defect 9, spec_miss 10, loop 2 | 0 | PASS after 5 runs (2) | 16.96M |
-| **Total** | | **53** | **38/53 (72%)** | | **0** | | **22.96M** |
+| [4](#wave-4-nothing-merged) | 2.3.1 | 19 | 6/6 reviewed | none | 0 | FAIL (3) | 2.75M |
+| **Total** | | **72** | **44/59 reviewed (75%)** | | **0** | | **25.71M** |
 
 1. Wave 1d failed its gate on a merge the loop could not run (the merge relay was blocked), not on the code. The
    PR (the critic had approved it on round 2) was merged outside that run.
 2. Wave 3's first run merged 19 of 30 tasks. Four relaunches merged the rest.
+3. Wave 4 merged nothing; see below.
 
 "First-pass MERGE" is the share of tasks whose first PR the critic approved. "Fix items" are what the critic asked
 for, by cause: `defect` (the code was wrong), `spec_miss` (the code did not do what the spec says), `loop` (the loop
 itself was at fault). Waves before 2.3.0 did not count defects that escaped into later fixes, so the critic-miss
 figure for those waves is reverts only.
+
+### Wave 4: nothing merged
+
+19 tasks, 2.75M tokens, 93 minutes, 0 merged by the loop. The critic approved all 6 PRs it reviewed on the first pass,
+then two failures stopped the wave. The permission system refused the merge script (the preflight had passed, because
+it ran the script as a dry run, which the permission check judges differently), and the loop rightly stopped running
+merges after one refusal. Then the weekly usage limit ran out and 9 workers returned nothing. The 8 finished PRs were
+merged by hand; the rest of the wave was finished outside the loop. Both failures are in the [red team](docs/RED-TEAM.md)
+(finding 5) with their fixes.
 
 ### Wave 3, first run
 
