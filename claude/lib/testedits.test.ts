@@ -158,7 +158,8 @@ function runCli(r: Repo, head: string, opts: Options = {}, extra: string[] = [])
   return { report: report as Report, status: res.status, stdout: res.stdout, stderr: res.stderr };
 }
 
-describe('test-edits CLI', () => {
+// Each case builds a git repo and spawns the CLI, which runs a dozen git commands: allow for a loaded machine.
+describe('test-edits CLI', { timeout: 120_000 }, () => {
   it('an unchanged test: zero counts, testFirstCommit is the commit that added the test', () => {
     let tfc = '';
     const { report, status, stderr } = scenario((r) => {
