@@ -108,6 +108,8 @@ Measured on real waves; the details and the caveats are in [RESULTS.md](RESULTS.
 
 ## Limitations
 
+The full list, with evidence and the fixes in progress, is in the [red team](docs/RED-TEAM.md).
+
 - Claude Code only. The loop is a Claude Code workflow plus agent definitions, not a standalone program.
 - GitHub only (`gh`, Actions checks, branch protection).
 - Not cheap: about 316K to 565K tokens per task on Warden, including review and relaunches.
@@ -115,6 +117,6 @@ Measured on real waves; the details and the caveats are in [RESULTS.md](RESULTS.
 - The wide-wave rule rests on observed waves, not on a controlled comparison.
 - Paths in the manual assume the loop is cloned to `~/dev/agent-loop`.
 
-[Operating manual](docs/OPERATING.md) · [Results](RESULTS.md) · [Scorecards](docs/warden/) · [Loop specs](docs/agent-loop-v2/)
+[Operating manual](docs/OPERATING.md) · [Results](RESULTS.md) · [Red team](docs/RED-TEAM.md) · [Scorecards](docs/warden/) · [Loop specs](docs/agent-loop-v2/)
 
 MIT © Edan Barrios. Not affiliated with Anthropic.
