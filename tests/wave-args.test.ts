@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -120,5 +120,124 @@ describe('wave-args', { timeout: 120_000 }, () => {
     const real = spawnSync('node', [script, '--repo', repo, '--wave', '2'], { encoding: 'utf8' });
     expect(real.status, real.stderr).toBe(0);
     expect(JSON.parse(real.stdout).tasks).toHaveLength(3);
+  });
+});
+
+// Task 1.4: a token estimate for the wave, from the Total tokens of the newest scorecards.
+const fixture = (name: string) => join(root, 'tests', 'fixtures', `wave-scorecard-${name}.md`);
+/** A scorecard directory: each entry copies a fixture to a scorecard file name. */
+function scorecardDir(files: Record<string, string>): string {
+  const dir = mkdtempSync(join(tmpdir(), 'wave-args-cards-'));
+  for (const [name, fix] of Object.entries(files)) copyFileSync(fixture(fix), join(dir, name));
+  return dir;
+}
+const cards = (files: Record<string, string>) =>
+  Object.entries(files).map(([name, fix]) => ({ name, text: readFileSync(fixture(fix), 'utf8') }));
+
+describe('wave-args budget', { timeout: 120_000 }, () => {
+  // Wave 1 of SPEC has 2 tasks and a tail: 3 tasks.
+  it('is the median of three scorecards: tokens per task, times the wave task count, to the nearest thousand', () => {
+    const r = waveArgs({
+      project,
+      specText: SPEC,
+      wave: '1',
+      scorecards: cards({ '2026-11-10-wave-1-loop.md': 'a', '2026-11-11-wave-2-loop.md': 'b', '2026-11-12-wave-3-loop.md': 'c' }),
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.args.budget).toEqual({
+      tasks: 3,
+      tokensPerTask: 1_500_000,
+      estimate: 4_500_000,
+      basis: [
+        { file: '2026-11-12-wave-3-loop.md', tokens: 5_000_000, tasks: 2, tokensPerTask: 2_500_000 },
+        { file: '2026-11-11-wave-2-loop.md', tokens: 7_500_000, tasks: 5, tokensPerTask: 1_500_000 },
+        { file: '2026-11-10-wave-1-loop.md', tokens: 4_000_000, tasks: 4, tokensPerTask: 1_000_000 },
+      ],
+    });
+  });
+
+  it('counts only the Tasks section rows, skips zero and missing totals before it picks the newest three, and sorts by date then wave id as text', () => {
+    const r = waveArgs({
+      project,
+      specText: SPEC,
+      wave: '1',
+      scorecards: cards({
+        '2026-11-01-wave-9-loop.md': 'old',
+        '2026-11-10-wave-1-loop.md': 'a',
+        '2026-11-10-wave-1b-loop.md': 'b',
+        '2026-11-11-wave-2-loop.md': 'c',
+        '2026-11-12-wave-3-loop.md': 'zero',
+        '2026-11-13-wave-4-loop.md': 'missing',
+      }),
+    });
+    expect(r.ok && r.args.budget.basis.map((b: { file: string }) => b.file)).toEqual([
+      '2026-11-11-wave-2-loop.md',
+      '2026-11-10-wave-1b-loop.md',
+      '2026-11-10-wave-1-loop.md',
+    ]);
+    expect(r.ok && r.args.budget.tokensPerTask).toBe(1_500_000);
+    // A scorecard whose name is not a *-loop.md file is not a scorecard.
+    const other = waveArgs({ project, specText: SPEC, wave: '1', scorecards: cards({ 'notes.md': 'a', '2026-11-10-wave-1-loop.md': 'b' }) });
+    expect(other.ok && other.args.budget.basis).toHaveLength(1);
+  });
+
+  it('is the mean of two usable scorecards, and the value of one', () => {
+    const two = waveArgs({ project, specText: SPEC, wave: '1', scorecards: cards({ '2026-11-10-wave-1-loop.md': 'a', '2026-11-11-wave-2-loop.md': 'c', '2026-11-12-wave-3-loop.md': 'zero' }) });
+    expect(two.ok && two.args.budget.tokensPerTask).toBe(1_750_000);
+    expect(two.ok && two.args.budget.estimate).toBe(5_250_000);
+    const one = waveArgs({ project, specText: SPEC, wave: '1', scorecards: cards({ '2026-11-10-wave-1-loop.md': 'a' }) });
+    expect(one.ok && one.args.budget).toMatchObject({ tasks: 3, tokensPerTask: 1_000_000, estimate: 3_000_000 });
+  });
+
+  it('is null with no scorecards, with none usable, and without the flag', () => {
+    const none = waveArgs({ project, specText: SPEC, wave: '1' });
+    expect(none.ok && none.args.budget).toBeNull();
+    const unusable = waveArgs({ project, specText: SPEC, wave: '1', scorecards: cards({ '2026-11-10-wave-1-loop.md': 'zero', '2026-11-11-wave-2-loop.md': 'missing' }) });
+    expect(unusable.ok && unusable.args.budget).toBeNull();
+    expect(waveArgs({ project, specText: SPEC, wave: '1', scorecards: [] }).ok).toBe(true);
+  });
+
+  it('counts a wave without a tail by its tasks alone', () => {
+    const r = waveArgs({ project, specText: SPEC, wave: '2', scorecards: cards({ '2026-11-10-wave-1-loop.md': 'a' }) });
+    expect(r.ok && r.args.budget.tasks).toBe(3);
+    expect(r.ok && r.args.budget.estimate).toBe(3_000_000);
+  });
+
+  it('CLI: --scorecards prints the estimate on stderr and puts budget in the args; without it nothing is printed', () => {
+    const repo = mkdtempSync(join(tmpdir(), 'wave-args-'));
+    mkdirSync(join(repo, '.claude'));
+    mkdirSync(join(repo, 'docs'));
+    writeFileSync(join(repo, '.claude', 'loop.local.json'), JSON.stringify(project));
+    writeFileSync(join(repo, 'docs', 'spec.md'), SPEC);
+    const dir = scorecardDir({ '2026-11-10-wave-1-loop.md': 'a', '2026-11-11-wave-2-loop.md': 'b', '2026-11-12-wave-3-loop.md': 'c' });
+    let out = '';
+    let err = '';
+    const io = { out: (s: string) => (out += s), err: (s: string) => (err += s) };
+    expect(main(['node', script, '--repo', repo, '--wave', '1', '--scorecards', dir], io)).toBe(0);
+    expect(JSON.parse(out).budget.estimate).toBe(4_500_000);
+    expect(err).toBe(
+      'wave-args: estimated 4.5M tokens for 3 tasks (median of 2026-11-12-wave-3-loop.md, 2026-11-11-wave-2-loop.md, 2026-11-10-wave-1-loop.md)\n',
+    );
+
+    out = '';
+    err = '';
+    expect(main(['node', script, '--repo', repo, '--wave', '1'], io)).toBe(0);
+    expect(JSON.parse(out).budget).toBeNull();
+    expect(err).toBe('');
+
+    out = '';
+    const empty = mkdtempSync(join(tmpdir(), 'wave-args-empty-'));
+    expect(main(['node', script, '--repo', repo, '--wave', '1', '--scorecards', empty], io)).toBe(0);
+    expect(JSON.parse(out).budget).toBeNull();
+    expect(err).toBe('');
+
+    // A directory that cannot be read is exit 2, like any other unreadable input.
+    expect(main(['node', script, '--repo', repo, '--wave', '1', '--scorecards', join(repo, 'missing')], io)).toBe(2);
+    expect(err).toContain('wave-args:');
+
+    const real = spawnSync('node', [script, '--repo', repo, '--wave', '2', '--scorecards', dir], { encoding: 'utf8' });
+    expect(real.status, real.stderr).toBe(0);
+    expect(real.stderr).toContain('estimated 4.5M tokens for 3 tasks');
   });
 });
