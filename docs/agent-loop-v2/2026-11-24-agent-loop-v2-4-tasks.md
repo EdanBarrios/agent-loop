@@ -1,4 +1,4 @@
-# agent-loop v2.4 reliability and measurement: ordered task list (draft 1)
+# agent-loop v2.4 reliability and measurement: ordered task list (draft 2, after the wave 1 review)
 
 Date: 2026-11-24. Source: the red team in `docs/RED-TEAM.md` (findings 1, 2, 3, 5, 6, 9 and 11). Execution model: as
 v2. Waves; tasks in a wave run in parallel unless a task names a dependency; each wave ends with a tail task that runs
@@ -54,13 +54,13 @@ irreversible production steps; changing a fixed decision or invariant.
   `scripts/bundle-workflows.js` between `@bundle-start` / `@bundle-end` markers; bundled regions are never edited by
   hand. CLIs in `scripts/` wire real `git`, `gh` and the file system and print one JSON line on stdout.
 - **Test files.** A path is a test file when it matches the project's `testGlobs` (new optional field; default
-  `["**/*.test.*", "**/*.spec.*", "test/**", "tests/**"]`). One matcher, in `claude/lib/testedits.js`, is exported and
+  `["**/*.test.*", "**/*.spec.*", "test/**", "tests/**"]`). One matcher, `isTestFile(path, globs)` in `claude/lib/testedits.js`, and a reader `testGlobsOf(project)` that returns the field or the default, are exported (globs are matched with `node:path` `matchesGlob` against repo-relative POSIX paths; `**/` matches zero or more directories; the CLIs of 1.2 and 1.5 read the field from `<repo>/.claude/loop.local.json`, and a missing file or field gives the default), and are
   used by every task that needs it.
-- **Assertion lines.** A line is an assertion line when, after trimming, it matches
-  `/\b(expect|assert)\s*[.(]|\.(to[A-Z]\w*|should)\b|\bt\.(is|deepEqual|true|false|throws)\b/`. Exported from
+- **Assertion lines.** A line is an assertion line when, after trimming, it does not start with `//`, `/*` or `*` and it matches
+  `/\b(expect|assert)\s*[.(]|\.(to(Be|Equal|StrictEqual|Match|Contain|Have|Throw|Satisfy)\w*|should)\b|\bt\.(is|deepEqual|true|false|throws)\b/`. Exported from
   `claude/lib/testedits.js` as `isAssertionLine`.
 - **Permission rules.** Only the documented `permissions.allow` and `permissions.deny` rule forms are evaluated:
-  `Bash(<exact command>)`, `Bash(<prefix>:*)` and `Bash(<prefix> *)`. A matching deny rule wins over any allow rule.
+  `Bash(<exact command>)`, `Bash(<prefix>:*)` and `Bash(<prefix> *)`. Rules are matched with Claude Code's wildcard semantics: `*` matches any sequence, and a trailing ` *` or `:*` also matches the bare prefix. Evaluation order is deny, then ask, then allow; a matching deny rule sets `denied`, a matching ask rule sets `ask` (a relay cannot answer a prompt), and either makes `allowed` false. An allow rule counts only when the text before its first `*` names the merge script's path; `Bash`, `Bash(*)` and rules that name only an interpreter (`Bash(node *)`, `Bash(node*)`) are returned as `broad` and never make `allowed` true, because auto mode drops them. `checkPermission` returns `{ allowed: boolean, rule: string|null, source: string|null, denied: string|null, ask: string|null, broad: string[], autoModeRules: number, checked: [{ path, error }] }`. Managed settings (`/Library/Application Support/ClaudeCode/managed-settings.json` on macOS, `/etc/claude-code/managed-settings.json` on Linux) are read when present, for their deny and ask rules.
   Auto-mode prose rules (`autoMode.allow`) cannot be evaluated by code; they are counted and reported, never treated
   as an allow.
 - **Escaped defect.** A later commit on the default branch, not from a task branch of the same project, that changes or
@@ -72,62 +72,62 @@ irreversible production steps; changing a fixed decision or invariant.
 | id | before | what | why |
 |---|---|---|---|
 | H1 | after the last wave | Relink projects (`install.sh`) to this checkout and point `~/.claude/CLAUDE.md` at it | the loop must not change itself mid-run; Edan's machine |
-| H2 | before the first wave on 2.4 | Add a `permissions.allow` rule for the merge script, e.g. `Bash(node /path/to/repo/.claude/scripts/merge-pr.js:*)`, in `~/.claude/settings.json` | 2.1's preflight fails without it; permission settings are human-only |
+| H2 | before wave 1 | Add a `permissions.allow` rule for the merge script, e.g. `Bash(node /path/to/repo/.claude/scripts/merge-pr.js *)` (the path exactly as `project.repo` plus `/.claude/scripts` spells it, absolute and not the link's target), in `~/.claude/settings.json` | every wave merges through that script, and Warden wave 4 was refused there; 2.1's preflight fails without it; permission settings are human-only |
 
-## Wave 1: pure modules (all in parallel)
+## Wave 1: pure modules (1.5 after 1.2; the rest in parallel)
 
-- **1.5 Test-impact map.** Owns `claude/lib/impact.js`, `claude/lib/impact.test.ts`, `scripts/impact.js`. A CLI
+- **1.5 Test-impact map.** Depends on 1.2 (the test-file matcher). Owns `claude/lib/impact.js`, `claude/lib/impact.test.ts`, `scripts/impact.js`. A CLI
   `node scripts/impact.js --repo <path> --owns <path>... [--spec <spec.md>]` prints `{ tests: [{ path, via, owner }] }`:
   every test file in the repo (`git ls-files`, filtered by the test-file matcher) that imports an owned path directly,
   or through one intermediate non-test module (`via` names it, or is null when direct). Imports are found by regex on
   `import ... from '<p>'`, `import('<p>')`, `require('<p>')` and `export ... from '<p>'`, resolving relative specifiers
   against the importing file with the extensions `.ts`, `.tsx`, `.js`, `.mjs`, `.cjs` and `/index.*`; bare package
-  specifiers are ignored. An owned path that is a directory prefix matches every file under it. `owner` is the task id
+  specifiers are ignored, except an alias from `compilerOptions.paths` in `<repo>/tsconfig.json` (a `prefix/*` pattern mapped to a directory, relative to its `baseUrl` or the tsconfig), which resolves like a relative path. A specifier ending `.js`, `.mjs` or `.cjs` also tries the same name ending `.ts`, `.tsx`, `.mts` or `.cts`; side-effect imports (`import '<p>'`), imports that span lines, `import type` and `vi.mock('<p>')` count. An owned path that is a directory prefix matches every file under it. `owner` is the task id
   whose `Owns` line in `--spec` lists that test file, or null. Reads or writes: reads. Test: a temp repo with a direct
   importer, an importer through one module, an importer through two modules (not listed), a dynamic import, a
-  `require`, a bare package import (ignored), an owned directory, an `index.ts` resolution, and a spec whose 2.T owns
+  `require`, a bare package import (ignored), an owned directory, an `index.ts` resolution, a tsconfig `@/` alias, a `./a.js` specifier that resolves to `a.ts`, a multi-line import, a side-effect import, and a spec whose 2.T owns
   one of the tests (owner `2.T`).
 - **1.2 Test-edit report.** Owns `claude/lib/testedits.js`, `claude/lib/testedits.test.ts`, `scripts/test-edits.js`.
   A CLI `node scripts/test-edits.js <pr> --repo <path> [--base <branch>]` prints `{ testFirstCommit, files: [{ path,
   removed: [line], changed: [{ before, after }] }], assertionsRemoved, assertionsChanged, bodySection, note }`. The
-  branch's commits come from `gh pr view <pr> --json commits,body,baseRefName,headRefOid`; merge commits are skipped.
+  branch's commits come from `gh pr view <pr> --json commits,body,baseRefName,headRefOid`; the commit order and the merge commits (two parents; skipped) come from `git rev-list --reverse --parents origin/<baseRefName>..<headRefOid>`, because `gh` lists no parents, and a `headRefOid` missing from the repo is fetched once with `git fetch origin pull/<pr>/head`.
   `testFirstCommit` is the first non-merge commit that adds or changes a test file. For each test file that exists at
   `testFirstCommit`, the diff `testFirstCommit..headRefOid` for that file is read, minus the hunks the branch took from
-  the base branch through merge commits (a hunk whose removed and added lines both appear in `git diff <merge
-  parent 1>..<merge commit>` for that file is dropped). A removed assertion line with no replacement in the same hunk
+  the base branch through merge commits (a removed or added line that also appears as removed or added, one for one, in `git diff <merge
+  parent 1>..<merge commit>` for that file is dropped). The diff uses `-M`; a test file deleted after `testFirstCommit` counts every assertion line in it as removed; `removed` lists removed assertion lines only; within a hunk the i-th removed assertion line pairs with the i-th added line, and the pair is 'changed' only when the added line is itself an assertion line, otherwise the removed line counts as removed. A removed assertion line with no replacement in the same hunk
   counts in `assertionsRemoved`; a removed assertion line replaced in the same hunk by a different line counts in
   `assertionsChanged` and is listed in `changed` as a pair. `bodySection` is true when the PR body has a line starting
   with `Test edits:`. No test commit on the branch prints `testFirstCommit: null` and zero counts with a `note`. Reads
   or writes: reads. Test: a temp git repo with a fake `gh` shim on `PATH`: an unchanged test (zero counts); a deleted
   `expect(` line (removed 1); `toBe(3)` changed to `toBeGreaterThan(0)` (changed 1); a test file changed only by a merge
-  from main (zero counts); a new test file added after `testFirstCommit` (not counted: it did not exist then); a body
-  with `Test edits:`; a branch with no test commit; `isAssertionLine` on 12 sample lines.
+  from main that adds, removes and edits an assertion (zero counts each); a renamed test file (counts unchanged); a deleted test file (every assertion line removed); a new test file added after `testFirstCommit` (not counted: it did not exist then); a body
+  with `Test edits:`; a branch with no test commit; `isAssertionLine` on 12 sample lines, at least 4 of them not assertions (`new Date(x).toISOString()`, `name.toLowerCase()`, a `// expect(a).toBe(1)` comment, `it('x', () => {`).
 - **1.1 Permission check.** Owns `claude/lib/permission.js`, `claude/lib/permission.test.ts`, `scripts/merge-pr.js`.
   `checkPermission(command, settingsDocs)` returns `{ allowed, rule, source, denied, autoModeRules, checked }` per the
   Permission-rules decision, where `settingsDocs` is a list of `{ path, json }` (a missing or unparseable file is listed
-  in `checked` with an error and skipped). `scripts/merge-pr.js --dry-run` adds `permission` to its JSON line: the
-  result of `checkPermission` for the command form the workflow runs (`node <scripts dir>/merge-pr.js <n> --repo
+  in `checked` with a fixed `error` string, `missing` or `unparseable`, never the parser's message, which can quote file content; and skipped). `scripts/merge-pr.js --dry-run` adds `permission` to its JSON line: the
+  result of `checkPermission` for the command forms the workflow runs, with `<scripts dir>` the directory of `process.argv[1]` as given (never `import.meta.url`: `.claude/scripts` is a link and the relay types the link path; no `~` expansion) and `<repo>` the `--repo` value as given: the merge with `--worktree <path>` (and `--defer-main` when `project.mainCi` is set), `--verify-main <sha> --timeout-min 9`, and `--state`; `allowed` is true only when every form is allowed, `rule` and `source` come from the first form that is not, and each form begins (`node <scripts dir>/merge-pr.js <n> --repo
   <repo>`, with `<n>` standing for any number), over `$HOME/.claude/settings.json`, `<repo>/.claude/settings.json` and
   `<repo>/.claude/settings.local.json`. Nothing else in `merge-pr.js` changes. Reads or writes: reads. Test: exact
   rule; `:*` prefix rule; ` *` prefix rule; a prefix rule for another path (not allowed); a deny rule that overrides an
-  allow; prose `autoMode.allow` entries counted, not allowed; a missing file and a malformed file listed in `checked`;
+  allow; prose `autoMode.allow` entries counted, not allowed; a missing file and a malformed file listed in `checked` (a secret-like string inside the malformed file appears nowhere in the returned or printed JSON);
   the dry run of `merge-pr.js` in a temp repo with a temp `HOME` prints `permission.allowed` true with a matching rule
   and false without.
 - **1.3 Usage-limit classification.** Owns `claude/lib/pause.js`, `claude/lib/pause.test.ts`.
-  `classifyFailure(errorOrText, nowMs)` returns `{ kind: 'usage_limit'|'other', resetsAt, farOut }`: `usage_limit` when
-  the text matches the existing `isUsageLimit` pattern in `wave-loop.js` or `weekly limit`; `resetsAt` parsed from
-  `resets <Mon> <d> at <h>[:mm]am|pm (<IANA zone>)` or `resets at <h>[:mm]am|pm (<zone>)` (today or tomorrow, whichever
+  `classifyFailure(errorOrText, nowMs)` (the workflow has no clock: `nowMs` may be null, and then `resetsAt` is null and `farOut` comes only from the text `too far out`) returns `{ kind: 'usage_limit'|'other', resetsAt, farOut }`: `usage_limit` when
+  the text matches `/usage limit|limit reached|rate.?limit|quota|\b429\b|weekly limit/i` (the pattern of `isUsageLimit` in `wave-loop.js`, copied, because a bundled lib cannot import from the workflow; 2.1 makes `isUsageLimit` call `classifyFailure`); `resetsAt` parsed from
+  `resets <Mon> <d>[,][ at] <h>[:mm]am|pm (<zone>)` or `resets[ at] <h>[:mm]am|pm (<zone>)` or the relative `resets in <n>h` / `<n> hr <m> min` (matched case-insensitively; `<zone>` is any IANA name or `UTC`; 12am is hour 0 and 12pm is noon; a date without a year is the next such date on or after `nowMs`; a zone the runtime rejects gives `resetsAt` null; the relative form needs `nowMs`; the time-only form is the next such time) (today or tomorrow, whichever
   is next) as epoch ms, null when absent; `farOut` true when the text says `too far out` or `resetsAt - nowMs` is over
-  30 minutes. `pausePlan({ tasks, state, failedOnLimit })` returns `{ paused: [ids], parked: [ids] }`: tasks not
-  started and tasks whose agent failed on the limit are paused; tasks parked for any other reason stay parked; merged
+  30 minutes. `pausePlan({ tasks, state, failedOnLimit })` (`tasks` the ids including the tail, `state` a map id to `'merged'|'reverted'|'parked'|'running'` where a missing id means not started, `failedOnLimit` a list of ids) returns `{ paused: [ids], parked: [ids] }`: tasks not
+  started and tasks whose agent failed on the limit are paused; tasks parked for any other reason stay parked; reverted tasks and tasks still `running` are in neither (a running task's result is recorded when it finishes), and merged
   tasks are in neither. Reads or writes: reads. Test: the exact Warden wave 4 message (`failed: usage limit; resets Nov
   19 at 12pm (America/Los_Angeles), too far out to wait for: You've hit your weekly limit · resets Nov 19 at 12pm
-  (America/Los_Angeles)`) with a fixed clock; a short reset 10 minutes out (not far out); a message with no reset
-  time; a non-limit error; a plan with merged, parked, failed-on-limit and unstarted tasks.
-- **1.4 Wave token estimate.** Owns `scripts/wave-args.js`, `tests/wave-args.test.ts`. `wave-args.js` gains
+  (America/Los_Angeles)`) with the clock at `Date.UTC(2026, 10, 16, 20)` (`resetsAt` is 1795118400000, `farOut` true) and with a null clock (`resetsAt` null, `farOut` true from the text); a short reset 10 minutes out (not far out); a message with no reset
+  time; a non-limit error; a plan with merged, parked, failed-on-limit and unstarted tasks; `bundleSource` from `scripts/bundle-workflows.js` reports no problem on the lib source, and the lib declares no top-level name that `claude/workflows/wave-loop.js` already declares.
+- **1.4 Wave token estimate.** Owns `scripts/wave-args.js`, `tests/wave-args.test.ts`, `tests/fixtures/wave-scorecard-*.md`. `wave-args.js` gains
   `--scorecards <dir>`: it reads the `*-loop.md` scorecards there, takes tokens per task as the `Total tokens` signal
-  divided by the number of rows in the `Tasks` table, skips scorecards whose total is 0, and adds
-  `budget: { tasks, tokensPerTask, estimate, basis }` to the args (median of the newest three by file name; `basis`
+  (comma-grouped digits) divided by the number of rows in the `## Tasks` section only (tail row included), skips scorecards whose total is 0 or missing before it picks the newest three (by file name, descending; a name sorts by its date prefix, then by wave id compared as text), and adds
+  `budget: { tasks, tokensPerTask, estimate, basis }` to the args (`tasks` is the wave's task count including the tail; `tokensPerTask` is the median of up to three values, the mean of the two when only two are usable; `estimate` is `tasks` times it, rounded to the nearest thousand; the printed `<n>` is `estimate` in millions with one decimal; `basis`
   lists them). It prints `wave-args: estimated <n>M tokens for <k> tasks (median of <files>)` on stderr. Without
   `--scorecards`, or with no usable scorecard, `budget` is null and nothing is printed. Reads or writes: reads. Test:
   three fixture scorecards give the expected median; a zero-token scorecard is skipped; no flag gives `budget: null`;
@@ -152,7 +152,7 @@ irreversible production steps; changing a fixed decision or invariant.
   the script (a thrown error, or `null` with a log line); both paths are handled. (c) CI waits: `CI_CHUNK_MIN` comes
   from `project.ciChunkMin` (new optional field, default 8, at most `CI_RELAY_MAX_MIN`); the relay prompt's timeout
   rule is unchanged. (d) `LOOP_VERSION` and `package.json` `version` become `2.4.0`. `docs/OPERATING.md` documents
-  `mergePermission`, `ciChunkMin`, `testGlobs`, the `PAUSED` gate and H2. Test: in `tests/wave-loop-v24.test.ts`
+  `mergePermission`, `ciChunkMin`, `testGlobs`, the `PAUSED` gate, H2, and `wave-args.js --scorecards <dir>` (the token estimate to read before launching a wave). Test: in `tests/wave-loop-v24.test.ts`
   (owned): preflight fails with no rule; `mergePermission: "prompt"` continues; a far-out usage limit on a worker
   pauses a 4-task wave with one task merged, one running (finishes) and two not started; a short usage limit does not
   pause; `ciChunkMin` 8 makes one relay call per 8 minutes of CI.
@@ -169,7 +169,7 @@ irreversible production steps; changing a fixed decision or invariant.
   (cause `defect`, item "restore the assertion or justify it under Test edits:") whatever the critic said; the worker
   prompt and `producer.md` describe the `Test edits:` section. (c) The critic schema gains `items: [{ n, pass, evidence
   }]`, one entry per checklist item, `evidence` a quote from the diff, a file:line or a command output; a verdict whose
-  `items` miss a checklist number is treated as the critic returning nothing (the existing retry path). Test: prompt
+  `items` array misses a checklist number is treated as the critic returning nothing (the existing retry path); a verdict with no `items` key is recorded without per-item data and logged (the schema requires the key of a real critic; nine existing test files stub critic results without it). Test: prompt
   snapshots for each case; the gate turns a MERGE into FIX; a critic result missing item 9 is retried.
 - **2.3 Escaped-defect tracer.** Owns `claude/lib/escaped.js`, `claude/lib/escaped.test.ts`, `scripts/escaped.js`.
   A CLI `node scripts/escaped.js --repo <path> [--since <YYYY-MM-DD>] [--prefix task/]` prints
