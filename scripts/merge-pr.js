@@ -11,7 +11,9 @@
 // (--dry-run prints outcome 'dry-run', `wouldRun`: the write calls it did not make, and `load`: the machine-load
 // warning { load1, cores, threshold, high }, threshold = project.loadWarnFactor (default 4) x cores), and `loopVersion`:
 // the loop's package.json version, which wave-loop's preflight compares with its own, and `baseSha`: origin's HEAD, the
-// wave's base for the integration review, or null).
+// wave's base for the integration review, or null), and `permission` (v2.4): claude/lib/permission.js's prediction for
+// the command forms the workflow runs, from $HOME/.claude/settings.json and <repo>/.claude/settings{,.local}.json
+// (read only; a parser message is never printed).
 // mainCheck 'skipped:unchanged': the merged tree is the tree CI checked, so main's check is not waited for.
 // --defer-main (only with project.mainCi): merge, then return mainCheck 'deferred' without waiting for main's run; the
 // caller releases its merge lock and runs --verify-main <mergeSha>, which waits for that run and reverts once on red.
@@ -25,9 +27,10 @@
 // merge another way. Reads or writes: writes-files (merges a pull request; on red opens one revert pull request).
 import { spawn } from 'node:child_process';
 import { readFileSync, writeSync } from 'node:fs';
-import { availableParallelism, cpus, loadavg, tmpdir } from 'node:os';
-import { resolve } from 'node:path';
+import { availableParallelism, cpus, homedir, loadavg, tmpdir } from 'node:os';
+import { dirname, resolve } from 'node:path';
 import { machineLoad, mergePr } from '../claude/lib/merge.js';
+import { checkPermission, MANAGED_SETTINGS_PATHS } from '../claude/lib/permission.js';
 
 const USAGE = 'usage: node scripts/merge-pr.js <pr> --repo <path> [--worktree <path>] [--dry-run] [--defer-main] | <pr> --repo <path> --verify-main <sha> [--timeout-min <m>] | <pr> --repo <path> --state';
 const args = process.argv.slice(2);
@@ -57,6 +60,7 @@ if (stateOnly && (dryRun || deferMain || verifyMain !== null || worktree !== nul
 if (usageProblem || pr === null || !/^\d+$/.test(pr) || repo === null) {
   fail(USAGE);
 }
+const repoAsGiven = repo; // the relay types --repo as the workflow gave it; permission rules are matched against that text
 repo = resolve(repo);
 
 let project;
@@ -117,6 +121,7 @@ if (dryRun) {
   result.load = machineLoad(loadavg()[0], cores, project.loadWarnFactor);
   result.loopVersion = loopVersion();
   result.baseSha = await remoteHead(repo);
+  result.permission = permissionFor();
 }
 console.log(JSON.stringify(result));
 process.exitCode = result.exit;
@@ -142,4 +147,55 @@ function loopVersion() {
   } catch {
     return null;
   }
+}
+
+// The command forms the workflow runs (wave-loop's merge, --verify-main and --state relays), typed the way the relay types
+// them: `<scripts dir>` is the directory of process.argv[1] as given (a link's path, never its target) and `<repo>` is the
+// --repo value as given. `<n>` stands for any number, so each form is checked with two. Placeholders stand for the
+// worktree path and the merge sha.
+function commandForms() {
+  const script = `${dirname(process.argv[1])}/merge-pr.js`;
+  const wt = worktree ?? `${project.worktrees || `${repoAsGiven}-worktrees`}/task`;
+  const forms = [];
+  for (const n of ['1', '23']) {
+    const head = `node ${script} ${n} --repo ${repoAsGiven}`;
+    forms.push(`${head} --worktree ${wt}${project.mainCi ? ' --defer-main' : ''}`, `${head} --verify-main ${'0'.repeat(40)} --timeout-min 9`, `${head} --state`);
+  }
+  return forms;
+}
+
+// One settings file as { path, json }: json is the file's text, or null when it cannot be read (a missing file).
+function settingsDoc(path) {
+  try {
+    return { path, json: readFileSync(path, 'utf8') };
+  } catch {
+    return { path, json: null };
+  }
+}
+
+// checkPermission over every command form: allowed only when every form is, and rule, source, denied and ask come from the
+// first form that is not (the first form when all are).
+function permissionFor() {
+  const docs = [
+    settingsDoc(resolve(process.env.HOME || homedir(), '.claude', 'settings.json')),
+    settingsDoc(resolve(repo, '.claude', 'settings.json')),
+    settingsDoc(resolve(repo, '.claude', 'settings.local.json')),
+  ];
+  // Managed settings are read only when present: their deny and ask rules apply to every project.
+  for (const path of MANAGED_SETTINGS_PATHS) {
+    const doc = settingsDoc(path);
+    if (doc.json !== null) docs.push(doc);
+  }
+  const results = commandForms().map((command) => checkPermission(command, docs));
+  const first = results.find((r) => !r.allowed) ?? results[0];
+  return {
+    allowed: results.every((r) => r.allowed),
+    rule: first.rule,
+    source: first.source,
+    denied: first.denied,
+    ask: first.ask,
+    broad: [...new Set(results.flatMap((r) => r.broad))],
+    autoModeRules: first.autoModeRules,
+    checked: first.checked,
+  };
 }
