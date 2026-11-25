@@ -66,6 +66,17 @@ Then, in your repo:
 
 The [operating manual](docs/OPERATING.md) is what the session reads before a wave. It has every rule and setting.
 
+## A real wave
+
+<img src="docs/img/warden-wave-3-timeline.svg" alt="Timeline of Warden wave 3's first run: 30 task rows, worker, critic, CI-wait and merge bars over 236 minutes, with a shaded usage-limit pause." width="900">
+
+Warden wave 3's first run, drawn from the run's own agent records by `scripts/wave-timeline.py`. Six tasks start at
+once and the rest queue behind them. Each worker (blue) hands its PR to a critic (purple) while CI runs (grey band),
+and a FIX shows up as a second worker bar. The shaded stretch is the workflow waiting out a usage limit and resuming
+by itself. 18 tasks merged in this run; 3.3 merged too, but its merge output was lost and the loop parked it (fixed
+since). Four workers stopped to ask about editing wave 2's tail test and replay script, which they did not own, and
+the tasks that depended on them never started. The relaunches that finished the wave are in [RESULTS.md](RESULTS.md).
+
 ## How it works
 
 - **Scheduling.** Tasks run in priority order (longest first) up to `maxChains` at once (default 6). A task starts
