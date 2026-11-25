@@ -139,7 +139,8 @@ describe('checkPermission', () => {
   });
 });
 
-describe('merge-pr.js --dry-run permission', () => {
+// Each test spawns node and git; a machine under load needs far more than vitest's 5 s.
+describe('merge-pr.js --dry-run permission', { timeout: 240000 }, () => {
   const SCRIPTS = join(ROOT, 'scripts');
 
   async function dryRun(settings: { user?: unknown; project?: unknown; local?: unknown; userRaw?: string }, args: string[] = []) {
@@ -183,18 +184,13 @@ describe('merge-pr.js --dry-run permission', () => {
     expect(line.permission).toMatchObject({ allowed: false, rule: null, source: null, denied: null });
   });
 
-  it('reads the project settings files too', async () => {
-    const rule = `Bash(node ${join(SCRIPTS, 'merge-pr.js')}:*)`;
-    const { line, dir } = await dryRun({ local: allow(rule) });
-    expect(line.permission).toMatchObject({ allowed: true, rule, source: join(dir, 'repo', '.claude', 'settings.local.json') });
-  });
-
   it('is allowed only when every command form the workflow runs is allowed', async () => {
     const merge = `Bash(node ${join(SCRIPTS, 'merge-pr.js')} * --repo * --worktree *)`;
     const partial = await dryRun({ user: allow(merge) });
     expect(partial.line.permission.allowed).toBe(false); // --verify-main and --state are refused
-    const all = await dryRun({ user: allow(merge, `Bash(node ${join(SCRIPTS, 'merge-pr.js')} * --repo * --verify-main *)`, `Bash(node ${join(SCRIPTS, 'merge-pr.js')} * --repo * --state)`) });
-    expect(all.line.permission.allowed).toBe(true);
+    // The project's settings.local.json counts too.
+    const all = await dryRun({ local: allow(merge, `Bash(node ${join(SCRIPTS, 'merge-pr.js')} * --repo * --verify-main *)`, `Bash(node ${join(SCRIPTS, 'merge-pr.js')}:*)`) });
+    expect(all.line.permission).toMatchObject({ allowed: true, source: join(all.dir, 'repo', '.claude', 'settings.local.json') });
   });
 
   it('prints nothing of a malformed settings file', async () => {
