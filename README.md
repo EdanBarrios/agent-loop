@@ -14,9 +14,10 @@ merges, and a scorecard after every wave.**
 
 </div>
 
-Used to build Warden, a civic-data web app: 53 tasks over 6 waves, 72% approved by the critic on the first PR, no
-merged PR reverted, about 23M tokens ([results](RESULTS.md)). The loop also built its own v2 from a spec
-([specs](docs/agent-loop-v2/)). One author, one machine: read [Limitations](#limitations) first.
+Used to build [Warden](https://govwarden.vercel.app), a live site that times how long California's government takes,
+from sourced public data: 99 of its 145 merged PRs came from the loop. Over its first 53 tasks, 72% were approved by
+the critic on the first PR and no merged PR was reverted ([results](RESULTS.md)). The loop also built its own v2 from
+a spec ([specs](docs/agent-loop-v2/)). One author, one machine: read [Limitations](#limitations) first.
 
 ## Why
 
