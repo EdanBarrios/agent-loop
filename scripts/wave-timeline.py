@@ -21,8 +21,10 @@ from html import escape
 ROLES = {"worker": "Worker", "critic": "Critic", "merger": "Merge", "ci": "CI wait"}
 ROW_H, BAR_H, CI_H = 20, 12, 4
 LEFT, RIGHT, TOP = 210, 70, 64
+PAD = 20
 
 CSS = """
+.bg{fill:#ffffff}
 .t{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;fill:#1f2328}
 .id{font-size:12px;font-weight:600}.ttl{font-size:12px;fill:#59636e}.ax{font-size:11px;fill:#59636e}
 .hd{font-size:14px;font-weight:600}.lg{font-size:12px}.st{font-size:11px;font-weight:600}
@@ -30,7 +32,7 @@ CSS = """
 .worker{fill:#0969da}.critic{fill:#8250df}.merger{fill:#1a7f37}.ci{fill:#8c959f}
 .ok{fill:#1a7f37}.park{fill:#bc4c00}.none{fill:#59636e;font-style:italic}
 @media (prefers-color-scheme:dark){
-.t{fill:#f0f6fc}.ttl,.ax{fill:#9198a1}.grid{stroke:#3d444d}.band{fill:#151b23}
+.bg{fill:#0d1117}.t{fill:#f0f6fc}.ttl,.ax{fill:#9198a1}.grid{stroke:#3d444d}.band{fill:#151b23}
 .worker{fill:#4493f8}.critic{fill:#ab7df8}.merger{fill:#3fb950}.ci{fill:#656c76}
 .ok{fill:#3fb950}.park{fill:#f0883e}.none{fill:#9198a1}}
 """
@@ -145,9 +147,13 @@ def build(result, agents, titles=False, title=None):
             o.append(f'<text class="t st park" x="{end:.1f}" y="{y + 14}">{escape(st)}</text>')
 
     desc = escape(f"{head}. One row per task; bars show worker, critic, CI-wait and merge agents over time.")
+    # A solid background, so the chart reads the same on any page or viewer (GitHub's file view shows a checkerboard).
+    outer_w, outer_h = width + 2 * PAD, height + 2 * PAD
     return (
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" width="{width}" height="{height}" role="img" aria-label="{desc}">\n'
-        f"<title>{escape(head)}</title>\n<style>{CSS}</style>\n" + "\n".join(o) + "\n</svg>\n"
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {outer_w} {outer_h}" width="{outer_w}" height="{outer_h}" role="img" aria-label="{desc}">\n'
+        f"<title>{escape(head)}</title>\n<style>{CSS}</style>\n"
+        f'<rect class="bg" width="{outer_w}" height="{outer_h}" rx="8"/>\n<g transform="translate({PAD},{PAD})">\n'
+        + "\n".join(o) + "\n</g>\n</svg>\n"
     )
 
 

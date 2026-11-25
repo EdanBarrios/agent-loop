@@ -1,6 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 990 710" width="990" height="710" role="img" aria-label="Warden wave 3, first run: 30 tasks, up to 6 at a time. One row per task; bars show worker, critic, CI-wait and merge agents over time.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1030 750" width="1030" height="750" role="img" aria-label="Warden wave 3, first run: 30 tasks, up to 6 at a time. One row per task; bars show worker, critic, CI-wait and merge agents over time.">
 <title>Warden wave 3, first run: 30 tasks, up to 6 at a time</title>
 <style>
+.bg{fill:#ffffff}
 .t{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;fill:#1f2328}
 .id{font-size:12px;font-weight:600}.ttl{font-size:12px;fill:#59636e}.ax{font-size:11px;fill:#59636e}
 .hd{font-size:14px;font-weight:600}.lg{font-size:12px}.st{font-size:11px;font-weight:600}
@@ -8,10 +9,12 @@
 .worker{fill:#0969da}.critic{fill:#8250df}.merger{fill:#1a7f37}.ci{fill:#8c959f}
 .ok{fill:#1a7f37}.park{fill:#bc4c00}.none{fill:#59636e;font-style:italic}
 @media (prefers-color-scheme:dark){
-.t{fill:#f0f6fc}.ttl,.ax{fill:#9198a1}.grid{stroke:#3d444d}.band{fill:#151b23}
+.bg{fill:#0d1117}.t{fill:#f0f6fc}.ttl,.ax{fill:#9198a1}.grid{stroke:#3d444d}.band{fill:#151b23}
 .worker{fill:#4493f8}.critic{fill:#ab7df8}.merger{fill:#3fb950}.ci{fill:#656c76}
 .ok{fill:#3fb950}.park{fill:#f0883e}.none{fill:#9198a1}}
 </style>
+<rect class="bg" width="1030" height="750" rx="8"/>
+<g transform="translate(20,20)">
 <text class="t hd" x="0" y="20">Warden wave 3, first run: 30 tasks, up to 6 at a time</text>
 <rect class="worker" x="0" y="30.0" width="14" height="12" rx="2"/>
 <text class="t lg" x="20" y="40">Worker</text>
@@ -284,4 +287,5 @@
 <text class="t id" x="6" y="658">3.T</text>
 <text class="t ttl" x="46" y="658">Wave 3 end to end</text>
 <text class="t ttl none" x="216.0" y="658">not started: parked</text>
+</g>
 </svg>
