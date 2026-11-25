@@ -25,6 +25,13 @@ for, by cause: `defect` (the code was wrong), `spec_miss` (the code did not do w
 itself was at fault). Waves before 2.3.0 did not count defects that escaped into later fixes, so the critic-miss
 figure for those waves is reverts only.
 
+### Wave 3, first run
+
+![Timeline of Warden wave 3's first run](docs/img/warden-wave-3-timeline.svg)
+
+Drawn with `python3 -I scripts/wave-timeline.py <run output> --titles`. The shaded stretch (about 30 minutes) is a
+usage-limit pause, not loop time.
+
 ### Wave 3 cost in detail
 
 | Run | Tasks | Agents | Tokens | Wall clock |

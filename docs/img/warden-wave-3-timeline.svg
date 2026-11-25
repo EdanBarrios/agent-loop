@@ -1,0 +1,291 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1030 750" width="1030" height="750" role="img" aria-label="Warden wave 3, first run: 30 tasks, up to 6 at a time. One row per task; bars show worker, critic, CI-wait and merge agents over time.">
+<title>Warden wave 3, first run: 30 tasks, up to 6 at a time</title>
+<style>
+.bg{fill:#ffffff}
+.t{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;fill:#1f2328}
+.id{font-size:12px;font-weight:600}.ttl{font-size:12px;fill:#59636e}.ax{font-size:11px;fill:#59636e}
+.hd{font-size:14px;font-weight:600}.lg{font-size:12px}.st{font-size:11px;font-weight:600}
+.grid{stroke:#d0d7de;stroke-width:1}.band{fill:#f6f8fa}.gap{fill:#8c959f;fill-opacity:.14}
+.worker{fill:#0969da}.critic{fill:#8250df}.merger{fill:#1a7f37}.ci{fill:#8c959f}
+.ok{fill:#1a7f37}.park{fill:#bc4c00}.none{fill:#59636e;font-style:italic}
+@media (prefers-color-scheme:dark){
+.bg{fill:#0d1117}.t{fill:#f0f6fc}.ttl,.ax{fill:#9198a1}.grid{stroke:#3d444d}.band{fill:#151b23}
+.worker{fill:#4493f8}.critic{fill:#ab7df8}.merger{fill:#3fb950}.ci{fill:#656c76}
+.ok{fill:#3fb950}.park{fill:#f0883e}.none{fill:#9198a1}}
+</style>
+<rect class="bg" width="1030" height="750" rx="8"/>
+<g transform="translate(20,20)">
+<text class="t hd" x="0" y="20">Warden wave 3, first run: 30 tasks, up to 6 at a time</text>
+<rect class="worker" x="0" y="30.0" width="14" height="12" rx="2"/>
+<text class="t lg" x="20" y="40">Worker</text>
+<rect class="critic" x="75.0" y="30.0" width="14" height="12" rx="2"/>
+<text class="t lg" x="95.0" y="40">Critic</text>
+<rect class="ci" x="150.0" y="34.0" width="14" height="4" rx="2"/>
+<text class="t lg" x="170.0" y="40">CI wait</text>
+<rect class="merger" x="232.5" y="30.0" width="14" height="12" rx="2"/>
+<text class="t lg" x="252.5" y="40">Merge</text>
+<line class="grid" x1="210.0" y1="58" x2="210.0" y2="676"/>
+<text class="t ax" x="210.0" y="692" text-anchor="middle">0 min</text>
+<line class="grid" x1="300.2" y1="58" x2="300.2" y2="676"/>
+<text class="t ax" x="300.2" y="692" text-anchor="middle">30 min</text>
+<line class="grid" x1="390.4" y1="58" x2="390.4" y2="676"/>
+<text class="t ax" x="390.4" y="692" text-anchor="middle">60 min</text>
+<line class="grid" x1="480.5" y1="58" x2="480.5" y2="676"/>
+<text class="t ax" x="480.5" y="692" text-anchor="middle">90 min</text>
+<line class="grid" x1="570.7" y1="58" x2="570.7" y2="676"/>
+<text class="t ax" x="570.7" y="692" text-anchor="middle">120 min</text>
+<line class="grid" x1="660.9" y1="58" x2="660.9" y2="676"/>
+<text class="t ax" x="660.9" y="692" text-anchor="middle">150 min</text>
+<line class="grid" x1="751.1" y1="58" x2="751.1" y2="676"/>
+<text class="t ax" x="751.1" y="692" text-anchor="middle">180 min</text>
+<line class="grid" x1="841.3" y1="58" x2="841.3" y2="676"/>
+<text class="t ax" x="841.3" y="692" text-anchor="middle">210 min</text>
+<rect class="band" x="0" y="64" width="990" height="20"/>
+<rect class="band" x="0" y="104" width="990" height="20"/>
+<rect class="band" x="0" y="144" width="990" height="20"/>
+<rect class="band" x="0" y="184" width="990" height="20"/>
+<rect class="band" x="0" y="224" width="990" height="20"/>
+<rect class="band" x="0" y="264" width="990" height="20"/>
+<rect class="band" x="0" y="304" width="990" height="20"/>
+<rect class="band" x="0" y="344" width="990" height="20"/>
+<rect class="band" x="0" y="384" width="990" height="20"/>
+<rect class="band" x="0" y="424" width="990" height="20"/>
+<rect class="band" x="0" y="464" width="990" height="20"/>
+<rect class="band" x="0" y="504" width="990" height="20"/>
+<rect class="band" x="0" y="544" width="990" height="20"/>
+<rect class="band" x="0" y="584" width="990" height="20"/>
+<rect class="band" x="0" y="624" width="990" height="20"/>
+<rect class="gap" x="378.0" y="58" width="89.0" height="606"/>
+<text class="t ax" x="422.6" y="52" text-anchor="middle">paused: usage limit</text>
+<text class="t id" x="6" y="78">3.1</text>
+<text class="t ttl" x="46" y="78">Process catalog</text>
+<rect class="worker" x="210.4" y="67" width="48.0" height="12" rx="2"><title>Worker 3.1</title></rect>
+<rect class="worker" x="260.5" y="67" width="19.2" height="12" rx="2"><title>Worker 3.1</title></rect>
+<rect class="critic" x="280.2" y="67" width="12.1" height="12" rx="2"><title>Critic 3.1</title></rect>
+<rect class="merger" x="305.8" y="67" width="19.0" height="12" rx="2"><title>Merge 3.1</title></rect>
+<rect class="ci" x="279.9" y="79" width="5.9" height="4"/>
+<rect class="ci" x="292.3" y="79" width="1.5" height="4"/>
+<text class="t st ok" x="330.8" y="78">merged</text>
+<text class="t id" x="6" y="98">3.2</text>
+<text class="t ttl" x="46" y="98">Batched writes and the su…</text>
+<rect class="worker" x="210.4" y="87" width="83.8" height="12" rx="2"><title>Worker 3.2</title></rect>
+<rect class="critic" x="294.3" y="87" width="10.5" height="12" rx="2"><title>Critic 3.2</title></rect>
+<rect class="merger" x="324.8" y="87" width="14.3" height="12" rx="2"><title>Merge 3.2</title></rect>
+<rect class="ci" x="294.3" y="99" width="5.9" height="4"/>
+<rect class="ci" x="300.1" y="99" width="6.1" height="4"/>
+<text class="t st ok" x="345.1" y="98">merged</text>
+<text class="t id" x="6" y="118">3.3</text>
+<text class="t ttl" x="46" y="118">CKAN reader, APR rows and…</text>
+<rect class="worker" x="210.4" y="107" width="69.3" height="12" rx="2"><title>Worker 3.3</title></rect>
+<rect class="critic" x="285.2" y="107" width="15.8" height="12" rx="2"><title>Critic 3.3</title></rect>
+<rect class="worker" x="301.1" y="107" width="22.5" height="12" rx="2"><title>Worker 3.3</title></rect>
+<rect class="critic" x="323.6" y="107" width="13.4" height="12" rx="2"><title>Critic 3.3</title></rect>
+<rect class="merger" x="352.8" y="107" width="13.8" height="12" rx="2"><title>Merge 3.3</title></rect>
+<rect class="ci" x="283.7" y="119" width="5.9" height="4"/>
+<rect class="ci" x="293.8" y="119" width="1.5" height="4"/>
+<rect class="ci" x="323.6" y="119" width="6.1" height="4"/>
+<rect class="ci" x="332.9" y="119" width="5.8" height="4"/>
+<rect class="ci" x="338.8" y="119" width="1.6" height="4"/>
+<text class="t st park" x="372.5" y="118">parked</text>
+<text class="t id" x="6" y="138">3.4</text>
+<text class="t ttl" x="46" y="138">Importer runner and drop…</text>
+<rect class="worker" x="210.4" y="127" width="32.9" height="12" rx="2"><title>Worker 3.4</title></rect>
+<rect class="critic" x="249.4" y="127" width="7.3" height="12" rx="2"><title>Critic 3.4</title></rect>
+<rect class="merger" x="258.4" y="127" width="2.1" height="12" rx="2"><title>Merge 3.4</title></rect>
+<rect class="ci" x="243.4" y="139" width="6.0" height="4"/>
+<rect class="ci" x="251.4" y="139" width="4.8" height="4"/>
+<text class="t st ok" x="266.5" y="138">merged</text>
+<text class="t id" x="6" y="158">3.5</text>
+<text class="t ttl" x="46" y="158">Clock summaries</text>
+<rect class="worker" x="210.4" y="147" width="52.2" height="12" rx="2"><title>Worker 3.5</title></rect>
+<rect class="critic" x="264.8" y="147" width="18.9" height="12" rx="2"><title>Critic 3.5</title></rect>
+<rect class="merger" x="285.8" y="147" width="20.0" height="12" rx="2"><title>Merge 3.5</title></rect>
+<rect class="ci" x="262.7" y="159" width="5.9" height="4"/>
+<rect class="ci" x="279.7" y="159" width="1.5" height="4"/>
+<text class="t st ok" x="311.8" y="158">merged</text>
+<text class="t id" x="6" y="178">3.6</text>
+<text class="t ttl" x="46" y="178">Review summaries</text>
+<rect class="worker" x="210.4" y="167" width="40.9" height="12" rx="2"><title>Worker 3.6</title></rect>
+<rect class="critic" x="256.7" y="167" width="8.0" height="12" rx="2"><title>Critic 3.6</title></rect>
+<rect class="merger" x="268.6" y="167" width="16.7" height="12" rx="2"><title>Merge 3.6</title></rect>
+<rect class="ci" x="256.1" y="179" width="5.9" height="4"/>
+<text class="t st ok" x="291.2" y="178">merged</text>
+<text class="t id" x="6" y="198">3.7</text>
+<text class="t ttl" x="46" y="198">Figure summaries</text>
+<rect class="worker" x="262.0" y="187" width="41.6" height="12" rx="2"><title>Worker 3.7</title></rect>
+<rect class="critic" x="304.7" y="187" width="12.1" height="12" rx="2"><title>Critic 3.7</title></rect>
+<rect class="merger" x="339.1" y="187" width="13.7" height="12" rx="2"><title>Merge 3.7</title></rect>
+<rect class="ci" x="303.6" y="199" width="5.9" height="4"/>
+<rect class="ci" x="309.5" y="199" width="3.9" height="4"/>
+<text class="t st ok" x="358.8" y="198">merged</text>
+<text class="t id" x="6" y="218">3.8</text>
+<text class="t ttl" x="46" y="218">Site frame and process ca…</text>
+<rect class="worker" x="289.6" y="207" width="37.5" height="12" rx="2"><title>Worker 3.8</title></rect>
+<rect class="critic" x="329.6" y="207" width="13.8" height="12" rx="2"><title>Critic 3.8</title></rect>
+<rect class="worker" x="343.4" y="207" width="28.4" height="12" rx="2"><title>Worker 3.8</title></rect>
+<rect class="critic" x="467.1" y="207" width="17.0" height="12" rx="2"><title>Critic 3.8</title></rect>
+<rect class="merger" x="477.7" y="207" width="16.9" height="12" rx="2"><title>Merge 3.8</title></rect>
+<rect class="ci" x="327.1" y="219" width="5.8" height="4"/>
+<rect class="ci" x="337.0" y="219" width="5.9" height="4"/>
+<rect class="ci" x="371.9" y="219" width="6.2" height="4"/>
+<rect class="ci" x="477.0" y="219" width="1.5" height="4"/>
+<text class="t st ok" x="500.6" y="218">merged</text>
+<text class="t id" x="6" y="238">3.9</text>
+<text class="t ttl" x="46" y="238">Process file and the meth…</text>
+<rect class="worker" x="306.3" y="227" width="42.0" height="12" rx="2"><title>Worker 3.9</title></rect>
+<rect class="critic" x="348.3" y="227" width="12.8" height="12" rx="2"><title>Critic 3.9</title></rect>
+<rect class="worker" x="467.1" y="227" width="60.1" height="12" rx="2"><title>Worker 3.9</title></rect>
+<rect class="critic" x="497.1" y="227" width="20.4" height="12" rx="2"><title>Critic 3.9</title></rect>
+<rect class="merger" x="518.5" y="227" width="2.1" height="12" rx="2"><title>Merge 3.9</title></rect>
+<rect class="ci" x="348.3" y="239" width="6.0" height="4"/>
+<rect class="ci" x="361.1" y="239" width="1.6" height="4"/>
+<rect class="ci" x="362.7" y="239" width="1.5" height="4"/>
+<rect class="ci" x="495.6" y="239" width="6.0" height="4"/>
+<rect class="ci" x="517.5" y="239" width="1.5" height="4"/>
+<text class="t st ok" x="533.2" y="238">merged</text>
+<text class="t id" x="6" y="258">3.11</text>
+<text class="t ttl" x="46" y="258">CI and the weekly runner</text>
+<rect class="worker" x="467.1" y="247" width="107.9" height="12" rx="2"><title>Worker 3.11</title></rect>
+<rect class="critic" x="527.4" y="247" width="8.9" height="12" rx="2"><title>Critic 3.11</title></rect>
+<rect class="merger" x="540.0" y="247" width="20.5" height="12" rx="2"><title>Merge 3.11</title></rect>
+<rect class="ci" x="521.2" y="259" width="6.1" height="4"/>
+<rect class="ci" x="536.3" y="259" width="3.7" height="4"/>
+<text class="t st ok" x="581.0" y="258">merged</text>
+<text class="t id" x="6" y="278">3.13</text>
+<text class="t ttl" x="46" y="278">Network guard for tests</text>
+<rect class="worker" x="467.1" y="267" width="112.5" height="12" rx="2"><title>Worker 3.13</title></rect>
+<rect class="critic" x="560.6" y="267" width="16.3" height="12" rx="2"><title>Critic 3.13</title></rect>
+<rect class="worker" x="578.5" y="267" width="39.4" height="12" rx="2"><title>Worker 3.13</title></rect>
+<rect class="worker" x="618.3" y="267" width="53.4" height="12" rx="2"><title>Worker 3.13</title></rect>
+<rect class="critic" x="677.1" y="267" width="9.1" height="12" rx="2"><title>Critic 3.13</title></rect>
+<rect class="merger" x="688.0" y="267" width="18.8" height="12" rx="2"><title>Merge 3.13</title></rect>
+<rect class="ci" x="554.8" y="279" width="6.0" height="4"/>
+<rect class="ci" x="561.6" y="279" width="6.0" height="4"/>
+<rect class="ci" x="576.9" y="279" width="1.5" height="4"/>
+<rect class="ci" x="577.9" y="279" width="1.5" height="4"/>
+<rect class="ci" x="672.3" y="279" width="6.0" height="4"/>
+<rect class="ci" x="680.5" y="279" width="5.9" height="4"/>
+<rect class="ci" x="686.4" y="279" width="1.5" height="4"/>
+<text class="t st ok" x="712.7" y="278">merged</text>
+<text class="t id" x="6" y="298">3.10</text>
+<text class="t ttl" x="46" y="298">Allowlist from a reviewed…</text>
+<rect class="worker" x="467.1" y="287" width="100.6" height="12" rx="2"><title>Worker 3.10</title></rect>
+<rect class="critic" x="507.6" y="287" width="11.4" height="12" rx="2"><title>Critic 3.10</title></rect>
+<rect class="merger" x="520.6" y="287" width="16.8" height="12" rx="2"><title>Merge 3.10</title></rect>
+<rect class="ci" x="501.6" y="299" width="6.0" height="4"/>
+<rect class="ci" x="518.0" y="299" width="1.5" height="4"/>
+<text class="t st ok" x="573.6" y="298">merged</text>
+<text class="t id" x="6" y="318">3.12</text>
+<text class="t ttl" x="46" y="318">Read-only site connection…</text>
+<rect class="worker" x="467.1" y="307" width="111.7" height="12" rx="2"><title>Worker 3.12</title></rect>
+<text class="t st park" x="584.8" y="318">parked</text>
+<text class="t id" x="6" y="338">3.14</text>
+<text class="t ttl" x="46" y="338">Golden outputs</text>
+<rect class="worker" x="494.6" y="327" width="67.0" height="12" rx="2"><title>Worker 3.14</title></rect>
+<rect class="critic" x="573.5" y="327" width="11.0" height="12" rx="2"><title>Critic 3.14</title></rect>
+<rect class="merger" x="584.6" y="327" width="2.5" height="12" rx="2"><title>Merge 3.14</title></rect>
+<rect class="ci" x="567.6" y="339" width="5.9" height="4"/>
+<rect class="ci" x="577.5" y="339" width="1.5" height="4"/>
+<text class="t st ok" x="593.1" y="338">merged</text>
+<text class="t id" x="6" y="358">3.15</text>
+<text class="t ttl" x="46" y="358">Excel reader and CalFresh…</text>
+<rect class="worker" x="520.6" y="347" width="135.8" height="12" rx="2"><title>Worker 3.15</title></rect>
+<rect class="critic" x="663.1" y="347" width="44.3" height="12" rx="2"><title>Critic 3.15</title></rect>
+<rect class="worker" x="711.3" y="347" width="31.4" height="12" rx="2"><title>Worker 3.15</title></rect>
+<rect class="critic" x="742.7" y="347" width="28.0" height="12" rx="2"><title>Critic 3.15</title></rect>
+<rect class="merger" x="770.8" y="347" width="18.1" height="12" rx="2"><title>Merge 3.15</title></rect>
+<rect class="ci" x="656.9" y="359" width="6.2" height="4"/>
+<rect class="ci" x="672.2" y="359" width="4.9" height="4"/>
+<rect class="ci" x="742.7" y="359" width="6.0" height="4"/>
+<rect class="ci" x="748.8" y="359" width="6.0" height="4"/>
+<rect class="ci" x="754.8" y="359" width="6.1" height="4"/>
+<rect class="ci" x="760.9" y="359" width="4.9" height="4"/>
+<text class="t st ok" x="794.8" y="358">merged</text>
+<text class="t id" x="6" y="378">3.16</text>
+<text class="t ttl" x="46" y="378">Web reads: places, rules…</text>
+<rect class="worker" x="537.5" y="367" width="64.9" height="12" rx="2"><title>Worker 3.16</title></rect>
+<rect class="critic" x="608.5" y="367" width="12.8" height="12" rx="2"><title>Critic 3.16</title></rect>
+<rect class="merger" x="621.3" y="367" width="2.5" height="12" rx="2"><title>Merge 3.16</title></rect>
+<rect class="ci" x="602.3" y="379" width="6.1" height="4"/>
+<rect class="ci" x="617.9" y="379" width="1.5" height="4"/>
+<text class="t st ok" x="629.8" y="378">merged</text>
+<text class="t id" x="6" y="398">3.17</text>
+<text class="t ttl" x="46" y="398">Process rows</text>
+<rect class="worker" x="537.5" y="387" width="167.9" height="12" rx="2"><title>Worker 3.17</title></rect>
+<rect class="critic" x="706.7" y="387" width="8.2" height="12" rx="2"><title>Critic 3.17</title></rect>
+<rect class="merger" x="725.7" y="387" width="21.0" height="12" rx="2"><title>Merge 3.17</title></rect>
+<rect class="ci" x="705.4" y="399" width="5.9" height="4"/>
+<rect class="ci" x="714.9" y="399" width="6.0" height="4"/>
+<rect class="ci" x="720.9" y="399" width="4.8" height="4"/>
+<text class="t st ok" x="752.7" y="398">merged</text>
+<text class="t id" x="6" y="418">3.18</text>
+<text class="t ttl" x="46" y="418">Summary refresh</text>
+<rect class="worker" x="560.7" y="407" width="90.1" height="12" rx="2"><title>Worker 3.18</title></rect>
+<rect class="critic" x="656.5" y="407" width="15.8" height="12" rx="2"><title>Critic 3.18</title></rect>
+<rect class="merger" x="678.2" y="407" width="2.3" height="12" rx="2"><title>Merge 3.18</title></rect>
+<rect class="ci" x="650.8" y="419" width="6.1" height="4"/>
+<rect class="ci" x="671.7" y="419" width="1.5" height="4"/>
+<text class="t st ok" x="686.5" y="418">merged</text>
+<text class="t id" x="6" y="438">3.21</text>
+<text class="t ttl" x="46" y="438">Reviews importer on the r…</text>
+<rect class="worker" x="587.1" y="427" width="98.2" height="12" rx="2"><title>Worker 3.21</title></rect>
+<text class="t st park" x="691.3" y="438">parked</text>
+<text class="t id" x="6" y="458">3.22</text>
+<text class="t ttl" x="46" y="458">Issuance importer on the…</text>
+<rect class="worker" x="623.8" y="447" width="94.0" height="12" rx="2"><title>Worker 3.22</title></rect>
+<text class="t st park" x="723.8" y="458">parked</text>
+<text class="t id" x="6" y="478">3.23</text>
+<text class="t ttl" x="46" y="478">Incremental provenance</text>
+<rect class="worker" x="685.3" y="467" width="90.4" height="12" rx="2"><title>Worker 3.23</title></rect>
+<text class="t st park" x="781.7" y="478">parked</text>
+<text class="t id" x="6" y="498">3.24</text>
+<text class="t ttl" x="46" y="498">Keenable discovery</text>
+<rect class="worker" x="686.2" y="487" width="128.7" height="12" rx="2"><title>Worker 3.24</title></rect>
+<rect class="critic" x="814.9" y="487" width="22.4" height="12" rx="2"><title>Critic 3.24</title></rect>
+<rect class="worker" x="838.6" y="487" width="30.2" height="12" rx="2"><title>Worker 3.24</title></rect>
+<rect class="critic" x="868.8" y="487" width="15.5" height="12" rx="2"><title>Critic 3.24</title></rect>
+<rect class="merger" x="894.0" y="487" width="2.2" height="12" rx="2"><title>Merge 3.24</title></rect>
+<rect class="ci" x="814.9" y="499" width="5.8" height="4"/>
+<rect class="ci" x="820.6" y="499" width="5.8" height="4"/>
+<rect class="ci" x="826.4" y="499" width="5.9" height="4"/>
+<rect class="ci" x="832.3" y="499" width="5.8" height="4"/>
+<rect class="ci" x="837.3" y="499" width="1.5" height="4"/>
+<rect class="ci" x="838.1" y="499" width="1.5" height="4"/>
+<rect class="ci" x="868.8" y="499" width="5.9" height="4"/>
+<rect class="ci" x="874.7" y="499" width="5.8" height="4"/>
+<rect class="ci" x="880.5" y="499" width="5.9" height="4"/>
+<rect class="ci" x="886.4" y="499" width="6.1" height="4"/>
+<rect class="ci" x="892.5" y="499" width="1.5" height="4"/>
+<text class="t st ok" x="902.2" y="498">merged</text>
+<text class="t id" x="6" y="518">3.25</text>
+<text class="t ttl" x="46" y="518">Fact import</text>
+<rect class="worker" x="707.4" y="507" width="67.8" height="12" rx="2"><title>Worker 3.25</title></rect>
+<rect class="worker" x="775.2" y="507" width="32.6" height="12" rx="2"><title>Worker 3.25</title></rect>
+<rect class="critic" x="807.8" y="507" width="8.9" height="12" rx="2"><title>Critic 3.25</title></rect>
+<rect class="merger" x="825.2" y="507" width="1.5" height="12" rx="2"><title>Merge 3.25</title></rect>
+<rect class="ci" x="807.8" y="519" width="5.9" height="4"/>
+<rect class="ci" x="813.7" y="519" width="11.5" height="4"/>
+<text class="t st ok" x="832.6" y="518">merged</text>
+<text class="t id" x="6" y="538">3.19</text>
+<text class="t ttl" x="46" y="538">APR importer</text>
+<text class="t ttl none" x="216.0" y="538">not started: parked</text>
+<text class="t id" x="6" y="558">3.20</text>
+<text class="t ttl" x="46" y="558">Figure importer: Medi-Cal…</text>
+<text class="t ttl none" x="216.0" y="558">not started: parked</text>
+<text class="t id" x="6" y="578">3.26</text>
+<text class="t ttl" x="46" y="578">Place and topic pages</text>
+<text class="t ttl none" x="216.0" y="578">not started: parked</text>
+<text class="t id" x="6" y="598">3.27</text>
+<text class="t ttl" x="46" y="598">Kind pages and rankings</text>
+<text class="t ttl none" x="216.0" y="598">not started: parked</text>
+<text class="t id" x="6" y="618">3.28</text>
+<text class="t ttl" x="46" y="618">Process page from summari…</text>
+<text class="t ttl none" x="216.0" y="618">not started: parked</text>
+<text class="t id" x="6" y="638">3.29</text>
+<text class="t ttl" x="46" y="638">Department and source pag…</text>
+<text class="t ttl none" x="216.0" y="638">not started: parked</text>
+<text class="t id" x="6" y="658">3.T</text>
+<text class="t ttl" x="46" y="658">Wave 3 end to end</text>
+<text class="t ttl none" x="216.0" y="658">not started: parked</text>
+</g>
+</svg>

@@ -199,6 +199,8 @@ Loop-cause items are fixed in the workflow script, not by a model change.
   PR's state and merge commit (used after a lost merge output).
 - `scripts/write-review.js`: writes a spec-review run's review file from the run's output file.
 - `scripts/spec-lint.js`: structural check of a spec, plus the wave and task shape warnings above.
+- `scripts/wave-timeline.py`: draws a run output as an SVG timeline, one row per task and one bar per agent
+  (`python3 -I scripts/wave-timeline.py <result.json> --titles > timeline.svg`).
 - `scripts/loop-scorecard.py`: per-wave scorecard (rounds, fix items by cause, critic findings, the integration
   review, tokens and minutes per role, critic misses including escaped defects, and the decision rule for moving a
   role's model or effort).
