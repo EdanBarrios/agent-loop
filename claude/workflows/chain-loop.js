@@ -243,7 +243,7 @@ async function runChain({ project, waves, workflow, log = () => {}, gates, waveL
 // <repo>/.claude/workflows), not by name: a name resolves from the session's directory, and a session started in the
 // loop checkout resolved a pinned old copy. args.waveLoop overrides it (a { scriptPath } or a name). Every wave result
 // must report this script's LOOP_VERSION, or the chain stops with an error that names both versions.
-const LOOP_VERSION = '2.3.1'
+const LOOP_VERSION = '2.4.0'
 const WAVE_LOOP = args.waveLoop || (P.repo ? { scriptPath: `${P.repo}/.claude/workflows/wave-loop.js` } : 'wave-loop')
 
 phase('Waves')
