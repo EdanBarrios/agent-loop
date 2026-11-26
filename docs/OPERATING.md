@@ -141,19 +141,114 @@ The result is `{ project, wave, gate, models, state, tasks, escalations, reality
 Save it as JSON in the session scratchpad, then write the scorecard:
 
 ```
-python3 -I ~/dev/agent-loop/scripts/loop-scorecard.py <wave> <date> <result.json>... --escaped <n> --out <scorecard path> > <scorecard path>
+python3 -I ~/dev/agent-loop/scripts/loop-scorecard.py <wave> <date> <result.json>... [--escaped <n> | --escaped-from <escaped.json>] --out <scorecard path> > <scorecard path>
 ```
 
 Several result files for one wave (a relaunch after an escalation) merge into one scorecard. `--escaped <n>` is the
 number of fix commits made after the wave that trace to a task it merged: defects the critic let through. Count them
-from the default branch's history (for the previous wave, when the scorecard is written late). The scorecard lists
-every high and medium critic finding and the integration review's findings.
+from the default branch's history (for the previous wave, when the scorecard is written late). `--escaped-from
+<escaped.json>` takes the per-task counts from `scripts/escaped.js` instead (see "Escaped defects", below); the two
+flags together are an error. The scorecard lists every high and medium critic finding and the integration review's
+findings. Every rate it prints (worker first-pass MERGE, critic misses per merged task) carries its 95% Wilson interval,
+as `72% (55–84%, n=30)`.
 
-Decision rule (printed at the end of each scorecard): two waves in a row trigger a change. Worker: first-pass MERGE
-under half with defect-cause items, bump up; only spec_miss items, fix the prompt. Critic: a miss is a revert after
-MERGE or an escaped defect (`--escaped`); misses in two waves in a row, add the missed kind to the checklist or bump up;
-zero misses for two waves with only low findings, bump down. Merger: any failure traced to the model, bump up.
-Loop-cause items are fixed in the workflow script, not by a model change.
+Decision rule (printed at the end of each scorecard): a role moves only when the pooled 95% interval lies wholly on one
+side of the threshold, so one small wave rarely moves anything (pool waves with `--pool`, below). Worker: an upper bound
+of first-pass MERGE under 50% with defect-cause items moves the worker up; only spec_miss items, fix the prompt. Critic:
+a miss is a revert after MERGE or an escaped defect; a lower bound of the share of merged tasks with a miss above 5%
+moves the critic up (or add the missed kind to the checklist), and an upper bound under 10% with only low findings moves
+it down. Merger: any failure traced to the model, bump up. Loop-cause items are fixed in the workflow script, not by a
+model change. Move one role one notch per wave, so the baseline stays readable.
+
+### Impact and test-edits relays (2.4.0)
+
+Two relays run a read-only script of the loop beside the agents, each alone (the relay prompt types the command with no
+`cd` before it and nothing joined by `&&` or `;`, and every command takes `--repo`: an allow rule matches only the command
+on its own, and a compound command goes to the auto-mode classifier). Each script therefore needs its own allow rule
+(H2, above). Neither relay stops a task: one that fails or returns nothing is logged and the prompt goes on without its part.
+
+- **Impact, before the worker** (label `impact:<task id>`): `node <scripts dir>/impact.js --repo <repo> --owns <paths> [--spec <spec>]`
+  for the paths in the task's Owns text (a task whose Owns names no file runs no relay). It prints `{ tests: [{ path, via,
+  owner }] }`: the existing test files that import an owned path directly (`via` null) or through one intermediate
+  non-test module (`via` names it), and the test files that name an owned file's path or basename in a quoted string
+  (`via: "name"`: tests that read a script with `readFileSync` or run it with `execFile` import nothing). `owner` is the
+  task whose Owns line in the spec lists the test. Imports are found by regex, so the map errs toward one test too many.
+  The worker prompt lists the tests with their owners and tells the worker to run them before opening the PR and to stop
+  with a question when a change breaks a test another task owns. Test files come from `testGlobs`; path aliases from
+  `compilerOptions.paths` in the repo's `tsconfig.json`.
+- **Test edits, before each critic round** (label `test-edits:<task id> r<n>`): `node <scripts dir>/test-edits.js <pr> --repo <repo>`.
+  It prints `{ testFirstCommit, files, assertionsRemoved, assertionsChanged, bodySection, note }`: the assertion lines
+  of test files that the branch removed or changed after its test-first commit (the first non-merge commit that adds or
+  changes a test file), leaving out lines the branch took from the base branch through merges, and whether the PR body has a
+  line starting with `Test edits:`. The critic prompt carries the report under "Test edits after the test-first commit",
+  and checklist item 3 fails an assertion removed or changed unless that section justifies each one and the
+  justification holds. The gate does not depend on the critic: `assertionsRemoved + assertionsChanged > 0` with
+  `bodySection` false makes the verdict FIX whatever the critic said (cause `defect`, item "restore the assertion or
+  justify it under Test edits:"). The worker answers a FIX either by restoring the assertion or by adding a `Test edits:`
+  section to the PR body (`gh pr edit`, one line per assertion with the reason). A relay that printed no JSON line is run
+  once more; if it is still blocked or empty the round records `testEdits: "unavailable"` and the critic is told to run
+  `git diff` over the test files itself. The report is in each round's record (`testEdits`). A fast-lane task with a
+  non-zero count and no `Test edits:` section is not eligible, so the critic reviews it, and a round whose critic is
+  skipped as CI-only reuses the report of the round it follows.
+
+### Escaped defects: scripts/escaped.js (2.4.0)
+
+```
+node ~/dev/agent-loop/scripts/escaped.js --repo <repo> [--since <YYYY-MM-DD>] [--prefix task/] > escaped.json
+```
+
+Run it from a machine where `gh` is authenticated and the repo checkout has the default branch's full history. It reads
+only (`gh pr list`, `gh pr view`, `git log`, `git diff`, `git blame`) and prints one JSON line: `{ tasks: { "<task id>":
+{ pr, prs, escaped, fixes: [{ sha, title, kind, files, lines }] } }, scanned, note }`. Task PRs are the merged PRs whose head
+branch starts with the prefix (task id from `task/<id>-<slug>`; `--since` keeps those merged on or after the date; `note`
+says so when `gh` returned its 1000-PR cap). A later commit on the default branch counts as an escaped defect of a task
+when it changes or deletes a line that, before it, last came from that task's PR commits, and it is a fix: its subject, or
+the title of the PR it merges, starts with `fix` (a fix pushed straight to the default branch counts). It counts once per
+(fix commit, task) pair. Merges of task branches and of the loop's own `revert/` branches are not later commits (a revert
+is already counted as `reopened`), and other later commits that touch such lines are listed with `kind: "other"` so a
+human can reclassify them; they do not count. Exit 0 prints the report, 1 means `gh` or `git` failed (the line carries
+`note: "error: ..."`), 4 is bad usage.
+
+Pass the file to the scorecard with `--escaped-from escaped.json`: each merged task's critic miss comes from its own
+`escaped` count (a revert after MERGE is a miss as before), the scorecard lists each fix commit under "Escaped fix
+commits", and a task of the file that is not in the given runs is ignored and counted in a note. Run escaped.js again
+and rewrite the scorecard when more commits have landed, because fixes arrive after the wave: a wave scored the day it
+merged has few escapes by construction.
+
+### Pooling waves: --pool (2.4.0)
+
+```
+python3 -I ~/dev/agent-loop/scripts/loop-scorecard.py --pool <result.json>... [--escaped-from <escaped.json>]
+```
+
+Prints one table across the given runs, each file one run (task ids may repeat between runs and are kept apart; an
+escaped file attributes a task to the last run that merged it): the rates with their intervals, reverts, fix commits and
+escaped defects, fix items by cause, checklist failures per checklist number and tokens per task, with no per-task
+section, and then the decision rule. Pool the waves since the last role change before reading a rate against a threshold.
+A rate leaves out only tasks that never started (`paused`, parked for a parked dependency, a tail not run): a task
+whose worker ran and delivered no PR counts as not first-pass, and a fast-lane MERGE counts as first-pass.
+
+### Labelling the critic: scripts/label-sheet.py (2.4.0)
+
+The scorecard says how often the critic's verdicts were followed, not whether they were right. A human labels a sample,
+and the labels give the critic's precision:
+
+```
+python3 -I ~/dev/agent-loop/scripts/label-sheet.py <result.json>... [--sample <n>] [--seed <s>] > sheet.md
+python3 -I ~/dev/agent-loop/scripts/label-sheet.py --read sheet.md
+```
+
+The first form prints a Markdown sheet: one row per fix item of a FIX verdict and one row per MERGE verdict, for every
+round whose critic ran (none for a STOP verdict, a `lane: 'fast'` round or a `criticSkipped` round). Each row is keyed
+by task, round and item (the fix item's `n`, or `merge`) and carries the verdict, the fix item text and the PR link.
+Write `y` or `n` in `real? (y/n)` on a fix-item row (is the item a real defect?) and in `correct? (y/n)` on a MERGE row
+(was merging right?). `--sample <n>` draws n verdicts, FIX and MERGE in their observed proportion, reproducibly by `--seed`
+(default 0); a drawn FIX verdict brings all its rows. The second form reads the filled sheet and prints the share of FIX
+items labelled real and of MERGEs labelled correct, each with its Wilson interval, and the rows left unlabelled; only
+`y`/`yes` and `n`/`no` count, and an empty or other cell is counted as unlabelled, never guessed. A round's `checklist`
+(one entry per critic checklist item, each with quoted evidence) is what the human checks the verdict against; the
+scorecard counts the items failed per checklist number. A round whose critic returned no checklist is recorded with
+`checklistEmpty: true` and a `note:` line in the log.
 
 ## Rules the session keeps
 
@@ -238,8 +333,15 @@ Loop-cause items are fixed in the workflow script, not by a model change.
 - `scripts/wave-timeline.py`: draws a run output as an SVG timeline, one row per task and one bar per agent
   (`python3 -I scripts/wave-timeline.py <result.json> --titles > timeline.svg`).
 - `scripts/loop-scorecard.py`: per-wave scorecard (rounds, fix items by cause, critic findings, the integration
-  review, tokens and minutes per role, critic misses including escaped defects, and the decision rule for moving a
-  role's model or effort).
+  review, tokens and minutes per role, rates with 95% intervals, critic misses including escaped defects, and the
+  decision rule for moving a role's model or effort); `--pool` prints one table across waves.
+- `scripts/impact.js`, `scripts/test-edits.js`: the impact and test-edits relays' scripts (read only, run from
+  `.claude/scripts`).
+- `scripts/escaped.js`: traces fix commits on the default branch back to the task PR that introduced the lines
+  (`--escaped-from` of the scorecard).
+- `scripts/label-sheet.py`: the critic labelling sheet and its precision reader.
+- `tests/v24-e2e.test.ts`: a stubbed four-task wave through the preflight, the test-edits gate and a usage-limit pause,
+  rendered by the scorecard and the labelling sheet, with `escaped.js` over a temp repo feeding `--escaped-from`.
 - `tests/hookify.test.ts`: checks that the three rules exist and are well formed, and runs the secrets pattern on samples.
 - `templates/loop.local.json`: the project config template.
 - `docs/<project>/`: records from each project (spec reviews, scorecards, handoffs), and the loop's own build
