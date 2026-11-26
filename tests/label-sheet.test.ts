@@ -192,11 +192,11 @@ describe('label-sheet.py', { timeout: 60_000 }, () => {
     }
 
     it('prints precision with Wilson intervals', async () => {
-      // FIX items: y y y n (3 of 4 real). MERGEs: y n (1 of 2 correct). Order of rows: fix fix merge fix merge.
+      // Row order is fix fix merge fix merge: FIX items y y n (2 of 3 real), MERGEs y n (1 of 2 correct).
       const path = await filled(['y', 'y', 'y', 'n', 'n']);
       const out = await sheet(['--read', path]);
-      // Wilson 95%: 3 of 4 is 30% to 95%; 1 of 2 is 9% to 91%.
-      expect(out).toContain('FIX items real: 75% (30–95%, n=4)');
+      // Wilson 95%, worked by hand: 2 of 3 is 21% to 94%; 1 of 2 is 9% to 91%.
+      expect(out).toContain('FIX items real: 67% (21–94%, n=3)');
       expect(out).toContain('MERGEs correct: 50% (9–91%, n=2)');
       expect(out).toContain('Unlabelled: 0');
     });
