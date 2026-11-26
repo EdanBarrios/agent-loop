@@ -765,7 +765,7 @@ export function scanWorkflow(text, defaultBranch) {
       const d = indent(l)
       if (d === jobIndent) propIndent = -1
       else if (propIndent < 0) propIndent = d
-      else if (d === propIndent && /^\s*if\s*:/.test(l)) return no('a job has a job-level if:')
+      if (d !== jobIndent && d === propIndent && /^\s*if\s*:/.test(l)) return no('a job has a job-level if:')
     }
   }
   return { allowed: true, reason: '' }
