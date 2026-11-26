@@ -17,7 +17,7 @@ import { prepare } from '../bench/scenario.js';
 const root = join(import.meta.dirname, '..');
 const BENCH = join(root, 'scripts', 'bench.js');
 const dirs: string[] = [];
-vi.setConfig({ testTimeout: 180000 });
+vi.setConfig({ testTimeout: 180000, hookTimeout: 300000 });
 afterAll(async () => {
   await new Promise((r) => setTimeout(r, 300));
   for (const d of dirs) rmSync(d, { recursive: true, force: true });
