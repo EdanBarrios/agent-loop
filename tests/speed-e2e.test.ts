@@ -16,6 +16,8 @@ const source = readFileSync(join(root, 'claude', 'workflows', 'wave-loop.js'), '
 const scorecard = join(root, 'scripts', 'loop-scorecard.py');
 const run = promisify(execFile);
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+// The stubbed dry run reports the version of the loop under test (package.json), so a version bump needs no edit here.
+const LOOP_VERSION: string = JSON.parse(readFileSync(join(import.meta.dirname, '..', 'package.json'), 'utf8')).version;
 
 type Opts = { label: string; model?: string; effort?: string; phase?: string };
 type Answer = unknown | ((opts: Opts, prompt: string) => unknown | Promise<unknown>);
@@ -146,7 +148,7 @@ const mergeRan = (over: Json = {}) => {
   return ran(line, line.exit);
 };
 const blocked = (note = 'Permission to run this command was denied.') => ({ status: 'blocked', note });
-const preflightOk = ran({ outcome: 'error', exit: 4, mergeSha: null, message: 'could not read PR #0: no pull requests found', loopVersion: '2.3.1' }, 4);
+const preflightOk = ran({ outcome: 'error', exit: 4, mergeSha: null, message: 'could not read PR #0: no pull requests found', loopVersion: LOOP_VERSION }, 4);
 const green = ciOf('green');
 
 // The read-only facts the fast-lane relay gathers: the changed files stay inside Owns and the test count rises.

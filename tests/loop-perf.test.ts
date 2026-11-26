@@ -9,6 +9,8 @@ import { describe, expect, it } from 'vitest';
 // The workflow runs with a stubbed agent() that answers by label, as in tests/wave-loop-relay.test.ts.
 const source = readFileSync(join(import.meta.dirname, '..', 'claude', 'workflows', 'wave-loop.js'), 'utf8').replace(/^export const meta/m, 'const meta');
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+// The stubbed dry run reports the version of the loop under test (package.json), so a version bump needs no edit here.
+const LOOP_VERSION: string = JSON.parse(readFileSync(join(import.meta.dirname, '..', 'package.json'), 'utf8')).version;
 
 type Opts = { label: string };
 type Answer = unknown | ((opts: Opts, prompt: string) => unknown | Promise<unknown>);
@@ -17,7 +19,7 @@ type TaskArg = { id: string; title: string; branch: string; deps: string[]; text
 const task = (id: string, extra: Partial<TaskArg> = {}): TaskArg => ({ id, title: 'T', branch: `feat/${id}`, deps: [], text: 'x', owns: 'y', notes: '', ...extra });
 
 const ran = (line: unknown, exitCode = 0) => ({ status: 'ran', exitCode, stdout: `${JSON.stringify(line)}\n` });
-const preflight = (load?: Json) => ran({ outcome: 'error', exit: 4, mergeSha: null, message: 'could not read PR #0: no pull requests found', loopVersion: '2.3.1', ...(load ? { load } : {}) }, 4);
+const preflight = (load?: Json) => ran({ outcome: 'error', exit: 4, mergeSha: null, message: 'could not read PR #0: no pull requests found', loopVersion: LOOP_VERSION, ...(load ? { load } : {}) }, 4);
 
 async function runWave(answers: Record<string, Answer>, extra: { project?: Json; tasks?: TaskArg[] } = {}) {
   const calls: string[] = [];
