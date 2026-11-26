@@ -1,10 +1,10 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 // @ts-expect-error plain JavaScript module with JSDoc
-import { machineLoad, mergePr } from './merge.js';
+import { machineLoad, makeLock, mergePr, scanWorkflow } from './merge.js';
 
 const root = join(import.meta.dirname, '..', '..');
 const fixture = (name: string) => readFileSync(join(root, 'tests', 'fixtures', name), 'utf8').trim();
@@ -457,44 +457,174 @@ describe('mergePr: --dry-run', () => {
   });
 });
 
-// Loop perf change 3: no check on main when the merged tree is the tree CI checked; otherwise the caller can defer the
-// wait for main's run (--defer-main) and watch it outside its merge lock (--verify-main).
-describe('mergePr: the check on main is skipped when nothing new can be learned', () => {
-  const sameTree: Rule = { when: new RegExp(`^git rev-parse ${MERGE_SHA}\\^\\{tree\\}$`), reply: out(`${HEAD_TREE}\n`) };
+// Loop perf change 3, opt-in since 2.5 (task 3.2): no check on main when the merged tree is the tree CI checked, and only
+// with project.reuseTreeCi and a main CI workflow file that shows no event-dependent behaviour. Otherwise the caller can
+// defer the wait for main's run (--defer-main) and watch it outside its merge lock (--verify-main).
+const PLAIN_WORKFLOW = `name: check
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm ci && npm run check
+`;
+const WORKFLOW_DIR = '.github/workflows/';
+const treeOf = (text: string): Rule[] => [
+  { when: (c) => c === `git ls-tree --name-only ${MERGE_SHA} ${WORKFLOW_DIR}`, reply: out(`${WORKFLOW_DIR}check.yml\n`) },
+  { when: (c) => c === `git show ${MERGE_SHA}:${WORKFLOW_DIR}check.yml`, reply: out(text) },
+];
+const REUSE = { reuseTreeCi: true };
+const sameTreeRule: Rule = { when: new RegExp(`^git rev-parse ${MERGE_SHA}\\^\\{tree\\}$`), reply: out(`${HEAD_TREE}\n`) };
 
-  it('merged tree equals the green head tree: exit 0, mainCheck skipped:unchanged, no main run is read', async () => {
-    const { result, cmds } = await go([sameTree]);
+describe('mergePr: the check on main is skipped when nothing new can be learned', () => {
+  const sameTree = sameTreeRule;
+
+  it('with reuseTreeCi and a plain workflow, a merged tree equal to the green head tree skips: mainCheck skipped:unchanged, no main run is read', async () => {
+    const { result, cmds } = await go([sameTree, ...treeOf(PLAIN_WORKFLOW)], { project: REUSE });
     expect(result).toMatchObject({ outcome: 'merged', exit: 0, mergeSha: MERGE_SHA, mainSha: MERGE_SHA, mainCheck: 'skipped:unchanged' });
+    expect(result.treeReuse).toMatchObject({ allowed: true });
     expect(cmds).toContain(`git rev-parse ${MERGE_SHA}^{tree}`);
     expect(cmds).toContain(`git rev-parse ${HEAD}^{tree}`);
+    expect(cmds).toContain(`git ls-tree --name-only ${MERGE_SHA} ${WORKFLOW_DIR}`);
+    expect(cmds).toContain(`git show ${MERGE_SHA}:${WORKFLOW_DIR}check.yml`);
     expect(count(cmds, /^gh run (list|view)/)).toBe(0);
     expect(count(cmds, /^git revert|^gh pr create/)).toBe(0);
     expect(index(cmds, /^gh pr merge 7 /)).toBeLessThan(index(cmds, /\^\{tree\}$/));
   });
 
-  it('skips the local check too when mainCi is empty', async () => {
-    const { result, cmds } = await go([sameTree], { project: { mainCi: '' } });
-    expect(result).toMatchObject({ outcome: 'merged', exit: 0, mainCheck: 'skipped:unchanged' });
-    expect(count(cmds, /slot\.sh/)).toBe(0);
+  it('is off by default: an equal tree still runs the check on main (invariant 4 without exception)', async () => {
+    const { result, cmds } = await go([sameTree, ...treeOf(PLAIN_WORKFLOW)]);
+    expect(result).toMatchObject({ outcome: 'merged', exit: 0, mainCheck: 'green' });
+    expect(result.treeReuse.allowed).toBe(false);
+    expect(result.treeReuse.reason).toMatch(/reuseTreeCi/);
+    expect(count(cmds, /^gh run list/)).toBe(1);
+    expect(count(cmds, /^git ls-tree|^git show/)).toBe(0);
+  });
+
+  it('reuseTreeCi false is the same as the default', async () => {
+    const { result } = await go([sameTree, ...treeOf(PLAIN_WORKFLOW)], { project: { reuseTreeCi: false } });
+    expect(result).toMatchObject({ mainCheck: 'green' });
+    expect(result.treeReuse.allowed).toBe(false);
+  });
+
+  it('with mainCi empty there is no workflow file, so the local check runs even when the tree is equal', async () => {
+    const { result, cmds } = await go([sameTree, { when: (c, cwd) => cwd === REPO && c === 'git rev-parse HEAD', reply: out(`${MERGE_SHA}\n`) }, { when: /slot\.sh/, reply: out('ok\n') }], { project: { ...REUSE, mainCi: '' } });
+    expect(result).toMatchObject({ outcome: 'merged', exit: 0, mainCheck: 'green' });
+    expect(result.treeReuse.allowed).toBe(false);
+    expect(result.treeReuse.reason).toMatch(/mainCi/);
+    expect(result.message).toMatch(/mainCi/);
+    expect(count(cmds, /slot\.sh/)).toBe(1);
   });
 
   it('a tree that cannot be read is not proof: the check on main runs', async () => {
-    const { result, cmds } = await go([{ when: new RegExp(`^git rev-parse ${MERGE_SHA}\\^\\{tree\\}$`), reply: { code: 128, stderr: 'fatal: bad object' } }]);
+    const { result, cmds } = await go([{ when: new RegExp(`^git rev-parse ${MERGE_SHA}\\^\\{tree\\}$`), reply: { code: 128, stderr: 'fatal: bad object' } }, ...treeOf(PLAIN_WORKFLOW)], { project: REUSE });
     expect(result).toMatchObject({ outcome: 'merged', exit: 0, mainCheck: 'green' });
     expect(count(cmds, /^gh run list/)).toBe(1);
   });
 
-  it('main moved: the check on main runs as before and mainCheck is green', async () => {
-    const { result, cmds } = await go();
+  it('main moved (the trees differ): the check on main runs as before and mainCheck is green', async () => {
+    const { result, cmds } = await go([...treeOf(PLAIN_WORKFLOW)], { project: REUSE });
     expect(result).toMatchObject({ outcome: 'merged', exit: 0, mainSha: MERGE_SHA, mainCheck: 'green' });
+    expect(result.treeReuse.allowed).toBe(false);
     expect(count(cmds, /^gh run list/)).toBe(1);
   });
 
   it('keeps every field the wave loop reads', async () => {
     const { result } = await go([sameTree]);
-    for (const k of ['outcome', 'exit', 'mergeSha', 'mainSha', 'ciState', 'failing', 'conflictFiles', 'revertPrUrl', 'message', 'logTail', 'ciWaitMs', 'mergeMs', 'mainCheckMs', 'revertMs', 'elapsedMs']) {
+    for (const k of ['outcome', 'exit', 'mergeSha', 'mainSha', 'ciState', 'failing', 'conflictFiles', 'revertPrUrl', 'message', 'logTail', 'ciWaitMs', 'mergeMs', 'mainCheckMs', 'revertMs', 'elapsedMs', 'treeReuse']) {
       expect(result, k).toHaveProperty(k);
     }
+  });
+});
+
+describe('mergePr: tree reuse needs the main CI workflow to show no event-dependent behaviour', () => {
+  const sameTree = sameTreeRule;
+  const variants: Array<[string, (w: string) => string]> = [
+    ['github.event_name', (w) => w.replace('npm ci &&', 'echo ${{ github.event_name }} && npm ci &&')],
+    ['github.event.', (w) => w.replace('npm ci &&', 'echo ${{ github.event.pull_request.title }} && npm ci &&')],
+    ['github.ref', (w) => w.replace('npm ci &&', 'echo ${{ github.ref }} && npm ci &&')],
+    ['secrets.', (w) => w.replace('npm ci &&', 'echo ${{ secrets.TOKEN }} && npm ci &&')],
+    ['vars.', (w) => w.replace('npm ci &&', 'echo ${{ vars.MODE }} && npm ci &&')],
+    ['schedule:', (w) => w.replace('  pull_request:\n', '  pull_request:\n  schedule:\n    - cron: "0 3 * * *"\n')],
+    ['no pull_request', (w) => w.replace('  pull_request:\n', '')],
+    ['no push', (w) => w.replace('  push:\n    branches: [main]\n', '')],
+    ['paths on push', (w) => w.replace('    branches: [main]\n', '    branches: [main]\n    paths: ["src/**"]\n')],
+    ['paths on pull_request', (w) => w.replace('  pull_request:\n', '  pull_request:\n    paths:\n      - "src/**"\n')],
+    ['paths-ignore on push', (w) => w.replace('    branches: [main]\n', '    branches: [main]\n    paths-ignore: ["docs/**"]\n')],
+    ['paths-ignore on pull_request', (w) => w.replace('  pull_request:\n', '  pull_request:\n    paths-ignore: ["docs/**"]\n')],
+    ['branches-ignore on push', (w) => w.replace('    branches: [main]\n', '    branches-ignore: ["wip/**"]\n')],
+    ['branches-ignore on pull_request', (w) => w.replace('  pull_request:\n', '  pull_request:\n    branches-ignore: ["wip/**"]\n')],
+    ['tags on push', (w) => w.replace('    branches: [main]\n', '    branches: [main]\n    tags: ["v*"]\n')],
+    ['tags on pull_request', (w) => w.replace('  pull_request:\n', '  pull_request:\n    tags: ["v*"]\n')],
+    ['branches on pull_request', (w) => w.replace('  pull_request:\n', '  pull_request:\n    branches: [main]\n')],
+    ['push branches that do not list the default branch', (w) => w.replace('[main]', '[release]')],
+    ['a job-level if', (w) => w.replace('    runs-on: ubuntu-latest\n', '    runs-on: ubuntu-latest\n    if: always()\n')],
+  ];
+
+  it.each(variants)('%s prevents the skip: the check on main runs and message names the reason', async (_name, edit) => {
+    const text = edit(PLAIN_WORKFLOW);
+    expect(text).not.toBe(PLAIN_WORKFLOW);
+    const { result, cmds } = await go([sameTree, ...treeOf(text)], { project: REUSE });
+    expect(result).toMatchObject({ outcome: 'merged', exit: 0, mainCheck: 'green' });
+    expect(result.treeReuse.allowed).toBe(false);
+    expect(result.treeReuse.reason).toMatch(/\S/);
+    expect(result.message).toContain(result.treeReuse.reason);
+    expect(count(cmds, /^gh run list/)).toBe(1);
+  });
+
+  it('a plain workflow written in other legal forms still allows the skip', async () => {
+    const forms = [
+      'name: check\non: [push, pull_request]\njobs:\n  check:\n    runs-on: x\n    steps:\n      - run: npm test\n',
+      'name: check\non:\n  - push\n  - pull_request\njobs:\n  check:\n    runs-on: x\n    steps:\n      - run: npm test\n',
+      'name: check # the main check\non:\n  push:\n    branches:\n      - main\n  pull_request:\n  workflow_dispatch:\njobs:\n  check:\n    runs-on: x\n    steps:\n      - if: runner.os == \'Linux\'\n        run: npm test\n',
+      'name: check\n"on":\n  push:\n  pull_request:\njobs:\n  check:\n    runs-on: x\n    steps:\n      - run: npm test\n',
+    ];
+    for (const text of forms) {
+      const { result } = await go([sameTree, ...treeOf(text)], { project: REUSE });
+      expect(result.treeReuse, text).toMatchObject({ allowed: true });
+      expect(result.mainCheck, text).toBe('skipped:unchanged');
+    }
+  });
+
+  it('a missing workflow file prevents the skip (no workflow directory, no matching file, or a file that cannot be read)', async () => {
+    const lsTree = (c: string) => c === `git ls-tree --name-only ${MERGE_SHA} ${WORKFLOW_DIR}`;
+    const cases: Rule[][] = [
+      [{ when: lsTree, reply: { code: 128, stderr: 'fatal: not a tree object' } }],
+      [{ when: lsTree, reply: out('') }],
+      [{ when: lsTree, reply: out(`${WORKFLOW_DIR}release.yml\n`) }, { when: (c) => c === `git show ${MERGE_SHA}:${WORKFLOW_DIR}release.yml`, reply: out('name: release\non: push\n') }],
+      [{ when: lsTree, reply: out(`${WORKFLOW_DIR}check.yml\n`) }, { when: (c) => c.startsWith('git show '), reply: { code: 128, stderr: 'fatal: path does not exist' } }],
+    ];
+    for (const rules of cases) {
+      const { result, cmds } = await go([sameTree, ...rules], { project: REUSE });
+      expect(result, JSON.stringify(rules.map((r) => r.reply))).toMatchObject({ outcome: 'merged', exit: 0, mainCheck: 'green' });
+      expect(result.treeReuse.allowed).toBe(false);
+      expect(result.message).toContain(result.treeReuse.reason);
+      expect(count(cmds, /^gh run list/)).toBe(1);
+    }
+  });
+
+  it('finds the workflow by .yaml, by its top-level name, and refuses two files with that name', async () => {
+    const lsTree = (c: string) => c === `git ls-tree --name-only ${MERGE_SHA} ${WORKFLOW_DIR}`;
+    const show = (name: string, text: string): Rule => ({ when: (c) => c === `git show ${MERGE_SHA}:${WORKFLOW_DIR}${name}`, reply: out(text) });
+    const byYaml = await go([sameTree, { when: lsTree, reply: out(`${WORKFLOW_DIR}check.yaml\n`) }, show('check.yaml', PLAIN_WORKFLOW)], { project: REUSE });
+    expect(byYaml.result.treeReuse.allowed).toBe(true);
+    const named = PLAIN_WORKFLOW.replace('name: check', 'name: "Main CI"');
+    const byName = await go([sameTree, { when: lsTree, reply: out(`${WORKFLOW_DIR}ci.yml\n${WORKFLOW_DIR}release.yml\n`) }, show('ci.yml', named), show('release.yml', 'name: release\non: push\n')], { project: { ...REUSE, mainCi: 'Main CI' } });
+    expect(byName.result.treeReuse.allowed).toBe(true);
+    const twice = await go([sameTree, { when: lsTree, reply: out(`${WORKFLOW_DIR}a.yml\n${WORKFLOW_DIR}b.yml\n`) }, show('a.yml', named), show('b.yml', named)], { project: { ...REUSE, mainCi: 'Main CI' } });
+    expect(twice.result.treeReuse.allowed).toBe(false);
+    expect(twice.result.mainCheck).toBe('green');
+    expect(twice.result.message).toContain(twice.result.treeReuse.reason);
+  });
+
+  it('scanWorkflow is the same text scan on its own', () => {
+    expect(scanWorkflow(PLAIN_WORKFLOW, 'main')).toMatchObject({ allowed: true });
+    expect(scanWorkflow(PLAIN_WORKFLOW, 'trunk')).toMatchObject({ allowed: false });
+    expect(scanWorkflow('name: x\njobs: {}\n', 'main')).toMatchObject({ allowed: false });
   });
 });
 
@@ -510,7 +640,7 @@ describe('mergePr: deferMain and verifyMain', () => {
   });
 
   it('deferMain still skips when the tree is unchanged', async () => {
-    const { result } = await go([{ when: new RegExp(`^git rev-parse ${MERGE_SHA}\\^\\{tree\\}$`), reply: out(`${HEAD_TREE}\n`) }], { deferMain: true });
+    const { result } = await go([{ when: new RegExp(`^git rev-parse ${MERGE_SHA}\\^\\{tree\\}$`), reply: out(`${HEAD_TREE}\n`) }, ...treeOf(PLAIN_WORKFLOW)], { deferMain: true, project: REUSE });
     expect(result.mainCheck).toBe('skipped:unchanged');
   });
 
@@ -610,6 +740,7 @@ function spawnWorld(config: object, rules: Array<{ match: string; stdout?: strin
   const shims = join(dir, 'shims');
   mkdirSync(join(repo, '.claude'), { recursive: true });
   mkdirSync(join(repo, 'scripts'), { recursive: true });
+  mkdirSync(join(repo, '.git'));
   mkdirSync(shims);
   writeFileSync(join(repo, '.claude', 'loop.local.json'), JSON.stringify(config));
   symlinkSync(join(root, 'scripts', 'merge-pr.js'), join(repo, 'scripts', 'merge-pr.js'));
@@ -636,6 +767,7 @@ function spawnWorld(config: object, rules: Array<{ match: string; stdout?: strin
 }
 
 const SPAWN_RULES = (checks: string, checksCode = 0) => [
+  { match: '^git rev-parse --git-common-dir$', stdout: '.git\n' },
   { match: '^gh pr view 7 --json state,mergeCommit$', stdout: MERGED_VIEW },
   { match: '^gh pr view 7 --json .*headRefOid', stdout: JSON.stringify(PR_CLEAN) },
   { match: '^gh pr checks 7 --json', stdout: checks, code: checksCode },
@@ -727,3 +859,463 @@ describe('mergePr: project.mergeMethod', () => {
   });
 });
 
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Task 3.2: the merge lock. mergePr takes it before it reads the PR it acts on and releases it on every exit path.
+// ---------------------------------------------------------------------------------------------------------------------
+
+const GIT_DIR = '/work/repo/.git';
+const LOCK = `${GIT_DIR}/agent-loop-merge.lock`;
+const TAKEOVER = `${LOCK}.takeover`;
+const NOW0 = 1_800_000_000_000;
+const MIN = 60_000;
+
+// An in-memory file system for makeLock: directories carry a modification time, files live under them.
+function memFs(clock: { t: number }) {
+  const dirs = new Map<string, number>([[GIT_DIR, clock.t]]);
+  const files = new Map<string, string>();
+  const parentOf = (path: string) => path.slice(0, path.lastIndexOf('/'));
+  const enoent = (path: string) => Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+  const log: string[] = [];
+  const fs = {
+    async mkdir(path: string) {
+      log.push(`mkdir ${path}`);
+      if (dirs.has(path)) throw Object.assign(new Error(`EEXIST: ${path}`), { code: 'EEXIST' });
+      dirs.set(path, clock.t);
+    },
+    async writeFile(path: string, text: string) {
+      log.push(`write ${path}`);
+      files.set(path, text);
+      if (dirs.has(parentOf(path))) dirs.set(parentOf(path), clock.t);
+    },
+    async rename(from: string, to: string) {
+      log.push(`rename ${from} ${to}`);
+      if (!files.has(from)) throw enoent(from);
+      if (!dirs.has(parentOf(to))) throw enoent(parentOf(to));
+      files.set(to, files.get(from) as string);
+      files.delete(from);
+      dirs.set(parentOf(to), clock.t);
+    },
+    async readFile(path: string) {
+      if (!files.has(path)) throw enoent(path);
+      return files.get(path) as string;
+    },
+    async rm(path: string) {
+      log.push(`rm ${path}`);
+      for (const d of [...dirs.keys()]) if (d === path || d.startsWith(`${path}/`)) dirs.delete(d);
+      for (const f of [...files.keys()]) if (f === path || f.startsWith(`${path}/`)) files.delete(f);
+    },
+    async mtimeMs(path: string) {
+      if (!dirs.has(path)) throw enoent(path);
+      return dirs.get(path) as number;
+    },
+  };
+  return { fs, dirs, files, log };
+}
+
+type Owner = { pid: number; host: string; pr: number; startedAt: string };
+const owner = (o: Partial<Owner> = {}): Owner => ({ pid: 4242, host: 'build-1', pr: 5, startedAt: new Date(NOW0 - 60_000).toISOString(), ...o });
+const everyoneAlive = () => true;
+
+function lockWorld(o: { alive?: (pid: number) => boolean; held?: { owner?: Owner | string | null; ageMs: number } } = {}) {
+  const clock = { t: NOW0 };
+  const m = memFs(clock);
+  if (o.held) {
+    m.dirs.set(LOCK, clock.t - o.held.ageMs);
+    if (o.held.owner !== null && o.held.owner !== undefined) m.files.set(`${LOCK}/owner.json`, typeof o.held.owner === 'string' ? o.held.owner : JSON.stringify(o.held.owner));
+  }
+  const lockFor = (pid: number, host = 'build-1', alive = o.alive ?? everyoneAlive) => makeLock({ fs: m.fs, lockPath: LOCK, pid, host, now: () => clock.t, alive });
+  const sleep = (ms: number) => {
+    clock.t += ms;
+    return new Promise<void>((r) => setTimeout(r, 0));
+  };
+  return { clock, ...m, lockFor, sleep };
+}
+
+async function goLocked(w: ReturnType<typeof lockWorld>, lock: unknown, rules: Rule[] = [], o: Go & { log?: string[]; tag?: string } = {}) {
+  const f = fakeRunner([...rules, ...baseRules()]);
+  const sleeps: number[] = [];
+  const result = await mergePr(
+    { pr: 7, repo: REPO, worktree: o.worktree === null ? undefined : (o.worktree ?? WT), dryRun: o.dryRun ?? false, deferMain: o.deferMain, verifyMain: o.verifyMain, mainWaitMs: o.mainWaitMs, tempDir: '/tmp', project: { ...PROJECT, ...o.project } },
+    {
+      run: async (cmd: string, opts?: { cwd?: string }) => {
+        o.log?.push(`${o.tag ?? ''}${cmd}`);
+        return f.run(cmd, opts);
+      },
+      sleep: async (ms: number) => {
+        sleeps.push(ms);
+        await w.sleep(ms);
+      },
+      now: () => w.clock.t,
+      lock,
+    },
+  );
+  const cmds = f.calls.map((c) => c.cmd);
+  everyCall.push(...cmds);
+  expect(f.unexpected).toEqual([]);
+  assertSafe(cmds);
+  return { result, cmds, sleeps };
+}
+
+// A lock that only records its calls in a shared log and answers from a script (the last answer repeats).
+function spyLock(log: string[], answers: Array<{ held: boolean; holder?: Owner | null; reason?: string; note?: string }> = [{ held: true }]) {
+  let n = 0;
+  return {
+    acquire: async (o: unknown) => {
+      log.push(`lock.acquire ${JSON.stringify(o)}`);
+      const a = answers[Math.min(n++, answers.length - 1)];
+      return { path: LOCK, holder: null, reason: '', note: null, ...a };
+    },
+    release: async () => void log.push('lock.release'),
+  };
+}
+
+describe('mergePr: the merge lock', () => {
+  it('two concurrent mergePr calls run one after the other', async () => {
+    const w = lockWorld();
+    const log: string[] = [];
+    const a = goLocked(w, w.lockFor(101), [], { log, tag: 'A:' });
+    const b = goLocked(w, w.lockFor(102), [], { log, tag: 'B:' });
+    const [ra, rb] = await Promise.all([a, b]);
+    expect(ra.result).toMatchObject({ outcome: 'merged', exit: 0 });
+    expect(rb.result).toMatchObject({ outcome: 'merged', exit: 0 });
+    const last = (t: string) => log.map((c, i) => (c.startsWith(t) ? i : -1)).filter((i) => i >= 0).pop() as number;
+    const first = (t: string) => log.findIndex((c) => c.startsWith(t));
+    expect(last('A:')).toBeLessThan(first('B:'));
+    expect(rb.sleeps.length).toBeGreaterThan(0);
+    expect(rb.sleeps.every((ms) => ms === 5000)).toBe(true);
+    expect(ra.sleeps).toEqual([]);
+    expect(w.dirs.has(LOCK)).toBe(false);
+    expect(w.dirs.has(TAKEOVER)).toBe(false);
+  });
+
+  it('the lock is a directory made with mkdir, holding owner.json { pid, host, pr, startedAt } renamed into place, during the merge', async () => {
+    const w = lockWorld();
+    let snap: { dir: boolean; owner: unknown } | null = null;
+    const peek: Rule = {
+      when: (c) => {
+        if (/^gh pr merge 7 /.test(c)) snap = { dir: w.dirs.has(LOCK), owner: JSON.parse(w.files.get(`${LOCK}/owner.json`) ?? 'null') };
+        return false;
+      },
+      reply: {},
+    };
+    const { result } = await goLocked(w, w.lockFor(101), [peek]);
+    expect(result.outcome).toBe('merged');
+    expect(snap).toEqual({ dir: true, owner: { pid: 101, host: 'build-1', pr: 7, startedAt: new Date(NOW0).toISOString() } });
+    expect(w.log[0]).toBe(`mkdir ${LOCK}`);
+    const renamed = w.log.find((l) => l.startsWith('rename '));
+    expect(renamed).toMatch(new RegExp(` ${LOCK}/owner\\.json$`));
+    expect(renamed).not.toMatch(new RegExp(`^rename ${LOCK}/owner\\.json `));
+    expect(w.dirs.has(LOCK)).toBe(false);
+  });
+
+  it('takes the lock before it reads the PR, holds it through the merge and the check on main, and releases it last', async () => {
+    const log: string[] = [];
+    const w = lockWorld();
+    const { result } = await goLocked(w, spyLock(log), [], { log });
+    expect(result).toMatchObject({ outcome: 'merged', mainCheck: 'green' });
+    expect(log[0]).toMatch(/^lock\.acquire/);
+    expect(log.findIndex((c) => /^gh pr view 7 /.test(c))).toBeGreaterThan(0);
+    expect(log.filter((c) => c === 'lock.release')).toHaveLength(1);
+    expect(log[log.length - 1]).toBe('lock.release');
+    expect(log.findIndex((c) => /^gh run list /.test(c))).toBeLessThan(log.indexOf('lock.release'));
+  });
+
+  it('reads the PR once the lock is held, after any wait: the sync decision and the pinned head come from after the wait', async () => {
+    const log: string[] = [];
+    const w = lockWorld();
+    const lock = spyLock(log, [{ held: false, holder: owner(), reason: 'held by a live process' }, { held: false, holder: owner() }, { held: true }]);
+    const moved: Rule = { when: /^git merge-base --is-ancestor origin\/main /, reply: { code: 1 } };
+    const { result, sleeps } = await goLocked(w, lock, [moved], { log });
+    expect(result.outcome).toBe('merged');
+    expect(sleeps.slice(0, 2)).toEqual([5000, 5000]);
+    const firstRead = log.findIndex((c) => /^gh pr view 7 /.test(c));
+    const lastAcquire = log.map((c) => c.startsWith('lock.acquire')).lastIndexOf(true);
+    expect(lastAcquire).toBeLessThan(firstRead);
+    expect(log.filter((c) => c.startsWith('lock.acquire'))).toHaveLength(3);
+    expect(result.lockWaitMs).toBe(10_000);
+  });
+
+  it('releases the lock on every exit path: merged, refused, a conflict, an error, a throw, a deferred main and a revert', async () => {
+    const throwing: Rule = { when: (c) => {
+      if (/^gh pr checks 7 /.test(c)) throw new Error('the runner fell over');
+      return false;
+    }, reply: {} };
+    const red: Rule = { when: new RegExp(`^gh run list --branch main --workflow check --commit ${MERGE_SHA} `), reply: out(RUN_FAILURE) };
+    const cases: Array<[string, Rule[], Go, string]> = [
+      ['merged', [], {}, 'merged'],
+      ['refused: CI red', [{ when: /^gh pr checks 7 --json/, reply: { code: 1, stdout: CHECKS_RED } }], {}, 'refused'],
+      ['refused: not open', [{ when: /^gh pr view 7 --json .*headRefOid/, reply: prView({ ...PR_CLEAN, state: 'CLOSED' }) }], {}, 'refused'],
+      ['error: pr cannot be read', [{ when: /^gh pr view 7 --json .*headRefOid/, reply: { code: 1, stderr: 'boom' } }], {}, 'error'],
+      ['a throw inside the merge', [throwing], {}, 'error'],
+      ['deferred main', [], { deferMain: true }, 'merged'],
+      ['reverted', [red], {}, 'reverted'],
+    ];
+    for (const [name, rules, o, outcome] of cases) {
+      const log: string[] = [];
+      const w = lockWorld();
+      const { result } = await goLocked(w, spyLock(log), rules, { ...o, log });
+      expect(result.outcome, name).toBe(outcome);
+      expect(log.filter((c) => c === 'lock.release'), name).toHaveLength(1);
+      expect(log[log.length - 1], name).toBe('lock.release');
+    }
+  });
+
+  it('a revert after a red main stays under the lock: it is released only after the revert PR merged and main was checked again', async () => {
+    const log: string[] = [];
+    const w = lockWorld();
+    const red: Rule = { when: new RegExp(`^gh run list --branch main --workflow check --commit ${MERGE_SHA} `), reply: out(RUN_FAILURE) };
+    const { result } = await goLocked(w, spyLock(log), [red], { log });
+    expect(result).toMatchObject({ outcome: 'reverted', exit: 3 });
+    const release = log.indexOf('lock.release');
+    expect(log.findIndex((c) => /^gh pr merge 8 /.test(c))).toBeLessThan(release);
+    expect(log.findIndex((c) => new RegExp(`--commit ${REVERT_MERGE} `).test(c))).toBeLessThan(release);
+  });
+
+  it('a held lock past the wait gives locked, exit 2, the holder and the lock path in message, and touches nothing else', async () => {
+    const w = lockWorld({ held: { owner: owner({ pid: 4242, host: 'build-1', pr: 5 }), ageMs: 3 * MIN } });
+    const { result, cmds, sleeps } = await goLocked(w, w.lockFor(101));
+    expect(result).toMatchObject({ outcome: 'locked', exit: 2, mergeSha: null });
+    expect(result.message).toContain('4242');
+    expect(result.message).toContain('#5');
+    expect(result.message).toContain(LOCK);
+    expect(sleeps.reduce((a, b) => a + b, 0)).toBe(5 * MIN);
+    expect(sleeps.every((ms) => ms === 5000)).toBe(true);
+    expect(cmds).toEqual([]);
+    expect(w.dirs.has(LOCK)).toBe(true);
+    expect(JSON.parse(w.files.get(`${LOCK}/owner.json`) as string).pid).toBe(4242);
+  });
+
+  it('waits mergeLockWaitMin (default 5); a larger value is lowered to 8; zero does not wait', async () => {
+    const waitFor = async (project: Record<string, unknown>) => {
+      const w = lockWorld({ held: { owner: owner(), ageMs: MIN } });
+      const { result, sleeps } = await goLocked(w, w.lockFor(101), [], { project });
+      expect(result.outcome).toBe('locked');
+      return sleeps.reduce((a, b) => a + b, 0);
+    };
+    expect(await waitFor({})).toBe(5 * MIN);
+    expect(await waitFor({ mergeLockWaitMin: 2 })).toBe(2 * MIN);
+    expect(await waitFor({ mergeLockWaitMin: 60 })).toBe(8 * MIN);
+    expect(await waitFor({ mergeLockWaitMin: 0 })).toBe(0);
+    expect(await waitFor({ mergeLockWaitMin: 'soon' })).toBe(5 * MIN);
+  });
+
+  it('a lock whose holder lets go during the wait is taken and the merge goes through', async () => {
+    const w = lockWorld({ held: { owner: owner(), ageMs: MIN } });
+    const lock = w.lockFor(101);
+    let slept = 0;
+    const origSleep = w.sleep;
+    w.sleep = (ms: number) => {
+      if (++slept === 3) {
+        w.dirs.delete(LOCK);
+        w.files.delete(`${LOCK}/owner.json`);
+      }
+      return origSleep(ms);
+    };
+    const { result, sleeps } = await goLocked(w, lock);
+    expect(result).toMatchObject({ outcome: 'merged', exit: 0 });
+    expect(sleeps).toHaveLength(3);
+  });
+
+  it('a stale lock (this host, dead pid) is taken over at once, and message says so', async () => {
+    const w = lockWorld({ alive: (pid) => pid !== 4242, held: { owner: owner({ pid: 4242, host: 'build-1' }), ageMs: 2 * 1000 } });
+    const { result, sleeps } = await goLocked(w, w.lockFor(101, 'build-1', (pid) => pid !== 4242));
+    expect(result).toMatchObject({ outcome: 'merged', exit: 0 });
+    expect(sleeps).toEqual([]);
+    expect(result.message).toMatch(/took over/i);
+    expect(result.message).toContain('4242');
+    expect(w.log).toContain(`mkdir ${TAKEOVER}`);
+    expect(w.log).toContain(`rm ${TAKEOVER}`);
+    expect(w.dirs.has(TAKEOVER)).toBe(false);
+    expect(w.dirs.has(LOCK)).toBe(false);
+  });
+
+  it('a live pid on this host is never stale, however old the lock is', async () => {
+    const w = lockWorld({ held: { owner: owner({ pid: 4242, host: 'build-1' }), ageMs: 5 * 60 * MIN } });
+    const { result } = await goLocked(w, w.lockFor(101, 'build-1', () => true), [], { project: { mergeLockWaitMin: 0.1 } });
+    expect(result.outcome).toBe('locked');
+    expect(w.dirs.has(LOCK)).toBe(true);
+  });
+
+  it('an old lock is taken over: another host older than mergeLockStaleMin (default 30), or no owner.json, or an unparseable one', async () => {
+    const cases: Array<[string, { owner?: Owner | string | null; ageMs: number }]> = [
+      ['another host', { owner: owner({ host: 'build-2' }), ageMs: 31 * MIN }],
+      ['no owner.json', { owner: null, ageMs: 31 * MIN }],
+      ['unparseable owner.json', { owner: '{"pid": 4', ageMs: 31 * MIN }],
+    ];
+    for (const [name, held] of cases) {
+      const w = lockWorld({ held });
+      const { result } = await goLocked(w, w.lockFor(101), [], { project: { mergeLockWaitMin: 0 } });
+      expect(result, name).toMatchObject({ outcome: 'merged', exit: 0 });
+      expect(result.message, name).toMatch(/took over/i);
+    }
+  });
+
+  it('a younger lock is held: another host under mergeLockStaleMin, no owner.json under 10 s or under the age limit; mergeLockStaleMin is read', async () => {
+    const cases: Array<[string, { owner?: Owner | string | null; ageMs: number }, Record<string, unknown>, string]> = [
+      ['another host, 29 min', { owner: owner({ host: 'build-2' }), ageMs: 29 * MIN }, {}, 'locked'],
+      ['no owner.json, 5 s', { owner: null, ageMs: 5000 }, {}, 'locked'],
+      ['no owner.json, 5 min', { owner: null, ageMs: 5 * MIN }, {}, 'locked'],
+      ['unparseable, 5 min', { owner: 'x', ageMs: 5 * MIN }, {}, 'locked'],
+      ['another host, 29 min, mergeLockStaleMin 20', { owner: owner({ host: 'build-2' }), ageMs: 29 * MIN }, { mergeLockStaleMin: 20 }, 'merged'],
+      ['no owner.json, 5 min, mergeLockStaleMin 3', { owner: null, ageMs: 5 * MIN }, { mergeLockStaleMin: 3 }, 'merged'],
+      ['no owner.json, 5 s, mergeLockStaleMin 0', { owner: null, ageMs: 5000 }, { mergeLockStaleMin: 0 }, 'locked'],
+    ];
+    for (const [name, held, project, outcome] of cases) {
+      const w = lockWorld({ held });
+      const { result } = await goLocked(w, w.lockFor(101), [], { project: { mergeLockWaitMin: 0, ...project } });
+      expect(result.outcome, name).toBe(outcome);
+    }
+  });
+
+  it('a takeover re-reads owner.json under the takeover directory and replaces the lock only when it still shows the owner judged stale', async () => {
+    const w = lockWorld({ held: { owner: owner({ pid: 4242 }), ageMs: MIN } });
+    const gone = (pid: number) => pid !== 4242;
+    const live = owner({ pid: 777 });
+    let reads = 0;
+    const fs = {
+      ...w.fs,
+      readFile: async (path: string) => {
+        // the first read judges the owner; by the second read (under the takeover directory) somebody else holds the lock
+        if (path.endsWith('owner.json') && ++reads === 2) w.files.set(path, JSON.stringify(live));
+        return w.fs.readFile(path);
+      },
+    };
+    const lock = makeLock({ fs, lockPath: LOCK, pid: 101, host: 'build-1', now: () => w.clock.t, alive: (pid: number) => gone(pid) || pid === 777 });
+    const r = await lock.acquire({ pr: 7, staleMin: 30 });
+    expect(r.held).toBe(false);
+    expect(JSON.parse(w.files.get(`${LOCK}/owner.json`) as string).pid).toBe(777);
+    expect(w.dirs.has(TAKEOVER)).toBe(false);
+  });
+
+  it('a takeover directory left by a crashed taker is cleared once it is a minute old; a fresh one counts as a takeover in progress', async () => {
+    const stale = lockWorld({ alive: (pid) => pid !== 4242, held: { owner: owner({ pid: 4242 }), ageMs: MIN } });
+    stale.dirs.set(TAKEOVER, NOW0 - 2 * MIN);
+    const lock = stale.lockFor(101, 'build-1', (pid) => pid !== 4242);
+    expect((await lock.acquire({ pr: 7, staleMin: 30 })).held).toBe(true);
+    const fresh = lockWorld({ alive: (pid) => pid !== 4242, held: { owner: owner({ pid: 4242 }), ageMs: MIN } });
+    fresh.dirs.set(TAKEOVER, NOW0 - 2000);
+    const other = fresh.lockFor(101, 'build-1', (pid) => pid !== 4242);
+    expect((await other.acquire({ pr: 7, staleMin: 30 })).held).toBe(false);
+    expect(fresh.dirs.has(TAKEOVER)).toBe(true);
+  });
+
+  it('release removes the lock only while owner.json still names this holder', async () => {
+    const w = lockWorld();
+    const lock = w.lockFor(101);
+    expect((await lock.acquire({ pr: 7, staleMin: 30 })).held).toBe(true);
+    w.files.set(`${LOCK}/owner.json`, JSON.stringify(owner({ pid: 999 })));
+    await lock.release();
+    expect(w.dirs.has(LOCK)).toBe(true);
+    const mine = lockWorld();
+    const l2 = mine.lockFor(101);
+    await l2.acquire({ pr: 7, staleMin: 30 });
+    await l2.release();
+    await l2.release();
+    expect(mine.dirs.has(LOCK)).toBe(false);
+  });
+
+  it('a lock that cannot be made at all is an error, not a wait, and nothing runs', async () => {
+    const w = lockWorld();
+    const broken = makeLock({ fs: { ...w.fs, mkdir: async () => { throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); } }, lockPath: LOCK, pid: 1, host: 'build-1', now: () => w.clock.t, alive: everyoneAlive });
+    const { result, cmds, sleeps } = await goLocked(w, broken);
+    expect(result).toMatchObject({ outcome: 'error', exit: 4 });
+    expect(result.message).toMatch(/EACCES/);
+    expect(cmds).toEqual([]);
+    expect(sleeps).toEqual([]);
+  });
+
+  it('--dry-run and --verify-main on a green main make no lock call', async () => {
+    const log: string[] = [];
+    const w = lockWorld();
+    const dry = await goLocked(w, spyLock(log), [], { dryRun: true, log });
+    expect(dry.result.outcome).toBe('dry-run');
+    const verify = await goLocked(w, spyLock(log), [{ when: /^gh pr view 7 --json .*headRefOid/, reply: prView({ ...PR_CLEAN, state: 'MERGED' }) }], { verifyMain: MERGE_SHA, log });
+    expect(verify.result).toMatchObject({ outcome: 'merged', mainCheck: 'green' });
+    expect(log.filter((c) => c.startsWith('lock.'))).toEqual([]);
+  });
+
+  it('--verify-main takes the lock only for the revert, and holds it through it', async () => {
+    const log: string[] = [];
+    const w = lockWorld();
+    const rules: Rule[] = [
+      { when: /^gh pr view 7 --json .*headRefOid/, reply: prView({ ...PR_CLEAN, state: 'MERGED' }) },
+      { when: new RegExp(`^gh run list --branch main --workflow check --commit ${MERGE_SHA} `), reply: out(RUN_FAILURE) },
+    ];
+    const { result } = await goLocked(w, spyLock(log), rules, { verifyMain: MERGE_SHA, log });
+    expect(result).toMatchObject({ outcome: 'reverted', exit: 3 });
+    const acquire = log.findIndex((c) => c.startsWith('lock.acquire'));
+    const release = log.indexOf('lock.release');
+    expect(log.findIndex((c) => /^gh run list /.test(c))).toBeLessThan(acquire);
+    expect(acquire).toBeLessThan(log.findIndex((c) => /^git worktree add .*revert/.test(c)));
+    expect(log.findIndex((c) => /^gh pr merge 8 /.test(c))).toBeLessThan(release);
+    expect(log.filter((c) => c.startsWith('lock.'))).toHaveLength(2);
+  });
+
+  it('--verify-main whose revert finds the lock held past the wait gives locked, and the revert does not start', async () => {
+    const w = lockWorld({ held: { owner: owner(), ageMs: MIN } });
+    const rules: Rule[] = [
+      { when: /^gh pr view 7 --json .*headRefOid/, reply: prView({ ...PR_CLEAN, state: 'MERGED' }) },
+      { when: new RegExp(`^gh run list --branch main --workflow check --commit ${MERGE_SHA} `), reply: out(RUN_FAILURE) },
+    ];
+    const { result, cmds } = await goLocked(w, w.lockFor(101), rules, { verifyMain: MERGE_SHA, project: { mergeLockWaitMin: 0 } });
+    expect(result).toMatchObject({ outcome: 'locked', exit: 2, mainCheck: 'red' });
+    expect(count(cmds, /^git worktree add|^gh pr create/)).toBe(0);
+  });
+
+  it('without a lock dep (a caller that wired none) the merge still runs', async () => {
+    const { result } = await go();
+    expect(result.outcome).toBe('merged');
+  });
+});
+
+describe('scripts/merge-pr.js wires the lock to the file system', () => {
+  const lockDirOf = (repo: string) => join(repo, '.git', 'agent-loop-merge.lock');
+
+  it('a clean merge leaves no lock behind', () => {
+    const w = spawnWorld({ syncPolicy: 'conflict', mainCi: 'check' }, SPAWN_RULES(CHECKS_GREEN));
+    const r = w.run(['7', '--repo', w.repo]);
+    expect(r.status).toBe(0);
+    expect(existsSync(lockDirOf(w.repo))).toBe(false);
+    expect(w.calls().map((c) => c.cmd)).toContain('git rev-parse --git-common-dir');
+  }, 120_000);
+
+  it('a lock held by a live process on this host: outcome locked, exit 2, no gh call, the lock untouched', () => {
+    const w = spawnWorld({ syncPolicy: 'conflict', mainCi: 'check', mergeLockWaitMin: 0 }, SPAWN_RULES(CHECKS_GREEN));
+    mkdirSync(lockDirOf(w.repo));
+    writeFileSync(join(lockDirOf(w.repo), 'owner.json'), JSON.stringify({ pid: process.pid, host: hostname(), pr: 3, startedAt: new Date().toISOString() }));
+    const r = w.run(['7', '--repo', w.repo]);
+    expect(r.status).toBe(2);
+    const line = JSON.parse(r.stdout.trim());
+    expect(line).toMatchObject({ outcome: 'locked', exit: 2 });
+    expect(line.message).toContain(lockDirOf(w.repo));
+    expect(w.calls().filter((c) => /^gh /.test(c.cmd))).toHaveLength(0);
+    expect(existsSync(join(lockDirOf(w.repo), 'owner.json'))).toBe(true);
+  }, 120_000);
+
+  it('a lock left by a dead process on this host is taken over and removed after the merge', () => {
+    const w = spawnWorld({ syncPolicy: 'conflict', mainCi: 'check', mergeLockWaitMin: 0 }, SPAWN_RULES(CHECKS_GREEN));
+    const dead = spawnSync(process.execPath, ['-e', ''], { encoding: 'utf8' });
+    mkdirSync(lockDirOf(w.repo));
+    writeFileSync(join(lockDirOf(w.repo), 'owner.json'), JSON.stringify({ pid: dead.pid as number, host: hostname(), pr: 3, startedAt: new Date().toISOString() }));
+    const r = w.run(['7', '--repo', w.repo]);
+    expect(r.status).toBe(0);
+    const line = JSON.parse(r.stdout.trim());
+    expect(line).toMatchObject({ outcome: 'merged', exit: 0 });
+    expect(line.message).toMatch(/took over/i);
+    expect(existsSync(lockDirOf(w.repo))).toBe(false);
+    expect(existsSync(`${lockDirOf(w.repo)}.takeover`)).toBe(false);
+  }, 120_000);
+
+  it('--dry-run and --state take no lock and ask git for no directory', () => {
+    const w = spawnWorld({ syncPolicy: 'conflict', mainCi: 'check', loadWarnFactor: 1000 }, SPAWN_RULES(CHECKS_GREEN));
+    mkdirSync(lockDirOf(w.repo));
+    writeFileSync(join(lockDirOf(w.repo), 'owner.json'), JSON.stringify({ pid: process.pid, host: hostname(), pr: 3, startedAt: new Date().toISOString() }));
+    const dry = w.run(['7', '--repo', w.repo, '--dry-run']);
+    expect(JSON.parse(dry.stdout.trim()).outcome).toBe('dry-run');
+    const state = w.run(['7', '--repo', w.repo, '--state']);
+    expect(JSON.parse(state.stdout.trim()).outcome).toBe('state');
+    expect(w.calls().filter((c) => /git-common-dir/.test(c.cmd))).toHaveLength(0);
+    expect(existsSync(join(lockDirOf(w.repo), 'owner.json'))).toBe(true);
+  }, 120_000);
+});
