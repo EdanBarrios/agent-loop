@@ -613,9 +613,10 @@ describe('mergePr: tree reuse needs the main CI workflow to show no event-depend
     const byYaml = await go([sameTree, { when: lsTree, reply: out(`${WORKFLOW_DIR}check.yaml\n`) }, show('check.yaml', PLAIN_WORKFLOW)], { project: REUSE });
     expect(byYaml.result.treeReuse.allowed).toBe(true);
     const named = PLAIN_WORKFLOW.replace('name: check', 'name: "Main CI"');
-    const byName = await go([sameTree, { when: lsTree, reply: out(`${WORKFLOW_DIR}ci.yml\n${WORKFLOW_DIR}release.yml\n`) }, show('ci.yml', named), show('release.yml', 'name: release\non: push\n')], { project: { ...REUSE, mainCi: 'Main CI' } });
+    const mainRun: Rule = { when: new RegExp(`^gh run list --branch main --workflow 'Main CI' --commit ${MERGE_SHA} `), reply: out(RUN_SUCCESS) };
+    const byName = await go([sameTree, mainRun, { when: lsTree, reply: out(`${WORKFLOW_DIR}ci.yml\n${WORKFLOW_DIR}release.yml\n`) }, show('ci.yml', named), show('release.yml', 'name: release\non: push\n')], { project: { ...REUSE, mainCi: 'Main CI' } });
     expect(byName.result.treeReuse.allowed).toBe(true);
-    const twice = await go([sameTree, { when: lsTree, reply: out(`${WORKFLOW_DIR}a.yml\n${WORKFLOW_DIR}b.yml\n`) }, show('a.yml', named), show('b.yml', named)], { project: { ...REUSE, mainCi: 'Main CI' } });
+    const twice = await go([sameTree, mainRun, { when: lsTree, reply: out(`${WORKFLOW_DIR}a.yml\n${WORKFLOW_DIR}b.yml\n`) }, show('a.yml', named), show('b.yml', named)], { project: { ...REUSE, mainCi: 'Main CI' } });
     expect(twice.result.treeReuse.allowed).toBe(false);
     expect(twice.result.mainCheck).toBe('green');
     expect(twice.result.message).toContain(twice.result.treeReuse.reason);
@@ -1025,8 +1026,11 @@ describe('mergePr: the merge lock', () => {
     const log: string[] = [];
     const w = lockWorld();
     const lock = spyLock(log, [{ held: false, holder: owner(), reason: 'held by a live process' }, { held: false, holder: owner() }, { held: true }]);
-    const moved: Rule = { when: /^git merge-base --is-ancestor origin\/main /, reply: { code: 1 } };
-    const { result, sleeps } = await goLocked(w, lock, [moved], { log });
+    const moved: Rule[] = [
+      { when: /^git merge-base --is-ancestor origin\/main /, reply: { code: 1 } },
+      { when: /^gh pr view 7 --json .*headRefOid/, reply: [prView(PR_CLEAN), prView({ ...PR_CLEAN, headRefOid: SYNC_SHA })] },
+    ];
+    const { result, sleeps } = await goLocked(w, lock, moved, { log });
     expect(result.outcome).toBe('merged');
     expect(sleeps.slice(0, 2)).toEqual([5000, 5000]);
     const firstRead = log.findIndex((c) => /^gh pr view 7 /.test(c));
