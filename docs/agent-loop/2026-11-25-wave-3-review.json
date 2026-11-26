@@ -1,0 +1,861 @@
+{
+  "project": "agent-loop",
+  "wave": "3",
+  "accepted": [
+    {
+      "id": "W3-R2",
+      "kind": "defect",
+      "task": "3.5",
+      "category": "ambiguity",
+      "touches": [],
+      "dependsOn": [],
+      "costCents": 0,
+      "reversible": true,
+      "text": "3.5 adds two relays (dep-state.js, isolation.js) without saying how a null answer is read. Since 2.1, relay() follows a null answer with a probe, and a null probe pauses the wave; the existing tests answer every unknown label with null. As written, every test with a preflight would answer null for the isolation relay, then null for its probe, and pause. (d) also says 'once beside the merge dry run': a relay runs one command alone (2.2), so isolation.js needs its own relay, and the shape of result.isolation is not stated. Recommend both relays use probe:false (as the impact and test-edits relays do), isolation.js is its own relay after the dry run, and result.isolation is always present (null when it did not run).",
+      "evidence": "claude/workflows/wave-loop.js relay(): `if (!r) { if (!opts || opts.probe !== false) await probeAfterNull(label) ...`; tests/loop-version.test.ts `return answers[opts.label] ?? null`; spec 2.1(b): 'when the probe also returns null ... the wave pauses'; spec 2.2(a) and relay prompt: 'runs its command alone ... nothing joined by && or ;'.",
+      "reverseCost": "One revert of a spec edit PR.",
+      "wouldBeWrongIf": "The runtime answers an unknown label with a passing relay in every test stub; the stubs above return null.",
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "(d) Preflight runs `isolation.js` once beside the merge dry run;",
+          "replace": "(d) Preflight runs `isolation.js` once, in its own relay after the merge dry run (a relay runs one command alone); this relay and the `dep-state.js` relay of (a) are called with `probe: false`, so a null answer is not read as a usage limit and a stub that answers nothing does not pause the wave; `result.isolation` is `{ sandbox, denyReads, warnings }` as the script printed it, or null when it did not run, and the key is always present;"
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "a relay that fails or prints no JSON parks every such task (fail closed);",
+          "replace": "a relay that fails, is blocked or prints no JSON parks every such task (fail closed; the escalation says why);"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category ambiguity is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "~/dev/agent-loop-public/claude/workflows/wave-loop.js:1623-1627 relay(): a null answer calls probeAfterNull unless opts.probe is false; :1485-1496 a null probe throws pauseWave. Existing uses of probe:false at :1688 (impact) and :1736 (test-edits). Stubs answer unknown labels with null: tests/loop-version.test.ts:28, tests/wave-loop.test.ts:24, tests/wave-loop-prompts.test.ts:21, tests/wave-loop-relay.test.ts runWave (`v === undefined ? null : v`). relayPrompt at :1609-1619 says the command runs alone with nothing joined.",
+        "reason": "As written, every stubbed wave with a preflight would pause on the isolation relay, and 'beside the merge dry run' cannot be one relay. probe:false, a separate relay and a stated result shape fix both. One cost to know: with probe:false on dep-state a usage limit that starts between the preflight relay and the dep-state relay parks the relaunched tasks instead of pausing them; the preflight relay still probes first, so the window is one call."
+      }
+    },
+    {
+      "id": "W3-R3",
+      "kind": "defect",
+      "task": "3.5",
+      "category": "ambiguity",
+      "touches": [],
+      "dependsOn": [],
+      "costCents": 0,
+      "reversible": true,
+      "text": "3.5(a) checks 'every dependency that is not in the run', but wave-args.js already drops dependencies on earlier waves before they reach wave-loop, so only same-wave dependencies that a relaunch left out are ever outside the run. The unmerged earlier-wave dependency the review worried about is not covered, and the spec does not say so. wave-args.js and tests/wave-args.test.ts are owned by no wave 3 task. Also, dep-state.js defaults to `--prefix task/`; 3.5 must pass the prefix its own tasks use. Recommend stating the scope (relaunch only, earlier waves stay assumed merged) and the prefix rule; extending wave-args.js is a separate, human-chosen task.",
+      "evidence": "scripts/wave-args.js:11-12 'deps keeps only ids in the same wave (earlier waves are merged before a wave runs)' and :112 `deps: taskDeps(t.text).filter((d) => ids.has(d) && d !== t.id)`; tests/wave-args.test.ts:72 'drops dependencies on earlier waves'.",
+      "reverseCost": "One revert of a spec edit PR.",
+      "wouldBeWrongIf": "The human wants earlier-wave dependencies checked too; then wave-args.js and its test must be added to 3.5's Owns and the edit changes.",
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "(a) Dependencies outside the run: before the build loop,",
+          "replace": "(a) Dependencies outside the run (ids `wave-args.js` keeps, which means same-wave dependencies that a relaunch left out; `wave-args.js` drops dependencies on earlier waves, which stay assumed merged, a stated limit; the relay passes `--prefix` as the run's task branches spell it, the text before `<id>-`): before the build loop,"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category ambiguity is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "~/dev/agent-loop-public/scripts/wave-args.js:11-12 and :112 `deps: taskDeps(t.text).filter((d) => ids.has(d) && d !== t.id)`; tests/wave-args.test.ts:72-78 'drops dependencies on earlier waves'; wave-args.js:111 builds branches as `task/<id>-<slug>`; wave-loop.js:2388-2393 logs outside dependencies as 'treated as merged in an earlier run'. No wave 3 task owns wave-args.js (owned paths computed for 3.1 to 3.T).",
+        "reason": "The edit states what the code already does and narrows nothing: dep-state still runs for every dependency outside the run. Checking earlier waves needs wave-args.js and its test, which no wave 3 task owns, so stating the limit is the honest form."
+      }
+    },
+    {
+      "id": "W3-R5",
+      "kind": "defect",
+      "task": "3.2",
+      "category": "ambiguity",
+      "touches": [],
+      "dependsOn": [],
+      "costCents": 0,
+      "reversible": true,
+      "text": "Two gaps in how a held lock reaches the workflow. (1) mergeLockWaitMin defaults to 20 minutes, but the merge relay runs the script with a Bash timeout of 600000 ms (10 minutes), and CI_RELAY_MAX_MIN is 9 for that reason. A 20-minute wait is killed by the tool, and the loop then reads a lost relay. (2) The new outcome `locked` uses exit 2, which wave-loop reads as a refusal: with no conflictFiles and ciState not red it falls to failedMerge('merge failed') and parks the task. 3.5 never handles `locked`. Recommend default 5 minutes and a cap of 8, and 3.5 treats `locked` as a wait (see W3-R14 edit).",
+      "evidence": "claude/workflows/wave-loop.js relayPrompt: 'the Bash tool call ... MUST include the parameter timeout=600000'; `const CI_RELAY_MAX_MIN = 9 // one foreground relay call (Bash max 10 min)`; wave-loop.js merge handling: `if (exit === 2) { ... return failedMerge(r, pending ? ... : 'merge failed', message, line) }`; spec 3.2: 'up to project.mergeLockWaitMin (default 20); then the outcome is locked, exit 2'.",
+      "reverseCost": "One revert of a spec edit PR.",
+      "wouldBeWrongIf": "Relays run merge-pr.js in the background with no 10-minute cap; the relay prompt says the opposite.",
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "up to `project.mergeLockWaitMin` (default 20); then",
+          "replace": "up to `project.mergeLockWaitMin` (default 5, a larger value is lowered to 8: a merge relay's Bash call ends at 10 minutes); then"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category ambiguity is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "~/dev/agent-loop-public/claude/workflows/wave-loop.js:1611 'MUST include the parameter timeout=600000'; :1073 `const CI_RELAY_MAX_MIN = 9 // one foreground relay call (Bash max 10 min)`; :2126-2145 exit 2 with no conflictFiles and ciState not red ends in failedMerge(... 'merge failed' ...); claude/lib/merge.js MERGE_EXIT has no 'locked' key today.",
+        "reason": "A 20-minute wait cannot finish inside a 10-minute relay call, and the loop would read a lost relay. Default 5 with a cap of 8 fits the cap the CI relays already use. It only works together with W3-R14's (f): without that a `locked` result still parks the task."
+      }
+    },
+    {
+      "id": "W3-R7",
+      "kind": "question",
+      "task": "3.3",
+      "category": "performance",
+      "touches": [],
+      "dependsOn": [],
+      "costCents": 0,
+      "reversible": true,
+      "text": "Do you want 3.3 (reuseTreeCi default false) and 3.5(b) (settleMain default true) both on by default? Today, with syncPolicy always, the branch is synced and CI is green on that head, so the merged tree equals the head's tree and the main check is skipped for most merges. With 3.3 the skip stops and, with mainCi set, every merge returns 'deferred'; with 3.5(b) the next merge then waits for that main run. A wave's merges become serial with one full main CI run each (about one CI duration per task). That is what the review asked for (invariant 4 without exception) but it is a makespan cost, and wave 4's benchmark could measure it. Recommendation: keep both defaults as specified (safer), say the cost in OPERATING.md, and let the human opt out per project with reuseTreeCi true and settleMain false.",
+      "evidence": "claude/lib/merge.js:264 `if (await treeUnchanged(mergeSha, headSha)) { result.mainCheck = 'skipped:unchanged' ...`; docs/OPERATING.md:38 'The check on main is skipped when the merged tree is the tree CI checked'; spec 3.3 'becomes opt-in ... (default false)' and 3.5(b) '`project.settleMain: false` restores 2.4's behaviour'.",
+      "reverseCost": "A config edit per project (reuseTreeCi true, settleMain false), or one revert PR.",
+      "wouldBeWrongIf": "Merged trees already differ from the PR head in most waves (syncPolicy conflict, as this repo's loop.local.json uses), so the skip rarely fires and the cost is small.",
+      "edits": [],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category performance is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "~/dev/agent-loop-public/claude/lib/merge.js treeUnchanged() skip sets mainCheck 'skipped:unchanged'; wave-loop.js:2075 adds --defer-main whenever mainCi is set; docs/OPERATING.md:38. Recorded results of waves 1 and 2 of this repo (scratchpad v24-wave1-result.json and v24-wave2-run2/3.json): 4 of 7 merges were 'skipped:unchanged'; the three that ran the main check took 22.4 s, 22.1 s and 1.3 s.",
+        "reason": "Keeping both defaults is the safe reading of invariant 4 and matches the spec. In this repo the cost is about 22 s per merge, so it is small here; a project with slow CI pays one CI run per task. The recommendation to say the cost in OPERATING.md has no edit and 3.5(e)'s list does not include it, so someone has to add that sentence by hand."
+      }
+    },
+    {
+      "id": "W3-R8",
+      "kind": "defect",
+      "task": "3.3",
+      "category": "ambiguity",
+      "touches": [],
+      "dependsOn": [],
+      "costCents": 0,
+      "reversible": true,
+      "text": "3.3's workflow scan is underspecified in three ways. (1) project.mainCi is the workflow's name (it is passed to `gh run list --workflow`), but the spec reads `.github/workflows/<mainCi>.yml`; a project whose name differs from its file name never gets the skip. (2) 'push and pull_request triggers run the same jobs' has no definition and no YAML parser exists in the dependencies (vite and vitest only). The repo's own check.yml has `push: branches: [main]` and an unfiltered `pull_request:`; a worker could read that either way. (3) With mainCi empty there is no workflow file, so reuseTreeCi true can never skip, which should be stated. Recommend: resolve the file by stem first, else by a top-level `name:` match over `git ls-tree` of .github/workflows at the merge commit; the textual rule is both triggers present, no `paths`, `paths-ignore`, `branches-ignore`, `tags` filter on either, `branches` allowed only on push and only when it lists the default branch, and no job-level `if:`; reuseTreeCi has effect only with mainCi.",
+      "evidence": "claude/lib/merge.js:431 `gh run list --branch ${sh(base)} --workflow ${sh(mainCi)} ...`; docs/OPERATING.md:302 '`mainCi` | name of the CI workflow'; .github/workflows/check.yml `name: check` / `on: pull_request: push: branches: [main]`; package.json devDependencies are vite 8.3.5 and vitest 5.0.5 only.",
+      "reverseCost": "One revert of a spec edit PR.",
+      "wouldBeWrongIf": "Every adopting project names its workflow file after its name: field (this repo does), and a worker reads the scan the same way; then the edit only makes it explicit.",
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "(`.github/workflows/<mainCi>.yml` or `.yaml`, read at the merge commit)",
+          "replace": "(`.github/workflows/<mainCi>.yml` or `.yaml`, else the one file in that directory whose top-level `name:` equals `mainCi`, found with `git ls-tree` and read with `git show` at the merge commit; with `mainCi` empty there is no file, so the check runs)"
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "and an `on:` block whose `push` and `pull_request` triggers run the same jobs (no job-level `if:`).",
+          "replace": "and an `on:` block that has both `push` and `pull_request`, with no `paths`, `paths-ignore`, `branches-ignore` or `tags` filter on either, a `branches` filter only on `push` and only when it lists the default branch, and no job-level `if:` (a text scan; no YAML parser is added)."
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category ambiguity is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "~/dev/agent-loop-public/claude/lib/merge.js waitMainRun: `gh run list --branch ${sh(base)} --workflow ${sh(mainCi)} --commit ${sha}`; docs/OPERATING.md:302 '`mainCi` | name of the CI workflow'; .github/workflows/check.yml has `name: check`, an unfiltered `pull_request:` and `push: branches: [main]`; package.json devDependencies are vite 8.3.5 and vitest 5.0.5 only.",
+        "reason": "The spec's rule 'run the same jobs' has no test a worker could write, and the file lookup by <mainCi>.yml misses a workflow named differently from its file. The textual rule is stricter than needed in places (a `branches` filter on pull_request prevents the skip) but every miss fails towards running the check, and the feature is opt-in. Two filters it does not name, `tags-ignore` and `types`, could be added to the deny list."
+      }
+    },
+    {
+      "id": "W3-R9",
+      "kind": "defect",
+      "task": "3.4",
+      "category": "ambiguity",
+      "touches": [],
+      "dependsOn": [],
+      "costCents": 0,
+      "reversible": true,
+      "text": "3.4 reads settings 'from the same settings files as 1.1's check' and says the sandbox key comes from 'the spike', and neither is settled. permission.js exports no settings reader (readDoc is private; the file reading lives inside scripts/merge-pr.js, owned by 3.2), and 3.4 may not edit either, so isolation.js needs its own reader. The `warnings` entries have no text, though 3.5(d) logs them and no test checks them. The spike: the documented key is `sandbox.enabled` (sandbox filesystem denials are under `sandbox.filesystem.denyRead`). Recommend writing the key, the file order and fixed warning strings into the spec. Note that Read deny rules cover the Read tool and the Bash commands Claude Code recognizes (cat, head, tail, sed, tee), not every command, which is why the sandbox and the hookify rule are both listed.",
+      "evidence": "claude/lib/permission.js: `function readDoc(json)` is not exported, exports are MANAGED_SETTINGS_PATHS and checkPermission only; scripts/merge-pr.js settingsDoc()/permissionFor(); https://code.claude.com/docs/en/sandboxing lists `sandbox.enabled` and `sandbox.filesystem.denyRead`; https://code.claude.com/docs/en/permissions: 'Read and Edit deny rules apply to Claude's built-in file tools. In a Bash command Claude Code can analyze, they also apply to ... file commands it recognizes, such as cat, head, tail, sed, and tee.'",
+      "reverseCost": "One revert of a spec edit PR.",
+      "wouldBeWrongIf": "Claude Code renames the sandbox key; the fetched docs are dated 2026-11-20.",
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "warnings }` from the same settings files as 1.1's check (user, project, project local, managed): `sandbox.enabled` is\n  read from the key the spec review's spike names;",
+          "replace": "warnings }` from the same four settings files as 1.1's check (user, project, project local, managed), read by `isolation.js` itself with the fixed `missing` and `unparseable` error strings (`permission.js` exports no reader and is not owned here): `sandbox.enabled` is\n  the settings key `sandbox.enabled` (spike, from code.claude.com/docs/en/sandboxing), `source` is the first file that sets it in the order managed, project local, project, user, and a `warnings` entry is one of the fixed strings `sandbox is not enabled`, `deny rule missing: <rule>` or `settings file unparseable: <path>`;"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category ambiguity is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "~/dev/agent-loop-public/claude/lib/permission.js exports only MANAGED_SETTINGS_PATHS (:30) and checkPermission (:116); readDoc (:42) is private. scripts/merge-pr.js:168-186 holds settingsDoc() and permissionFor(). Fetched live https://code.claude.com/docs/en/sandboxing (dated 2026-11-20): 'set sandbox.enabled to true in a settings file'; 'Managed settings rank above local settings'. Fetched https://code.claude.com/docs/en/permissions (2026-11-25): 'Read and Edit deny rules apply to Claude's built-in file tools. In a Bash command Claude Code can analyze, they also apply to redirection targets and to file commands it recognizes, such as cat, head, tail, sed, and tee.'",
+        "reason": "Both open points are settled by sources: the key is `sandbox.enabled`, and 3.4 cannot reuse a reader it does not own. The source order in the edit matches the documented precedence. Fixed warning strings make 3.5(d)'s log lines testable."
+      }
+    },
+    {
+      "id": "W3-R10",
+      "kind": "defect",
+      "task": "3.4",
+      "category": "ownership",
+      "touches": [],
+      "dependsOn": [],
+      "costCents": 0,
+      "reversible": true,
+      "text": "The new hookify rule must keep the format two existing tests read. claude/lib/merge.test.ts hookifyPatterns() loads every `claude/hookify.*.local.md` with `event: bash`, takes a single-line `pattern:` and builds a JavaScript RegExp, then asserts that no recorded merge call matches it; a rule in the `conditions:` form is skipped, and a Python-style inline flag such as (?i) throws. tests/hookify.test.ts lists the rules by name, so the new rule is not covered there and 3.4 does not own that file. Recommend the rule is `event: bash` with one single-line JavaScript-valid `pattern:`, and 3.4 owns tests/hookify.test.ts to add the rule to its list.",
+      "evidence": "claude/lib/merge.test.ts:128-136 `if (!/^event:\\s*bash\\s*$/m.test(text)) continue; const m = text.match(/^pattern:\\s*(.+)$/m); if (m) patterns.push(new RegExp(m[1]))`; tests/hookify.test.ts `const rules = ['hookify.block-force-push.local.md', 'hookify.block-secrets.local.md', 'hookify.block-commit-on-main.local.md']`.",
+      "reverseCost": "One revert of a spec edit PR.",
+      "wouldBeWrongIf": "The credential rule is written as an `event: file` rule like block-secrets; but it must match Bash command text, so it cannot be.",
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "The new hookify rule blocks Bash commands that read credentials: paths under",
+          "replace": "The new hookify rule (`event: bash`, one single-line `pattern:` that is also a valid JavaScript regular expression, with no inline flags, because `claude/lib/merge.test.ts` and `tests/hookify.test.ts` read every rule that way) blocks Bash commands that read credentials: paths under"
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "`install.sh`, `tests/install.test.ts`.",
+          "replace": "`install.sh`, `tests/install.test.ts`, `tests/hookify.test.ts` (the new rule joins its `rules` list)."
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category ownership is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "~/dev/agent-loop-public/claude/lib/merge.test.ts:128-138 hookifyPatterns(): every claude/hookify.*.local.md with `event: bash` and a single-line `pattern:` becomes `new RegExp(m[1])`, and assertSafe runs each recorded merge call against it. tests/hookify.test.ts:6-10 lists three rules by name. claude/hookify.block-force-push.local.md shows the format. Owned paths of 3.4 after the edit, computed with spec-lint's ownedPaths: the six existing plus tests/hookify.test.ts; `rules` is not picked up as a path.",
+        "reason": "A rule in another form is silently skipped by the merge test, and an inline flag throws when the test file loads, which would break a test 3.2 owns. One wording slip: tests/hookify.test.ts reads the rules it lists, not every rule; that is why the Owns addition is needed. 3.4 now owns 7 paths, so spec-lint adds a warning (more than about 6), not an error."
+      }
+    },
+    {
+      "id": "W3-R11",
+      "kind": "defect",
+      "task": "3.4",
+      "category": "ambiguity",
+      "touches": [],
+      "dependsOn": [],
+      "costCents": 0,
+      "reversible": true,
+      "text": "The per-project gh rule written by install.sh has no stated way to read `github` (install.sh is bash; no jq is required anywhere, Node 24 is a prerequisite), no escaping of `.` in the repo name, and a test with only three cases. The stated purpose is to stop a session reaching another repository, and the common ways to do that are not tested: `-R=other/repo`, `--repo other/repo`, a pull request URL, `gh api /repos/other/repo/...`, `gh repo clone other/repo`. Recommend reading the field with node, accepting only `owner/name` characters, escaping the dots, and adding those cases (blocked) plus `gh api repos/owner/name/pulls` (allowed).",
+      "evidence": "install.sh has no JSON parsing and uses only bash and ln; templates/loop.local.json `\"github\": \"owner/repo\"`; README.md:48 'Node 24'; spec 3.4 test: 'blocks `gh pr view 1 -R other/repo` and allows `gh pr view 1 -R owner/name` and a bare `gh pr view 1`'.",
+      "reverseCost": "One revert of a spec edit PR.",
+      "wouldBeWrongIf": "The rule is meant only as a speed bump and H5's fine-grained token is the real control; the spec says so for H5, so the tests should still cover the forms above.",
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "`install.sh` also writes (not links) `.claude/hookify.gh-this-repo.local.md` from the",
+          "replace": "`install.sh` also writes (not links) `.claude/hookify.gh-this-repo.local.md` (reading `github` with `node`, accepting only `^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`, with `.` escaped in the pattern) from the"
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "blocks `gh pr view 1 -R other/repo` and allows `gh pr view 1 -R owner/name` and a bare `gh pr view 1`.",
+          "replace": "blocks `gh pr view 1 -R other/repo`, `gh pr view 1 -R=other/repo`, `gh pr view 1 --repo other/repo`, `gh pr view https://github.com/other/repo/pull/1`, `gh api repos/other/repo/pulls` and `gh repo clone other/repo`, and allows `gh pr view 1 -R owner/name`, `gh api repos/owner/name/pulls` and a bare `gh pr view 1`."
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category ambiguity is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "~/dev/agent-loop-public/install.sh uses only bash, ln, cp, grep and git: no JSON parsing. templates/loop.local.json has `\"github\": \"owner/repo\"`. grep over claude/workflows, claude/agents, scripts and claude/lib finds no `gh api`, `gh repo` or `gh ... -R` in the loop's own commands, so the added blocked forms do not block the loop. Every relay command carries `--repo <absolute path>` (wave-loop.js:2075 `node ${SCRIPTS}/merge-pr.js ${w.prNumber} --repo ${REPO}`).",
+        "reason": "Reading the field with node, validating it and escaping the dots are needed, and the added blocked forms are the common ways to reach another repository. Two gaps to add when applying it: an allowed case for the loop's own relay command (`node <scripts>/merge-pr.js 1 --repo /abs/path`), because a pattern keyed on `--repo` that is not anchored to `gh` would block every merge relay; and an allowed case for `gh pr create --body \"see https://github.com/other/repo/issues/1\"`, because the new URL case invites a pattern that blocks PR bodies citing another repository. The rule's description sentence still names only `--repo`/`-R` and `gh api`, while the test now also requires the URL and `gh repo clone` forms."
+      }
+    },
+    {
+      "id": "W3-R14",
+      "kind": "defect",
+      "task": "3.5",
+      "category": "correctness",
+      "touches": [],
+      "dependsOn": [],
+      "costCents": 0,
+      "reversible": true,
+      "text": "Two things 3.5 needs and omits. (1) `locked` (3.2) is read as a refusal by wave-loop and parks the task; it should be a wait: run the merge relay again, at most twice more, then park naming the holder, with no FIX round. (2) settleMain says only that a merge 'does not start while an earlier merge's deferred check is still running'. It does not say what happens when that check ends without a verdict (verifyDeferred returns failed after three 'pending' calls, a blocked relay, or no JSON); a waiting merge would then either run on an unverified main or wait forever. Recommend that ends the wait, no further merge starts, and each merge-ready task parks with `main not verified after <task>`. Also the docs line should name the H2 rules for the two new scripts.",
+      "evidence": "wave-loop.js verifyDeferred(): `return { failed: true, what: 'check on main still running after ${MAIN_VERIFY_CALLS} watch calls', ...}` and `x.status === 'blocked'` / `'none'` returns; merge exit 2 branch ends in `failedMerge(r, ... 'merge failed' ...)`; spec 3.5(b): 'A red check is reverted before the next merge starts.'",
+      "reverseCost": "One revert of a spec edit PR.",
+      "wouldBeWrongIf": "The workflow already treats a failed verify as a stop for all merges; failedMerge only parks the one task (it escalates and returns), so it does not.",
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "A red check is reverted before the next merge starts.",
+          "replace": "A red check is reverted before the next merge starts. A deferred check that ends without a verdict (still pending after its watch calls, a blocked relay, no JSON) ends the wait and starts no further merge: each task waiting to merge is parked with `main not verified after <task>`."
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "`dep-state.js` and H4 and H5. Test: a relaunch whose missing",
+          "replace": "`dep-state.js` and H4 and H5 (and the H2 allow rules for `dep-state.js` and `isolation.js`). (f) A merge result with `outcome: \"locked\"` is a wait, not a refusal: the merge relay is run again, at most twice more, and the task is then parked naming the holder from `message`; it starts no FIX round. Test: a `locked` result then a merged one merges; three `locked` results park. A relaunch whose missing"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category correctness is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "~/dev/agent-loop-public/claude/workflows/wave-loop.js:2166-2185 verifyDeferred(): MAIN_VERIFY_CALLS = 3, a blocked relay, a null relay and a missing JSON line each return `failed: true`; :2112-2113 the caller then runs failedMerge for that one task only. :2126-2146 exit 2 without conflict files or red CI ends in failedMerge 'merge failed'. Spec 3.2: the lock is taken before the first write, so a `locked` result made no write and a second run is safe.",
+        "reason": "Both holes are real: `locked` would park a task that only had to wait, and settleMain says nothing for a deferred check that ends without a verdict. Three relay runs at W3-R5's 5 minutes bound the wait at 15 minutes. The wording 'each task waiting to merge is parked' should be read like the existing mergeBlocked rule, covering tasks that become merge-ready later in the wave too."
+      }
+    },
+    {
+      "id": "W3-R15",
+      "kind": "defect",
+      "task": "3.5",
+      "category": "permission",
+      "touches": [],
+      "dependsOn": [],
+      "costCents": 0,
+      "reversible": true,
+      "text": "H2 and H3 list the scripts a relay runs (merge-pr.js, wait-ci.js, ci-only.js, impact.js, test-edits.js), but 3.5 adds two more relays, dep-state.js and isolation.js. Without a permissions.allow rule they go to the auto-mode classifier, which refused three merges in wave 2 for the same reason; dep-state.js would then fail closed and park every relaunched task, and the preflight permission check covers only merge-pr.js. They run only on loop 2.5.0, so the rules are needed at the relink (H1), not before wave 3 is built. Recommend naming them in H1.",
+      "evidence": "Spec H2 and H3 lists; spec 3.2/2.2 'in wave 2 the compound `cd <repo> && node .../merge-pr.js ...` went to the auto-mode classifier, which refused three merges'; spec 3.5 (a) and (d) new relays.",
+      "reverseCost": "One revert of a spec edit PR.",
+      "wouldBeWrongIf": "The existing allow rule is a prefix rule over the whole scripts directory; H2's example is per script (`merge-pr.js *`), so it is not.",
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "Relink projects (`install.sh`) to this checkout and point `~/.claude/CLAUDE.md` at it",
+          "replace": "Add `permissions.allow` rules for `dep-state.js` and `isolation.js` as for H2, then relink projects (`install.sh`) to this checkout and point `~/.claude/CLAUDE.md` at it"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category permission is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Spec rows H2 and H3 list merge-pr.js, wait-ci.js, ci-only.js, impact.js and test-edits.js only. ~/.claude/settings.json has five per-script allow rules of the form `Bash(node ~/dev/agent-loop-public/.claude/scripts/<script>.js *)`, none for dep-state.js or isolation.js. scripts/merge-pr.js commandForms() checks merge-pr.js forms only, so preflight does not predict a refusal of the new relays.",
+        "reason": "Without the rules the dep-state relay goes to the classifier and, failing closed, parks every relaunched task. The rules are needed at the relink, as the edit says. Note for whoever applies it: the spec's envelope lists 'permission settings' as human-only, but HUMAN_ONLY_CATEGORIES in claude/lib/envelope.js:37-59 has no permission entry, so category `permission` is not routed to a human by the code. The edit only adds a step to a human checklist row and changes no setting."
+      }
+    },
+    {
+      "id": "W3-R16",
+      "kind": "defect",
+      "text": "3.1 matches the wrong revert branch, and leaves four things open. The loop makes revert branches in two places with two names: `merge.js` uses `revert/pr-<PR number>`, and the merger prompt in `wave-loop.js` (step 6, red check on main) tells the agent to create `revert/<task id>`. The spec's `revert/<id>` is therefore half right; matching only one form misses the other and reports a reverted task as merged. Recommend matching both: a merged PR that merged after the task PR and whose head branch is `revert/<task id>` or `revert/pr-<task PR's number>`. Also: (a) resolve the default branch with `git symbolic-ref --short refs/remotes/origin/HEAD` as `escaped.js` does; (b) a failed `git fetch` gives `onDefault: false`, reason `fetch failed`; (c) the 1000 cap: the spike could not show whether `gh` returns more than 1000 rows when `--limit` is above 1000 (it probed a repo with 50 PRs), so do not rely on more than 1000; when exactly 1000 rows come back and none matches the task, give reason `not in the newest 1000 merged PRs` plus a `note`, not `no merged PR`; (d) give `reason` a closed set of values, since 3.5 prints it. mergeCommit was non-null on all 50 merged PRs probed, but the merge method per PR was not recorded, so squash and rebase stay unconfirmed: keep the rule that a null mergeCommit gives `onDefault: false`, reason `no merge commit`, which fails closed.",
+      "evidence": "claude/lib/merge.js:469 ``const branch = `revert/pr-${n}` ``; claude/workflows/wave-loop.js:1435 'git worktree add ${WT}/revert-${t.id} -b revert/${t.id} main, git revert -m 1 <mergeSha> there, push, open a PR titled \"Revert ${t.id}...'; claude/lib/escaped.js:196 `gitQuiet(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])`; claude/lib/escaped.js:227 `head.startsWith('revert/')`; spec 3.1 'reverted by a `revert/<id>` merge (2.3's revert rule)'; spike F2: probe `gh pr list --state merged --limit 1001` returned 50 rows, cap above 1000 not settled.",
+      "reverseCost": "One revert of a spec edit PR.",
+      "wouldBeWrongIf": "The merger step 6 in wave-loop.js is changed to `revert/pr-<n>` before wave 3 builds 3.1, so only one form exists; or `gh pr list --limit` above 1000 is shown to return all rows, which would make the cap reason unnecessary.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "category": "ambiguity",
+      "task": "3.1",
+      "dependsOn": [
+        "F2"
+      ],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "reverted by a `revert/<id>` merge (2.3's revert rule)",
+          "replace": "reverted by a merged PR that merged after it and whose head branch is `revert/<id>` (the merger's red-on-main step in `wave-loop.js`) or `revert/pr-<that PR's number>` (the branch `merge.js` makes)"
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "origin/<default branch>` exits 0 after a `git fetch`; a task with no merged PR has `merged: false` and a `reason`.",
+          "replace": "origin/<default branch>` exits 0 after a `git fetch` (the default branch is `git symbolic-ref --short refs/remotes/origin/HEAD`; a failed fetch gives `onDefault: false`, reason `fetch failed`; a null `mergeCommit` gives `onDefault: false`, reason `no merge commit`); a task with no merged PR has `merged: false` and a `reason` (one of `no merged PR`, `reverted`, `not on default branch`, `no merge commit`, `fetch failed`, `gh failed`, or `not in the newest 1000 merged PRs` with a `note` when exactly 1000 rows come back and none matches; the tool does not assume `gh` returns more than 1000)."
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "a reverted task (false, `reverted`);",
+          "replace": "a task reverted through a `revert/<id>` PR and one through a `revert/pr-<n>` PR (both false, `reverted`); a fetch failing (`fetch failed`); 1000 rows with no match (the cap reason);"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category ambiguity is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "~/dev/agent-loop-public/claude/lib/merge.js:469 ``const branch = `revert/pr-${n}` ``; claude/workflows/wave-loop.js:1435 merger prompt step 6 `-b revert/${t.id}`; claude/lib/escaped.js:196 `symbolic-ref --short refs/remotes/origin/HEAD` and :227 `head.startsWith('revert/')`; escaped.js:43 and :171 handle the 1000 cap with a note.",
+        "reason": "Two revert branch names exist and the spec matched one. Failing closed on a null merge commit, a failed fetch and a full page of 1000 rows is the safe reading. Two small gaps that do not change the verdict: 'merged after it' needs `mergedAt` (or PR number order), which the spec's `--json number,headRefName,mergeCommit` does not fetch; and a revert made by hand with GitHub's Revert button (head branch `revert-<n>-<branch>`) is still reported as merged."
+      }
+    },
+    {
+      "id": "W3-R18",
+      "kind": "question",
+      "text": "H4 says to turn on the Bash sandbox 'after wave 3' with no rehearsal. The spike answers part of this. Writes: a sibling directory of the repo is not writable by default, so the task worktrees directory (`project.worktrees`) needs a `sandbox.filesystem.allowWrite` entry (absolute path; the docs say on Linux it must already exist). The merge lock under the git common dir is covered by the docs only when the working directory is a linked worktree (the shared .git, except hooks/ and config, is writable); when a relay runs in the main checkout the .git is inside the working directory. Network: `allowedDomains` starts empty and the docs do not say what `gh` needs, and suggest `excludedCommands` (such as `gh *`) for gh and git network commands. So the entries are not known from the docs and a wrong guess stops every merge relay. Recommend H4 is done as: add the `permissions.deny` read rules now (safe); turn the sandbox on in one project; run the preflight and one small wave; add the worktrees path to `allowWrite` and, from what fails, either `api.github.com` entries to `allowedDomains` or `gh *` and `git push *` to `excludedCommands`; only then enable it elsewhere. Also run the 3.2 lock test inside the sandbox, because the docs do not name lock directories.",
+      "evidence": "Spike F1: 'A sibling directory of the repo is NOT writable by default; it needs an explicit sandbox.filesystem.allowWrite entry'; 'sandbox.network.allowedDomains starts empty. The docs give no statement that api.github.com or gh needs a specific entry'; 'the docs do not explicitly name lock directories'. Spec H4: 'Add the `permissions.deny` read rules `isolation.js` lists, and turn on Claude Code's Bash sandbox'; templates/loop.local.json `\"worktrees\": \"/absolute/path/to/repo-worktrees\"`; spec 3.2 lock at `<git common dir>/agent-loop-merge.lock`.",
+      "reverseCost": "Turn the sandbox off again (a settings edit); the spec edit is one revert PR.",
+      "wouldBeWrongIf": "The unread tail of the sandboxing page (about 12,000 characters) or a rehearsal shows that gh to api.github.com and writes to the worktrees directory work with the sandbox on and no entries.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "category": "permission",
+      "task": "3.4",
+      "dependsOn": [
+        "F1"
+      ],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "| H4 | after wave 3 | Add the `permissions.deny` read rules `isolation.js` lists, and turn on Claude Code's Bash sandbox | agents run with your privileges; the loop can only check and warn (invariant 6) |",
+          "replace": "| H4 | after wave 3 | Add the `permissions.deny` read rules `isolation.js` lists. Then turn on Claude Code's Bash sandbox in one project first: add the `project.worktrees` directory to `sandbox.filesystem.allowWrite` (a sibling of the repo is not writable by default), run the preflight and one small wave, and add what fails (either `api.github.com` to `sandbox.network.allowedDomains`, or `gh *` and `git push *` to `sandbox.excludedCommands`) before turning it on in other projects | agents run with your privileges; the loop can only check and warn (invariant 6); the relays write outside the repository and call gh, so an unrehearsed sandbox can stop every merge |"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category permission is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Fetched live https://code.claude.com/docs/en/sandboxing (2026-11-20): 'commands inside the sandbox can write to the working directory, a per-user temp directory, and any directories you've added'; 'When the working directory is a linked git worktree, the sandbox also allows writes to the main repository's shared .git directory'; 'Your allowed domains start empty'; 'Tools such as gh, gcloud, and terraform may fail TLS verification under Seatbelt ... add a pattern for each tool, such as gh *, to excludedCommands'; 'On Linux and WSL2, an entry for a path that doesn't exist yet has no effect'. ~/dev/agent-loop-public/.claude/loop.local.json sets `worktrees` to a sibling directory of the repo; ~/.claude/settings.json has no `sandbox` key today.",
+        "reason": "The docs confirm that an unrehearsed sandbox would stop writes to the worktrees directory and probably `gh`, so one project first is right. Add one thing to the row: the relays run `node <scripts>/merge-pr.js ...`, `wait-ci.js` and the like, and `gh` and `git` run inside those node processes, so excludedCommands patterns `gh *` and `git push *` do not match them; they need their own patterns or allowed domains. Same envelope note as W3-R15: category `permission` is human-only in the spec but not in claude/lib/envelope.js."
+      }
+    },
+    {
+      "id": "W3-R19",
+      "kind": "defect",
+      "task": "3.T",
+      "category": "test",
+      "touches": [],
+      "dependsOn": [],
+      "costCents": 0,
+      "reversible": true,
+      "text": "3.T has no case for the pieces 3.5 wires that carry the most risk, and for a lock that has to hold across processes of one clone only. The lock is a directory under the clone's git common dir, so two sessions with two clones of one remote (the user is running a second session) are not serialized; the spec says 'the guarantee no longer depends on the caller'. Recommend stating in docs/OPERATING.md (3.5(e)) and in the 3.2 text that the lock serializes one clone, and adding to 3.T a case where a held lock gives `locked` and the wave relays again.",
+      "evidence": "Spec 3.2: 'a directory `<git common dir>/agent-loop-merge.lock`'; spec 3.T test list: serialization, relaunch park, reuseTreeCi off, high finding fails the gate (no locked case, no settleMain case).",
+      "reverseCost": "One revert of a spec edit PR.",
+      "wouldBeWrongIf": "Each wave runs from exactly one clone per remote; that is the practice but the lock exists to stop relying on it.",
+      "edits": [],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category test is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Spec 3.2: the lock is 'a directory `<git common dir>/agent-loop-merge.lock`', so it is per clone (linked worktrees share it, a second clone does not). Spec 3.T test list: serialization by the lock, an unmerged outside dependency parks, reuseTreeCi off, a high finding fails the gate; no `locked` case and no settleMain case.",
+        "reason": "Both points hold from the spec text. The recommendation carries no edits, so accepting it changes nothing: the one-clone sentence for 3.2 and 3.5(e) and the 3.T case have to be written by hand. The 3.T case depends on W3-R14's (f); without it 'the wave relays again' contradicts 3.5."
+      }
+    }
+  ],
+  "asked": [
+    {
+      "id": "W3-R1",
+      "kind": "defect",
+      "task": "3.5",
+      "category": "ownership",
+      "touches": [],
+      "dependsOn": [],
+      "costCents": 0,
+      "reversible": true,
+      "text": "3.5 breaks tests that other tasks own, and its Owns line only says 'the exact calls lists in tests that pin them'. Besides the calls lists, (1) tests/wave-loop-v24.test.ts (owned by 2.1) asserts the literal 2.4.0 in the case 'the loop version is 2.4.0 everywhere', and tests/v24-e2e.test.ts (2.T) asserts loopVersion '2.4.0' and 'Loop: 2.4.0'; the 2.5.0 bump fails all three. (2) tests/wave-loop-gates.test.ts (2.2) pins the exact key list of the wave result with toEqual, so adding result.isolation fails it. (3) tests/wave-loop-relay.test.ts (2.2) 'a dependency that is not in this run counts as merged earlier' runs a task with outside deps and a stub that answers nothing for the new dep-state relay, so under 3.5(a) it would park. (4) preflight:merge is pinned in about ten test files, and the new isolation relay adds a call to each. A worker may edit only owned paths, so it would stop with a question. Recommend 3.5 owns exactly these edits, makes the version assertions read package.json, and says the PR body needs a Test edits: section, because wave 3 is built by loop 2.4.0 whose test-edits gate sends an unexplained changed assertion back as FIX.",
+      "evidence": "tests/wave-loop-v24.test.ts:346-354 `expect(VERSION).toBe('2.4.0'); expect(source).toContain(\"const LOOP_VERSION = '2.4.0'\")`; tests/v24-e2e.test.ts:171 `expect(wave.out.loopVersion).toBe('2.4.0')` and :312 `toContain('Loop: 2.4.0')`; tests/wave-loop-gates.test.ts:190 `expect(Object.keys(out).sort()).toEqual(['decisions', ... 'wave'])`; tests/wave-loop-relay.test.ts:753-760; `grep -c preflight:merge tests/*.ts` is non-zero in loop-perf, loop-version, scorecard, speed-e2e, wave-loop-findings, v24-e2e, wave-timeline, wave-loop-v24, wave-loop-prompts and wave-loop-relay.",
+      "reverseCost": "One revert of a spec edit PR.",
+      "wouldBeWrongIf": "The workers of 3.5 were already allowed to edit any test their change breaks (the spec's rule for 2.1 and 2.2 lists each path), or those tests read the version and key list dynamically. They do not: the literals are above.",
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "and the exact `calls` lists in tests\n  that pin them. Depends on 3.1, 3.3 and 3.4.",
+          "replace": "and, in these tests only: the exact `calls` lists and lists of agents a wave started (every test under `tests/` that pins `preflight:merge` or a task's agent list: `tests/loop-version.test.ts`, `tests/loop-perf.test.ts`, `tests/speed-e2e.test.ts`, `tests/wave-loop-relay.test.ts`, `tests/wave-loop-v24.test.ts`, `tests/wave-loop-prompts.test.ts`, `tests/wave-loop-findings.test.ts`, `tests/wave-loop.test.ts`, `tests/wave-loop-gates.test.ts`, `tests/chain-e2e.test.ts`, `tests/v24-e2e.test.ts`); the `2.4.0` literals of the 2.1 (d) case in `tests/wave-loop-v24.test.ts` and the loopVersion and `Loop: 2.4.0` lines of `tests/v24-e2e.test.ts` (changed to read `package.json`); the exact key list in `tests/wave-loop-gates.test.ts` ('gives the v1 result plus empty reality and decisions'); and the case 'a dependency that is not in this run' in `tests/wave-loop-relay.test.ts` (its stub answers the dep-state relay). These are assertion changes after the test-first commit, so the PR body carries a `Test edits:` section naming each. Depends on 3.1, 3.3 and 3.4."
+        }
+      ],
+      "decision": "ask",
+      "reason": "adversary block: The premise holds, but the edit says 'in these tests only' and then misses four tests that 3.5 breaks, one of which deadlocks, so the worker still stops with a question. Its own backticks also make the machine-read owns list contain all of `tests/` and a junk path `2.4.0`, which contradicts the prose. Rework: add the four cases above (loop-perf gets `settleMain: false` or a rewritten order assertion; the findings case and the prompts stub literal are named), and keep `tests/`, `2.4.0` and other non-paths out of backticks inside the Owns sentence, or end the Owns sentence before the explanation. (The spec is at ~/dev/agent-loop-public/docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md (the working directory holds only a pre-wave-3 copy under .frozen/2.4.0); all 22 find strings of this review match it exactly once. The four breaks R1 names are real: tests/wave-loop-v24.test.ts:346-354, tests/v24-e2e.test.ts:171 and :312, tests/wave-loop-gates.test.ts:190, tests/wave-loop-relay.test.ts:753-760. Four more are not in the edit: (1) tests/loop-perf.test.ts:125-153 'the merge lock is released before main is watched': 'main:9.1' waits on a promise that only 'merger:9.2' releases, so under settleMain (default true) the two wait on each other and the test hangs; (2) tests/wave-loop-findings.test.ts:152-156 'never blocks the gate: a high integration finding leaves the gate PASS' fails under integrationGate default high; (3) tests/wave-loop-relay.test.ts:765-773, the next case, also has deps ['9.1','3.3'] with 3.3 outside the run and asserts the escalation is 'dependency 9.1 parked'; (4) tests/wave-loop-prompts.test.ts:611 stubs the preflight with the literal loopVersion '2.4.0', and wave-loop.js preflightMerge fails on `line.loopVersion !== LOOP_VERSION`, so the merger prompt it then reads is undefined. Second defect: I ported ownedPaths/ownsClause from scripts/spec-lint.js:145-170 and ran it on the spec with R1's replace applied: task 3.5 goes from 5 owned paths to 18, including `tests/` (the whole directory, from the backticked `tests/`) and `2.4.0` (matches /\\.\\w+$/). scripts/wave-args.js:113 hands that list to the worker and critic as `owns`.)",
+      "adversary": {
+        "verdict": "block",
+        "evidence": "The spec is at ~/dev/agent-loop-public/docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md (the working directory holds only a pre-wave-3 copy under .frozen/2.4.0); all 22 find strings of this review match it exactly once. The four breaks R1 names are real: tests/wave-loop-v24.test.ts:346-354, tests/v24-e2e.test.ts:171 and :312, tests/wave-loop-gates.test.ts:190, tests/wave-loop-relay.test.ts:753-760. Four more are not in the edit: (1) tests/loop-perf.test.ts:125-153 'the merge lock is released before main is watched': 'main:9.1' waits on a promise that only 'merger:9.2' releases, so under settleMain (default true) the two wait on each other and the test hangs; (2) tests/wave-loop-findings.test.ts:152-156 'never blocks the gate: a high integration finding leaves the gate PASS' fails under integrationGate default high; (3) tests/wave-loop-relay.test.ts:765-773, the next case, also has deps ['9.1','3.3'] with 3.3 outside the run and asserts the escalation is 'dependency 9.1 parked'; (4) tests/wave-loop-prompts.test.ts:611 stubs the preflight with the literal loopVersion '2.4.0', and wave-loop.js preflightMerge fails on `line.loopVersion !== LOOP_VERSION`, so the merger prompt it then reads is undefined. Second defect: I ported ownedPaths/ownsClause from scripts/spec-lint.js:145-170 and ran it on the spec with R1's replace applied: task 3.5 goes from 5 owned paths to 18, including `tests/` (the whole directory, from the backticked `tests/`) and `2.4.0` (matches /\\.\\w+$/). scripts/wave-args.js:113 hands that list to the worker and critic as `owns`.",
+        "reason": "The premise holds, but the edit says 'in these tests only' and then misses four tests that 3.5 breaks, one of which deadlocks, so the worker still stops with a question. Its own backticks also make the machine-read owns list contain all of `tests/` and a junk path `2.4.0`, which contradicts the prose. Rework: add the four cases above (loop-perf gets `settleMain: false` or a rewritten order assertion; the findings case and the prompts stub literal are named), and keep `tests/`, `2.4.0` and other non-paths out of backticks inside the Owns sentence, or end the Owns sentence before the explanation."
+      },
+      "revision": {
+        "id": "W3-R1",
+        "kind": "defect",
+        "task": "3.5",
+        "category": "ownership",
+        "costCents": 0,
+        "reversible": true,
+        "touches": [],
+        "dependsOn": [],
+        "text": "3.3's Owns line only says 'the exact calls lists in tests that pin them', but 3.5 breaks more than calls lists, and a worker may edit only owned paths. Breaks: (1) the 2.5.0 bump fails the literal 2.4.0 in tests/wave-loop-v24.test.ts (2.1 d), in tests/v24-e2e.test.ts (loopVersion and 'Loop: 2.4.0'), and the stubbed preflight line loopVersion '2.4.0' in tests/wave-loop-prompts.test.ts, where wave-loop.js rejects a preflight whose loopVersion differs. (2) tests/wave-loop-gates.test.ts pins the exact key list of the result, so result.isolation fails it. (3) Two cases in tests/wave-loop-relay.test.ts give a task deps ['9.1','3.3'] with 3.3 outside the run; the new dependency-state relay is unanswered there, so 3.5(a) parks the task. (4) tests/loop-perf.test.ts 'the merge lock is released before main is watched' deadlocks under the new settleMain default: main:9.1 waits for merger:9.2, which now waits for main:9.1. (5) tests/wave-loop-findings.test.ts 'never blocks the gate' fails under integrationGate high. (6) Every exact calls list that pins preflight:merge or a task's agents gains the new relays. Recommend 3.5 owns exactly the nine test files and the six named edits, with the PR body carrying a Test edits: section (loop 2.4.0's test-edits gate sends an unexplained changed assertion back as FIX). The Owns sentence backticks only real paths: I ran spec-lint's ownedPaths on the edited spec and 3.5 owns exactly 14 paths, with no 'tests/' and no '2.4.0'; the explanation sits after the sentence end, outside the machine-read clause. Known side effect: spec-lint's 'owns more than about 6 paths' warning fires for 3.5 (a warning, exit 0).",
+        "evidence": "Edit applied to a copy of the spec and run through scripts/spec-lint.js: ownedPaths for 3.5 = 'claude/workflows/wave-loop.js | package.json | claude/workflows/chain-loop.js | docs/OPERATING.md | tests/wave-loop-v25.test.ts | tests/loop-perf.test.ts | tests/loop-version.test.ts | tests/speed-e2e.test.ts | tests/wave-loop-relay.test.ts | tests/wave-loop-v24.test.ts | tests/wave-loop-prompts.test.ts | tests/wave-loop-findings.test.ts | tests/wave-loop-gates.test.ts | tests/v24-e2e.test.ts'; taskDeps still [3.1,3.3,3.4]; lintSpec ok true, warning 'task 3.5: owns 14 paths'. Breaking lines: tests/wave-loop-v24.test.ts:346-354 expect(VERSION).toBe('2.4.0'); tests/v24-e2e.test.ts:171 and :312; tests/wave-loop-prompts.test.ts:611 loopVersion: '2.4.0'; tests/wave-loop-gates.test.ts:190 Object.keys(out).sort() toEqual([...]); tests/wave-loop-relay.test.ts:753-773; tests/loop-perf.test.ts:125-153 ('main:9.1' awaits hold.p, which only 'merger:9.2' releases); tests/wave-loop-findings.test.ts:152-156; claude/workflows/wave-loop.js:2328 'line.loopVersion !== LOOP_VERSION'.",
+        "reasoning": "Answers the adversary: adds the four missed cases (loop-perf deadlock, findings gate case, second relay case, prompts stub literal), and keeps non-paths out of backticks inside the Owns clause.",
+        "reverseCost": "One revert of a spec edit PR.",
+        "wouldBeWrongIf": "The 3.5 worker could already edit any test its change breaks (the spec lists each path for 2.1 and 2.2, so it cannot), or the nine files read the version, key list and call order dynamically (the literals above show they do not).",
+        "edits": [
+          {
+            "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+            "find": "and the exact `calls` lists in tests\n  that pin them. Depends on 3.1, 3.3 and 3.4.",
+            "replace": "and the existing tests that 3.5 breaks, edited only as far as 3.5 requires: `tests/loop-perf.test.ts`,\n  `tests/loop-version.test.ts`, `tests/speed-e2e.test.ts`, `tests/wave-loop-relay.test.ts`, `tests/wave-loop-v24.test.ts`,\n  `tests/wave-loop-prompts.test.ts`, `tests/wave-loop-findings.test.ts`, `tests/wave-loop-gates.test.ts` and\n  `tests/v24-e2e.test.ts`. Depends on 3.1, 3.3 and 3.4. Test edits, each named under a `Test edits:` line in the PR body\n  (the workflow that builds wave 3 is loop 2.4.0, whose test-edits gate sends an unexplained changed assertion back as\n  FIX): (1) every exact `calls` list that pins the preflight relay or a task's agents gains the new relays (dependency\n  state, isolation); (2) the version literals, in the case of 2.1 (d) in wave-loop-v24.test.ts, the loopVersion and\n  \"Loop:\" lines of v24-e2e.test.ts, and the stubbed preflight line of wave-loop-prompts.test.ts, read the version from\n  package.json as loop-version.test.ts already does; (3) the key list of the wave result in wave-loop-gates.test.ts gains\n  isolation; (4) the two cases of wave-loop-relay.test.ts that give a task the outside dependency 3.3 (a dependency that\n  is not in this run counts as merged earlier; a dependency inside the run still orders the tasks) answer the\n  dependency-state relay with 3.3 merged on the default branch; (5) the case in loop-perf.test.ts that shows the merge\n  lock released before main is watched sets settleMain: false, because under the new default the second merge waits for\n  the first PR's check on main and the case would never finish; (6) the case in wave-loop-findings.test.ts that says a\n  high integration finding leaves the gate PASS sets integrationGate: \"off\". No other assertion may change."
+          }
+        ]
+      }
+    },
+    {
+      "id": "W3-R4",
+      "kind": "defect",
+      "task": "3.2",
+      "category": "correctness",
+      "touches": [],
+      "dependsOn": [],
+      "costCents": 0,
+      "reversible": true,
+      "text": "The stale rule can break the lock's own guarantee. A lock is stale when it is 'older than mergeLockStaleMin (default 30)' whatever the owner's pid, so a live holder is evicted. A holder can legitimately keep the lock longer than 30 minutes: the CI wait, the main check (up to 15 minutes), and a revert path that waits for the revert PR's CI, merges it, then waits for main again. The takeover is also racy (two waiters can both see a stale lock) and the owner.json write after mkdir leaves a window with a lock and no owner. Recommend: a live pid on this host is never stale; age counts only for another host or a missing or unparseable owner.json; owner.json is renamed into place; takeover is an atomic rename of the directory followed by mkdir.",
+      "evidence": "Spec 3.2: 'stale when its host is this host and its pid is not alive, or when it is older than `project.mergeLockStaleMin` (default 30)'; claude/lib/merge.js `MAIN_TIMEOUT_MS = 15 * 60 * 1000`; docs/agent-loop-v2 invariant 4 (revert-once on red) runs inside the merge.",
+      "reverseCost": "One revert of a spec edit PR.",
+      "wouldBeWrongIf": "The holder refreshes owner.json on a heartbeat (then age would be safe); the spec has none.",
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "alive, or when it is older than `project.mergeLockStaleMin` (default 30); a stale lock is taken over and the takeover\n  logged in `message`.",
+          "replace": "alive, or when its host is another host, or `owner.json` is missing or unparseable, and the lock directory is older than `project.mergeLockStaleMin` (default 30). A live pid on this host is never stale: a revert after a red main legitimately holds the lock for more than 30 minutes. `owner.json` is written under a temporary name and renamed into the lock directory, and a lock directory younger than 10 s with no `owner.json` counts as held. A stale lock is taken over by an atomic `rename` of the directory to `agent-loop-merge.lock.stale-<pid>` followed by a fresh `mkdir`, so two waiters cannot both take it over; the takeover is\n  logged in `message`."
+        }
+      ],
+      "decision": "ask",
+      "reason": "adversary block: 'A live pid on this host is never stale' is right and should stay. The edit then writes 'so two waiters cannot both take it over' into the spec, and rename plus mkdir does not give that: the second waiter's rename succeeds on the first waiter's fresh lock. The spec's test uses injected fakes and cannot show it. Rework the takeover: take a second atomic mkdir (for example agent-loop-merge.lock.takeover), re-read owner.json under it, and replace the lock only when it still shows the owner that was judged stale. Also state the remaining limit: a crashed holder whose pid was reused looks live forever, so `locked` must name the lock path for a human to remove. (Premise checked in ~/dev/agent-loop-public/claude/lib/ci.js:30 CI_TIMEOUT_MS 20 min and claude/lib/merge.js MAIN_TIMEOUT_MS 15 min: revert() at merge.js:468-505 waits for the revert PR's CI, merges it and waits for main again, so a holder can pass 30 minutes. The takeover clause fails: in a scratch directory I ran the edit's own steps for two waiters that both judged one dead-pid lock stale (A: rename lock to .stale-A, mkdir, owner.json; then B: rename lock to .stale-B, mkdir, owner.json). Output: 'B renamed away the lock of: {pid: A}' and 'lock now owned by: {pid: B} - while A also believes it holds the lock'.)",
+      "adversary": {
+        "verdict": "block",
+        "evidence": "Premise checked in ~/dev/agent-loop-public/claude/lib/ci.js:30 CI_TIMEOUT_MS 20 min and claude/lib/merge.js MAIN_TIMEOUT_MS 15 min: revert() at merge.js:468-505 waits for the revert PR's CI, merges it and waits for main again, so a holder can pass 30 minutes. The takeover clause fails: in a scratch directory I ran the edit's own steps for two waiters that both judged one dead-pid lock stale (A: rename lock to .stale-A, mkdir, owner.json; then B: rename lock to .stale-B, mkdir, owner.json). Output: 'B renamed away the lock of: {pid: A}' and 'lock now owned by: {pid: B} - while A also believes it holds the lock'.",
+        "reason": "'A live pid on this host is never stale' is right and should stay. The edit then writes 'so two waiters cannot both take it over' into the spec, and rename plus mkdir does not give that: the second waiter's rename succeeds on the first waiter's fresh lock. The spec's test uses injected fakes and cannot show it. Rework the takeover: take a second atomic mkdir (for example agent-loop-merge.lock.takeover), re-read owner.json under it, and replace the lock only when it still shows the owner that was judged stale. Also state the remaining limit: a crashed holder whose pid was reused looks live forever, so `locked` must name the lock path for a human to remove."
+      },
+      "revision": {
+        "id": "W3-R4",
+        "kind": "defect",
+        "task": "3.2",
+        "category": "correctness",
+        "costCents": 0,
+        "reversible": true,
+        "touches": [],
+        "dependsOn": [],
+        "text": "The stale rule can break the lock's own guarantee. A lock older than 30 minutes is stale whatever the owner's pid, so a live holder is evicted, but a holder legitimately outlasts 30 minutes: after a red main it waits for the revert PR's CI (up to 20 min) and for main again (up to 15 min) on top of its own waits. Recommend: a live pid on this host is never stale; age counts only for another host, and a missing or unparseable owner.json counts after 10 s; owner.json is written under a temporary name and renamed in. The takeover is made safe with a second atomic mkdir, not rename-then-mkdir (which lets a second waiter rename away the first waiter's fresh lock): a waiter makes agent-loop-merge.lock.takeover, re-reads owner.json under it, goes on only if it still shows the owner it judged stale, renames the lock directory aside, makes the lock with mkdir (failure means another waiter holds it, so it polls) and removes the takeover directory. State the remaining limits: a crashed holder whose pid was reused looks alive for ever, and a crash inside a takeover leaves its directory; `locked` names the lock path and the takeover path for a human to remove. The tests gain the live-old-lock case and a two-waiter interleaving against a temp directory.",
+        "evidence": "Spec 3.2 today: 'stale when its host is this host and its pid is not alive, or when it is older than `project.mergeLockStaleMin` (default 30)'. claude/lib/ci.js:30 CI_TIMEOUT_MS is 20 min; claude/lib/merge.js MAIN_TIMEOUT_MS = 15 * 60 * 1000; claude/lib/merge.js revert() waits for the revert PR's CI, merges, then calls verifyMain again. The adversary's run of rename-then-mkdir for two waiters printed 'B renamed away the lock of: {pid: A}'; under the takeover directory B's re-read shows A's fresh owner and B stands down. Edit applied to a copy of the spec: both finds match once; spec-lint ok.",
+        "reasoning": "Keeps 'a live pid is never stale' (the adversary agreed) and replaces the racy takeover with a second mkdir plus a re-read of the owner, as the adversary proposed, and states the pid-reuse limit.",
+        "reverseCost": "One revert of a spec edit PR.",
+        "wouldBeWrongIf": "The holder refreshes owner.json on a heartbeat (the spec has none), or two waiters can still both pass the re-read under the takeover directory: the interleaving test in 3.2 would show it.",
+        "edits": [
+          {
+            "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+            "find": "alive, or when it is older than `project.mergeLockStaleMin` (default 30); a stale lock is taken over and the takeover\n  logged in `message`.",
+            "replace": "alive, or when `owner.json` is missing or unparseable and the directory is more than 10 s old, or when its host is\n  another host and the directory is older than `project.mergeLockStaleMin` (default 30). A live pid on this host is\n  never stale, whatever the age: after a red main the holder waits for the revert PR's CI (up to 20 min) and for main\n  again (up to 15 min) on top of its own. `owner.json` is written under a temporary name and renamed into the lock\n  directory. A stale lock is taken over under a second directory, `agent-loop-merge.lock.takeover`, made with `mkdir` (a\n  waiter that cannot make it keeps polling): the waiter reads `owner.json` again and goes on only if it is still the\n  owner it judged stale (or still missing; when the lock is gone it makes it as any waiter would), renames the lock directory to `agent-loop-merge.lock.stale-<pid>`, makes the\n  lock with `mkdir` (when that fails another waiter holds it now, and this one polls), and removes the takeover\n  directory; the takeover is logged in `message`. A holder that crashed and whose pid another process now uses looks\n  alive for ever, and a crash inside a takeover leaves its directory behind: the `locked` message names the lock path\n  and the takeover path, to remove by hand once no merge is running."
+          },
+          {
+            "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+            "find": "a stale lock (dead pid) is taken over; an old lock is\n  taken over; a held lock past the wait gives `locked`;",
+            "replace": "a stale lock (dead pid) is taken over; a lock older than\n  the stale age whose pid is alive on this host is not, and its holder is waited for; an old lock of another host is\n  taken over; a lock with no `owner.json` is held for 10 s and then taken over; two waiters that both judged one lock\n  stale, interleaved in every order of their steps against a temp directory, make one takeover and the second finds\n  the first's lock held; a held lock past the wait gives `locked`, naming the lock path;"
+          }
+        ]
+      }
+    },
+    {
+      "id": "W3-R6",
+      "kind": "defect",
+      "task": "3.2",
+      "category": "ambiguity",
+      "touches": [],
+      "dependsOn": [],
+      "costCents": 0,
+      "reversible": true,
+      "text": "'takes a lock before its first write' does not say where the lock sits in mergePr. The first write is the sync push when a sync is needed and the merge otherwise, but needSync is decided from reads made before the lock. A second merger could land between that read and the lock, and the head would then be merged on a base that moved after CI. Recommend the lock is taken after reading the PR and before the sync decision, held through the merge, the main check when it is not deferred, and a revert, and released in a finally.",
+      "evidence": "claude/lib/merge.js step order: readPr, `needSync` decided by `git merge-base --is-ancestor`, sync, waitForCi, `gh pr merge`, then verify/settle; spec 3.2: 'takes a lock before its first write and releases it on every exit path'.",
+      "reverseCost": "One revert of a spec edit PR.",
+      "wouldBeWrongIf": "The workflow's own merge queue is the only merger and nothing else runs merge-pr.js; but the task exists because the guarantee 'no longer depends on the caller'.",
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "`mergePr` takes a lock before its first write and releases it on every exit path,",
+          "replace": "`mergePr` takes a lock after reading the PR and before the sync decision, holds it through the merge, the main check when it is not deferred, and a revert, and releases it on every exit path,"
+        }
+      ],
+      "decision": "ask",
+      "reason": "adversary block: The stated defect is that needSync is decided from reads made before the lock. Under syncPolicy conflict, which this repo uses, the read that decides needSync is the PR read itself, and the edit puts the lock after it. After a wait of up to mergeLockWaitMin behind a holder that merged another PR, the sync decision and the pinned head come from before the wait; GitHub then refuses a conflicting merge and wave-loop parks the task instead of starting the conflict fix round. Rework: take the lock, then read the PR again (or read it only after the lock) before the sync decision. The rest of the edit (held through the merge, the non-deferred main check and a revert) is right. (~/dev/agent-loop-public/claude/lib/merge.js, policy 'conflict' branch: `needSync = pr.mergeable === 'CONFLICTING' || pr.mergeable === 'UNKNOWN' || pr.mergeStateStatus === 'DIRTY'` and `headSha = pr.headRefOid`, where `pr` is the readPr() result from the top of mergePr and is read again only while mergeable is UNKNOWN. ~/dev/agent-loop-public/.claude/loop.local.json:36 `\"syncPolicy\": \"conflict\"`.)",
+      "adversary": {
+        "verdict": "block",
+        "evidence": "~/dev/agent-loop-public/claude/lib/merge.js, policy 'conflict' branch: `needSync = pr.mergeable === 'CONFLICTING' || pr.mergeable === 'UNKNOWN' || pr.mergeStateStatus === 'DIRTY'` and `headSha = pr.headRefOid`, where `pr` is the readPr() result from the top of mergePr and is read again only while mergeable is UNKNOWN. ~/dev/agent-loop-public/.claude/loop.local.json:36 `\"syncPolicy\": \"conflict\"`.",
+        "reason": "The stated defect is that needSync is decided from reads made before the lock. Under syncPolicy conflict, which this repo uses, the read that decides needSync is the PR read itself, and the edit puts the lock after it. After a wait of up to mergeLockWaitMin behind a holder that merged another PR, the sync decision and the pinned head come from before the wait; GitHub then refuses a conflicting merge and wave-loop parks the task instead of starting the conflict fix round. Rework: take the lock, then read the PR again (or read it only after the lock) before the sync decision. The rest of the edit (held through the merge, the non-deferred main check and a revert) is right."
+      },
+      "revision": {
+        "id": "W3-R6",
+        "kind": "defect",
+        "task": "3.2",
+        "category": "ambiguity",
+        "costCents": 0,
+        "reversible": true,
+        "touches": [],
+        "dependsOn": [],
+        "text": "'takes a lock before its first write' does not say where the lock sits, and the sync decision is made from reads before any write. With syncPolicy conflict (this repo's setting) needSync and the pinned headSha come from the PR read at the top of mergePr. If the lock is taken after that read, a merger that waited behind another merge decides on a base that moved, and GitHub then refuses a conflicting merge. Recommend the lock is taken first thing on the merge path, after the --verify-main branch and before the first gh pr view, so mergeable, mergeStateStatus and the pinned head are read after any wait; it is held through the sync, the merge, the check on main when not deferred and a revert, and released in a finally. A test shows the second call's first gh pr view comes after the first call's release.",
+        "evidence": "claude/lib/merge.js mergePr: `if (opts.verifyMain) return await verifyOnly(...)` then `let pr = await readPr()` then, for policy 'conflict', `needSync = pr.mergeable === 'CONFLICTING' || pr.mergeable === 'UNKNOWN' || pr.mergeStateStatus === 'DIRTY'` and `headSha = pr.headRefOid`; .claude/loop.local.json:36 \"syncPolicy\": \"conflict\". Edit applied to a copy of the spec: both finds match once; spec-lint ok.",
+        "reasoning": "Answers the adversary: instead of locking after the PR read, the lock goes before it, so the read that decides the sync follows any wait.",
+        "reverseCost": "One revert of a spec edit PR.",
+        "wouldBeWrongIf": "Nothing but the workflow's own queue ever runs merge-pr.js, which the task's own premise (the guarantee no longer depends on the caller) denies.",
+        "edits": [
+          {
+            "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+            "find": "`mergePr` takes a lock before its first write and releases it on every exit path,",
+            "replace": "`mergePr` takes the lock first thing on the merge path, after the `--verify-main` branch and before its first\n  `gh pr view`, so the `mergeable` and `mergeStateStatus` that decide a sync, and the head it pins, are read after any wait for\n  another merger; it holds the lock through the sync, the merge, the check on main when that is not deferred and a\n  revert, and releases it on every exit path,"
+          },
+          {
+            "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+            "find": "concurrent `mergePr` calls on fakes run one after the other;",
+            "replace": "concurrent `mergePr` calls on fakes run one after the other, the second's first `gh pr view` coming after the\n  first's release;"
+          }
+        ]
+      }
+    },
+    {
+      "id": "W3-R12",
+      "kind": "defect",
+      "task": "3.5",
+      "category": "correctness",
+      "touches": [],
+      "dependsOn": [],
+      "costCents": 0,
+      "reversible": true,
+      "text": "3.5(c) leaves two holes. (1) When the integration review does not run (agent returned nothing, error, no wave base), the gate would pass silently with the level 'high', so the gate is only as good as the agent's availability. (2) An integration finding is not tied to a task, and a relaunch passes only parked tasks, so the same diff yields the same finding and the wave fails again with nothing the session can relaunch; the spec gives no way to clear or accept it. Recommend a review that did not run raises one escalation (a wave with no merged task or a paused wave is exempt), the finding escalation says how to clear it (a follow-up task, or relaunch with integrationGate lowered), and integrationReview false with a level above off warns.",
+      "evidence": "claude/workflows/wave-loop.js integrationReview(): `if (!r) return { ran: false, ... error: 'the integration agent returned nothing' }` and `catch (e) { return { ran: false, ... error } }`; gate = `everyMerged && checkGreen && escalations.length === 0`; `const INTEGRATION_ON = P.integrationReview !== false`.",
+      "reverseCost": "One revert of a spec edit PR.",
+      "wouldBeWrongIf": "The human wants a missing review to pass: then the advisory behaviour is kept for unavailable reviews, and only the clearing path is added.",
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "`integration: <what> (<where>)`; `\"off\"` keeps it\n  advisory as in 2.4.",
+          "replace": "`integration: <what> (<where>)` (the question says a finding is cleared by a follow-up task, or accepted by relaunching the wave with `integrationGate` lowered, because a relaunch passes no task for it); a review that did not run (`ran: false` with an `error`, or no wave base) while the level is not `\"off\"` raises one escalation `integration review did not run: <why>` (a wave with no merged task, and a paused wave, are exempt); `project.integrationReview: false` with a level other than `\"off\"` logs a warning and gates on nothing; `\"off\"` keeps it\n  advisory as in 2.4."
+        }
+      ],
+      "decision": "ask",
+      "reason": "adversary block: The clause 'a review that did not run (ran: false with an error, or no wave base) raises one escalation' at the default level turns almost every existing stubbed wave from PASS to FAIL, because their preflight stubs report no base sha and their stubs answer the integration agent with null. None of those assertions is 3.5's to edit, even under W3-R1. A project with `merger: \"agent\"` runs no preflight, so it would fail every wave, against invariant 5. Whether an unavailable model call should fail a wave is also the same human question as W3-R13. Rework: keep the clearing-path sentence and the integrationReview:false warning; for a review that did not run, either log a WARNING without gating, or exempt 'no wave base' and name the test changes 3.5 then owns. (~/dev/agent-loop-public/claude/workflows/wave-loop.js:2532-2534 integrationReview(): no wave base gives `ran: false, skipped: 'no wave base sha ...'`. Only tests/wave-loop-findings.test.ts:18 stubs a preflight with baseSha; every other harness does not (tests/wave-loop-relay.test.ts:112, tests/loop-perf.test.ts:24, tests/speed-e2e.test.ts:151, tests/wave-loop-v24.test.ts:53, tests/v24-e2e.test.ts:59). `grep -c \"gate).toBe('PASS')\"` gives 55 assertions in 8 test files, for example tests/wave-loop-relay.test.ts:758-760 (`escalations` equal to [] and gate PASS). tests/wave-loop-findings.test.ts:158-165 asserts that an integration agent that returns nothing or throws leaves the gate PASS.)",
+      "adversary": {
+        "verdict": "block",
+        "evidence": "~/dev/agent-loop-public/claude/workflows/wave-loop.js:2532-2534 integrationReview(): no wave base gives `ran: false, skipped: 'no wave base sha ...'`. Only tests/wave-loop-findings.test.ts:18 stubs a preflight with baseSha; every other harness does not (tests/wave-loop-relay.test.ts:112, tests/loop-perf.test.ts:24, tests/speed-e2e.test.ts:151, tests/wave-loop-v24.test.ts:53, tests/v24-e2e.test.ts:59). `grep -c \"gate).toBe('PASS')\"` gives 55 assertions in 8 test files, for example tests/wave-loop-relay.test.ts:758-760 (`escalations` equal to [] and gate PASS). tests/wave-loop-findings.test.ts:158-165 asserts that an integration agent that returns nothing or throws leaves the gate PASS.",
+        "reason": "The clause 'a review that did not run (ran: false with an error, or no wave base) raises one escalation' at the default level turns almost every existing stubbed wave from PASS to FAIL, because their preflight stubs report no base sha and their stubs answer the integration agent with null. None of those assertions is 3.5's to edit, even under W3-R1. A project with `merger: \"agent\"` runs no preflight, so it would fail every wave, against invariant 5. Whether an unavailable model call should fail a wave is also the same human question as W3-R13. Rework: keep the clearing-path sentence and the integrationReview:false warning; for a review that did not run, either log a WARNING without gating, or exempt 'no wave base' and name the test changes 3.5 then owns."
+      },
+      "revision": {
+        "id": "W3-R12",
+        "kind": "defect",
+        "task": "3.5",
+        "category": "correctness",
+        "costCents": 0,
+        "reversible": true,
+        "touches": [],
+        "dependsOn": [],
+        "text": "3.5(c) says nothing about two cases. (1) An integration finding is tied to no task and a relaunch passes only parked tasks, so the spec gives the human no stated way to clear or accept one. Recommend docs/OPERATING.md says how: fix it in a follow-up task, or accept it by lowering project.integrationGate. (2) When the review does not run (ran: false with an error, or no wave base) the gate passes with nothing said. Recommend only a logged line, 'WARNING: integration review did not run: <why>', with the gate unchanged: failing the wave would turn every stubbed wave and every merger:agent project (which runs no preflight, so has no wave base) from PASS to FAIL, against invariant 5. Whether a missing review should fail a wave is a human question, not decided here. (3) project.integrationReview: false with a gate level other than off logs a warning that nothing is gated.",
+        "evidence": "claude/workflows/wave-loop.js:2532-2534 integrationReview(): `if (!waveBase) return { ran: false, ..., skipped: 'no wave base sha ...' }`, `if (!r) return { ran: false, ..., error: 'the integration agent returned nothing' }`, and catch returns ran:false with error; line 2498 `const INTEGRATION_ON = P.integrationReview !== false`. tests/wave-loop-findings.test.ts:158-165 asserts that a null or throwing integration agent leaves the gate PASS, and the preflight stubs of tests/wave-loop-relay.test.ts:112, tests/loop-perf.test.ts:24, tests/speed-e2e.test.ts:151 and tests/wave-loop-v24.test.ts:53 report no baseSha, so a gating 'did not run' would flip them all. Edit applied to a copy of the spec: find matches once; spec-lint ok.",
+        "reasoning": "Answers the adversary: keeps the clearing-path sentence and the integrationReview:false warning, and makes a review that did not run a warning with no gate change, so no test outside 3.5's list changes.",
+        "reverseCost": "One revert of a spec edit PR.",
+        "wouldBeWrongIf": "The human wants a missing review to fail the wave; then the warning becomes an escalation and 3.5 owns the affected test edits (the same question as W3-R13).",
+        "edits": [
+          {
+            "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+            "find": "`integration: <what> (<where>)`; `\"off\"` keeps it\n  advisory as in 2.4.",
+            "replace": "`integration: <what> (<where>)`; a finding is tied to no task, so `docs/OPERATING.md` says how to clear one (fix it in a\n  follow-up task, or accept it by lowering `project.integrationGate`); a review that did not run (`ran: false` with an\n  `error`, or no wave base) logs one line `WARNING: integration review did not run: <why>` and leaves the gate\n  unchanged; `project.integrationReview: false` with a level other than `\"off\"` logs `WARNING: integrationGate is set\n  but integrationReview is false; nothing is gated`; `\"off\"` keeps it advisory as in 2.4."
+          }
+        ]
+      }
+    },
+    {
+      "id": "W3-R13",
+      "kind": "question",
+      "task": "3.5",
+      "category": "policy",
+      "touches": [
+        "invariant"
+      ],
+      "dependsOn": [],
+      "costCents": 0,
+      "reversible": true,
+      "text": "Should a finding from a single read-only model call fail the machine gate by default? Invariant 2 says deterministic control flow decides what runs next and models decide only inside a task. The integration reviewer is not a task; it has no verifier or second opinion, and its severity is the model's own. Moving 'high' from advisory to gating makes a model's judgment decide wave pass or fail, and chain-loop stops on FAIL. Options: keep the default 'high' (as specified), default to 'off' and make gating opt-in per project, or require the finding to be confirmed by a second call before it gates. Recommendation: default 'off' for 2.5.0 with 'high' opt-in until a wave shows the false-positive rate; that keeps invariant 2 as written. This needs your decision because it changes the reading of an invariant.",
+      "evidence": "Spec Invariants 2: 'Deterministic control flow decides what runs next; models decide only inside a task'; spec 3.5(c) default `\"high\"`; wave-loop.js:2494-2497 'It never edits, never escalates and never changes the gate'; phase detail 'never blocks the gate'.",
+      "reverseCost": "A config edit per project (integrationGate), or one revert PR.",
+      "wouldBeWrongIf": "You treat the integration review as part of the critic's role (a model-judged gate inside the loop is already accepted for critic verdicts).",
+      "edits": [],
+      "decision": "ask",
+      "reason": "envelope: touches invariant; adversary disagree: The question is right to ask and must go to the human (it touches an invariant). I dispute the recommended answer. Default \"off\" leaves the assumption the outside review named unchecked by default, which is the opposite direction from 3.3. The data so far shows no cost from \"high\": it would have changed no gate in three runs. It also does not measure a false-positive rate, so 'until a wave shows the false-positive rate' cannot be met with the gate off. A deterministic rule over a model's output is how the critic's FIX and MERGE already gate. A wrong FAIL costs one stopped chain; a missed high finding lets later waves build on it. (The quotes hold: ~/dev/agent-loop-public/claude/workflows/wave-loop.js:2494-2497 'It never edits, never escalates and never changes the gate', and spec invariant 2. Against the recommended default: in the three recorded runs of this repo where the integration review ran (scratchpad v24-wave1-result.json, v24-wave2-run2.json, v24-wave2-run3.json) it returned 21 findings: 0 high, 5 medium, 16 low. The wave 3 preamble of the spec says each task 'makes one of them checked, or makes it a stated, opt-in choice'; 3.3 makes the risky shortcut opt-in and the check the default.)",
+      "adversary": {
+        "verdict": "disagree",
+        "evidence": "The quotes hold: ~/dev/agent-loop-public/claude/workflows/wave-loop.js:2494-2497 'It never edits, never escalates and never changes the gate', and spec invariant 2. Against the recommended default: in the three recorded runs of this repo where the integration review ran (scratchpad v24-wave1-result.json, v24-wave2-run2.json, v24-wave2-run3.json) it returned 21 findings: 0 high, 5 medium, 16 low. The wave 3 preamble of the spec says each task 'makes one of them checked, or makes it a stated, opt-in choice'; 3.3 makes the risky shortcut opt-in and the check the default.",
+        "reason": "The question is right to ask and must go to the human (it touches an invariant). I dispute the recommended answer. Default \"off\" leaves the assumption the outside review named unchecked by default, which is the opposite direction from 3.3. The data so far shows no cost from \"high\": it would have changed no gate in three runs. It also does not measure a false-positive rate, so 'until a wave shows the false-positive rate' cannot be met with the gate off. A deterministic rule over a model's output is how the critic's FIX and MERGE already gate. A wrong FAIL costs one stopped chain; a missed high finding lets later waves build on it."
+      }
+    },
+    {
+      "id": "W3-R17",
+      "kind": "question",
+      "task": "3.2",
+      "category": "process",
+      "touches": [],
+      "dependsOn": [],
+      "costCents": 0,
+      "reversible": true,
+      "text": "Merge 3.3 into 3.2 as one task? Both own claude/lib/merge.js and merge.test.ts, 3.3 only starts after 3.2 merges, and spec-lint warns the chain 3.2 -> 3.3 -> 3.5 is three hops deep ('each hop costs about 15 min of review, CI and merge'). One task is one worker, one critic and one CI run fewer, which matters because you asked for few agents. The cost is a larger PR touching two behaviours (lock and tree reuse). Recommendation: merge them as 3.2 'Merge lock and tree-reuse opt-in' and make 3.5 depend on 3.1, 3.2 and 3.4. If you prefer small reviewable PRs, keep it as is.",
+      "evidence": "`node scripts/spec-lint.js docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md`: 'warning: wave 3: dependency chain 3.2 -> 3.3 -> 3.5 is 3 tasks deep (more than 2) ... do chain-shaped work as one PR with stacked commits'.",
+      "reverseCost": "Re-split the task in the spec before the wave runs; none after.",
+      "wouldBeWrongIf": "The lock and the tree-reuse scan are large enough that one worker would exceed its budget (spec-lint warns at more than about 6 owned paths; 3.2 plus 3.3 own 5).",
+      "edits": [],
+      "decision": "ask",
+      "reason": "adversary disagree: Not wrong on cost: one task saves a worker, a critic and a CI run, which fits the request for few agents. It is unsafe to auto-accept because it must be applied by hand across two bullets that four other recommendations edit, and a leftover '3.3' in 3.5's Depends line would be dropped silently, letting 3.5 start before the lock and tree-reuse work merged. A human should choose; if yes, apply it after the other edits and set 3.5 to depend on 3.1, 3.2 and 3.4. (`node scripts/spec-lint.js docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md` prints 'warning: wave 3: dependency chain 3.2 -> 3.3 -> 3.5 is 3 tasks deep (more than 2)', so the saving is real. The recommendation has no edits. The find strings of W3-R4, R5 and R6 sit in the 3.2 bullet and W3-R8's in the 3.3 bullet; W3-R1's replace text ends 'Depends on 3.1, 3.3 and 3.4.'. ~/dev/agent-loop-public/scripts/wave-args.js:112 drops a dependency id that is not a task of the wave (`ids.has(d)`) without an error.)",
+      "adversary": {
+        "verdict": "disagree",
+        "evidence": "`node scripts/spec-lint.js docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md` prints 'warning: wave 3: dependency chain 3.2 -> 3.3 -> 3.5 is 3 tasks deep (more than 2)', so the saving is real. The recommendation has no edits. The find strings of W3-R4, R5 and R6 sit in the 3.2 bullet and W3-R8's in the 3.3 bullet; W3-R1's replace text ends 'Depends on 3.1, 3.3 and 3.4.'. ~/dev/agent-loop-public/scripts/wave-args.js:112 drops a dependency id that is not a task of the wave (`ids.has(d)`) without an error.",
+        "reason": "Not wrong on cost: one task saves a worker, a critic and a CI run, which fits the request for few agents. It is unsafe to auto-accept because it must be applied by hand across two bullets that four other recommendations edit, and a leftover '3.3' in 3.5's Depends line would be dropped silently, letting 3.5 start before the lock and tree-reuse work merged. A human should choose; if yes, apply it after the other edits and set 3.5 to depend on 3.1, 3.2 and 3.4."
+      }
+    }
+  ],
+  "spikes": [
+    {
+      "id": "F1",
+      "fact": "With Claude Code's Bash sandbox enabled (sandbox.enabled), which sandbox.filesystem.allowWrite paths and sandbox.network.allowedDomains does the loop need so that git worktrees in a sibling directory of the repo, a lock directory under the git common dir, `gh` calls to api.github.com and `node` scripts under .claude/scripts still work in relays and workers?",
+      "status": "answered",
+      "answer": "Settled in part; the docs do not give a complete answer.\n\nWrites: by default sandboxed commands can write to the current working directory and its subdirectories, the per-user temp directory, and any --add-dir / permissions.additionalDirectories paths. A sibling directory of the repo is NOT writable by default; it needs an explicit sandbox.filesystem.allowWrite entry (absolute, or ~-relative; on Linux/WSL2 the path must already exist). When the working directory is a linked git worktree, the sandbox already allows writes to the main repository's shared .git directory (so git can update refs and the index), except hooks/ and config inside it, which stay denied. So a lock directory under the git common dir is covered for worktrees without an allowWrite entry, as far as the docs state; the docs do not explicitly name lock directories. Note that the docs' worktree rule is stated for the main repo's shared .git, and the doc does not say whether the sibling worktree path itself needs allowWrite (it is outside cwd, so it likely does).\n\nNetwork: sandbox.network.allowedDomains starts empty. The docs give no statement that api.github.com or gh needs a specific entry, and do not list it. The docs suggest the alternative for git network commands: excludedCommands such as \"git push *\" run outside the sandbox with no network proxy restriction. For gh, the docs suggest adding \"gh *\" to excludedCommands if TLS verification fails on macOS (Go-based CLIs). The docs do not say what allowedDomains must contain for gh to reach api.github.com.\n\nnode scripts under .claude/scripts: node is not mentioned anywhere in the sandboxing page. Scripts under .claude/ live inside the working directory, which is readable and writable by default, so the docs imply no allowWrite entry is needed for a script under the cwd; the docs do not address node specifically or .claude/ specifically (note: the protected-path list covers only shell startup files, .gitconfig, .vscode, .idea and .git hooks/config).\n\nSummary: allowWrite needed for the sibling worktree path (per docs, inferred). Shared .git lock dir: covered for linked worktrees per docs. allowedDomains: not settled from the docs (empty by default; no GitHub entry documented). excludedCommands is the documented escape hatch for gh and git network commands.",
+      "source": "WebFetch https://code.claude.com/docs/en/sandboxing (prompt: sections \"Configure sandboxing\", \"Filesystem isolation\", \"Git and .git\", \"Network\"; the page's final ~11,990 characters beyond offset 100000 were not read, which may contain the remaining allowUnixSockets default and settings reference)",
+      "retrieved": "2026-11-26",
+      "error": ""
+    },
+    {
+      "id": "F2",
+      "fact": "Does `gh pr list --state merged --limit N --json number,headRefName,mergeCommit,mergedAt` return more than 1000 rows when N is above 1000, and is mergeCommit populated for squash-merged and rebase-merged pull requests?",
+      "status": "answered",
+      "answer": "Not settled. Partial result only. (1) Row cap above 1000: not settled. The probe with --limit 1001 in ~/dev/agent-loop returned 50 rows, which is the total merged-PR count for that repo (PR numbers run up to #50), so the probe never reached 1000 rows and cannot show whether gh returns more than 1000. `gh pr list --help` documents --limit only as \"Maximum number of items to fetch (default 30)\" and states no upper bound. (2) mergeCommit population: partly observed. All 50 merged PRs in the repo had a non-null mergeCommit.oid. The probe did not record the merge method per PR, so it does not show squash or rebase cases separately, and no documentation was checked for the squash/rebase behavior. Not settled from the sources consulted.",
+      "source": "Probe: `gh pr list --help` (lists --limit \"Maximum number of items to fetch (default 30)\" and the JSON fields including mergeCommit). Probe: `gh pr list --state merged --limit 1001 --json number,headRefName,mergeCommit,mergedAt` run in ~/dev/agent-loop, which returned 50 rows with 50 non-null mergeCommit values. No external documentation was fetched. Left empty for the unsettled parts.",
+      "retrieved": "2026-11-26",
+      "error": ""
+    }
+  ],
+  "gates": [
+    {
+      "id": "G-3.1-quota",
+      "what": "Claude Code usage headroom for waves 3 and 4 on an account shared with a second session running overnight (a weekly limit hit Warden wave 4; waves 3 and 4 are 12 tasks).",
+      "why": "A far-out reset pauses the wave under 2.4.0, but a shared weekly quota cannot be raised by the loop; the budget says the cost is Claude Code usage only.",
+      "owner": "human",
+      "before": "3",
+      "leadTime": "days",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-3.4-account",
+      "what": "H4: permissions.deny read rules from isolation.js and enabling Claude Code's Bash sandbox, rehearsed on one project first (see W3-R18 and F1).",
+      "why": "3.4 can only check and warn (invariant 6); agents run with the user's privileges. A sandbox switched on without allowWrite and network entries can stop merge relays.",
+      "owner": "human",
+      "before": "4",
+      "leadTime": "hours",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-3.1-account",
+      "what": "Freeze v2.4.0 for waves 3 and 4 and add permissions.allow rules for impact.js, test-edits.js and ci-only.js (H3). A detached worktree exists at ~/dev/agent-loop/.frozen/2.4.0 (3413424, the wave 2 tail merge); the relink of this repo to it and the three rules are not verifiable from the repository.",
+      "why": "Waves 3 and 4 run on loop 2.4.0, whose relays run these scripts; without the rules the auto-mode classifier refuses them. Permission settings are human-only.",
+      "owner": "human",
+      "before": "3",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-3.3-secret",
+      "what": "Create the secret or key for task 3.3",
+      "why": "scan: task 3.3 mentions \"secrets\"",
+      "owner": "human",
+      "before": "3",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-3.5-account",
+      "what": "permissions.allow rules for dep-state.js and isolation.js (new in 3.5, run by loop 2.5.0), added at the relink (H1) and not before wave 3 is built.",
+      "why": "3.5 adds two relays; without a rule they go to the classifier and fail closed, parking relaunched tasks. Permission settings are human-only (invariant 6).",
+      "owner": "human",
+      "before": "3",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-3.4-secret",
+      "what": "H5: a fine-grained GitHub token limited to one repository per wave, in the session's environment.",
+      "why": "The gh-this-repo hookify rule written by 3.4 is only a speed bump; a shared gh login reaches every repository the user owns. Creating a token is human-only.",
+      "owner": "human",
+      "before": "4",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-3.T-irreversible",
+      "what": "Relinking projects to the 2.5.0 checkout and pointing ~/.claude/CLAUDE.md at it (H1), after wave 3's tail merges; reversible by relinking, but it changes which loop every project runs.",
+      "why": "The loop must not change itself mid-run; the 2.5.0 defaults (reuseTreeCi false, settleMain true, integrationGate) change behaviour for existing projects.",
+      "owner": "human",
+      "before": "4",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    }
+  ],
+  "specEdits": [
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "(d) Preflight runs `isolation.js` once beside the merge dry run;",
+      "replace": "(d) Preflight runs `isolation.js` once, in its own relay after the merge dry run (a relay runs one command alone); this relay and the `dep-state.js` relay of (a) are called with `probe: false`, so a null answer is not read as a usage limit and a stub that answers nothing does not pause the wave; `result.isolation` is `{ sandbox, denyReads, warnings }` as the script printed it, or null when it did not run, and the key is always present;",
+      "recId": "W3-R2"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "a relay that fails or prints no JSON parks every such task (fail closed);",
+      "replace": "a relay that fails, is blocked or prints no JSON parks every such task (fail closed; the escalation says why);",
+      "recId": "W3-R2"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "(a) Dependencies outside the run: before the build loop,",
+      "replace": "(a) Dependencies outside the run (ids `wave-args.js` keeps, which means same-wave dependencies that a relaunch left out; `wave-args.js` drops dependencies on earlier waves, which stay assumed merged, a stated limit; the relay passes `--prefix` as the run's task branches spell it, the text before `<id>-`): before the build loop,",
+      "recId": "W3-R3"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "up to `project.mergeLockWaitMin` (default 20); then",
+      "replace": "up to `project.mergeLockWaitMin` (default 5, a larger value is lowered to 8: a merge relay's Bash call ends at 10 minutes); then",
+      "recId": "W3-R5"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "(`.github/workflows/<mainCi>.yml` or `.yaml`, read at the merge commit)",
+      "replace": "(`.github/workflows/<mainCi>.yml` or `.yaml`, else the one file in that directory whose top-level `name:` equals `mainCi`, found with `git ls-tree` and read with `git show` at the merge commit; with `mainCi` empty there is no file, so the check runs)",
+      "recId": "W3-R8"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "and an `on:` block whose `push` and `pull_request` triggers run the same jobs (no job-level `if:`).",
+      "replace": "and an `on:` block that has both `push` and `pull_request`, with no `paths`, `paths-ignore`, `branches-ignore` or `tags` filter on either, a `branches` filter only on `push` and only when it lists the default branch, and no job-level `if:` (a text scan; no YAML parser is added).",
+      "recId": "W3-R8"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "warnings }` from the same settings files as 1.1's check (user, project, project local, managed): `sandbox.enabled` is\n  read from the key the spec review's spike names;",
+      "replace": "warnings }` from the same four settings files as 1.1's check (user, project, project local, managed), read by `isolation.js` itself with the fixed `missing` and `unparseable` error strings (`permission.js` exports no reader and is not owned here): `sandbox.enabled` is\n  the settings key `sandbox.enabled` (spike, from code.claude.com/docs/en/sandboxing), `source` is the first file that sets it in the order managed, project local, project, user, and a `warnings` entry is one of the fixed strings `sandbox is not enabled`, `deny rule missing: <rule>` or `settings file unparseable: <path>`;",
+      "recId": "W3-R9"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "The new hookify rule blocks Bash commands that read credentials: paths under",
+      "replace": "The new hookify rule (`event: bash`, one single-line `pattern:` that is also a valid JavaScript regular expression, with no inline flags, because `claude/lib/merge.test.ts` and `tests/hookify.test.ts` read every rule that way) blocks Bash commands that read credentials: paths under",
+      "recId": "W3-R10"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "`install.sh`, `tests/install.test.ts`.",
+      "replace": "`install.sh`, `tests/install.test.ts`, `tests/hookify.test.ts` (the new rule joins its `rules` list).",
+      "recId": "W3-R10"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "`install.sh` also writes (not links) `.claude/hookify.gh-this-repo.local.md` from the",
+      "replace": "`install.sh` also writes (not links) `.claude/hookify.gh-this-repo.local.md` (reading `github` with `node`, accepting only `^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`, with `.` escaped in the pattern) from the",
+      "recId": "W3-R11"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "blocks `gh pr view 1 -R other/repo` and allows `gh pr view 1 -R owner/name` and a bare `gh pr view 1`.",
+      "replace": "blocks `gh pr view 1 -R other/repo`, `gh pr view 1 -R=other/repo`, `gh pr view 1 --repo other/repo`, `gh pr view https://github.com/other/repo/pull/1`, `gh api repos/other/repo/pulls` and `gh repo clone other/repo`, and allows `gh pr view 1 -R owner/name`, `gh api repos/owner/name/pulls` and a bare `gh pr view 1`.",
+      "recId": "W3-R11"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "A red check is reverted before the next merge starts.",
+      "replace": "A red check is reverted before the next merge starts. A deferred check that ends without a verdict (still pending after its watch calls, a blocked relay, no JSON) ends the wait and starts no further merge: each task waiting to merge is parked with `main not verified after <task>`.",
+      "recId": "W3-R14"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "`dep-state.js` and H4 and H5. Test: a relaunch whose missing",
+      "replace": "`dep-state.js` and H4 and H5 (and the H2 allow rules for `dep-state.js` and `isolation.js`). (f) A merge result with `outcome: \"locked\"` is a wait, not a refusal: the merge relay is run again, at most twice more, and the task is then parked naming the holder from `message`; it starts no FIX round. Test: a `locked` result then a merged one merges; three `locked` results park. A relaunch whose missing",
+      "recId": "W3-R14"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "Relink projects (`install.sh`) to this checkout and point `~/.claude/CLAUDE.md` at it",
+      "replace": "Add `permissions.allow` rules for `dep-state.js` and `isolation.js` as for H2, then relink projects (`install.sh`) to this checkout and point `~/.claude/CLAUDE.md` at it",
+      "recId": "W3-R15"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "reverted by a `revert/<id>` merge (2.3's revert rule)",
+      "replace": "reverted by a merged PR that merged after it and whose head branch is `revert/<id>` (the merger's red-on-main step in `wave-loop.js`) or `revert/pr-<that PR's number>` (the branch `merge.js` makes)",
+      "recId": "W3-R16"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "origin/<default branch>` exits 0 after a `git fetch`; a task with no merged PR has `merged: false` and a `reason`.",
+      "replace": "origin/<default branch>` exits 0 after a `git fetch` (the default branch is `git symbolic-ref --short refs/remotes/origin/HEAD`; a failed fetch gives `onDefault: false`, reason `fetch failed`; a null `mergeCommit` gives `onDefault: false`, reason `no merge commit`); a task with no merged PR has `merged: false` and a `reason` (one of `no merged PR`, `reverted`, `not on default branch`, `no merge commit`, `fetch failed`, `gh failed`, or `not in the newest 1000 merged PRs` with a `note` when exactly 1000 rows come back and none matches; the tool does not assume `gh` returns more than 1000).",
+      "recId": "W3-R16"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "a reverted task (false, `reverted`);",
+      "replace": "a task reverted through a `revert/<id>` PR and one through a `revert/pr-<n>` PR (both false, `reverted`); a fetch failing (`fetch failed`); 1000 rows with no match (the cap reason);",
+      "recId": "W3-R16"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "| H4 | after wave 3 | Add the `permissions.deny` read rules `isolation.js` lists, and turn on Claude Code's Bash sandbox | agents run with your privileges; the loop can only check and warn (invariant 6) |",
+      "replace": "| H4 | after wave 3 | Add the `permissions.deny` read rules `isolation.js` lists. Then turn on Claude Code's Bash sandbox in one project first: add the `project.worktrees` directory to `sandbox.filesystem.allowWrite` (a sibling of the repo is not writable by default), run the preflight and one small wave, and add what fails (either `api.github.com` to `sandbox.network.allowedDomains`, or `gh *` and `git push *` to `sandbox.excludedCommands`) before turning it on in other projects | agents run with your privileges; the loop can only check and warn (invariant 6); the relays write outside the repository and call gh, so an unrehearsed sandbox can stop every merge |",
+      "recId": "W3-R18"
+    }
+  ],
+  "needsSecondRound": true,
+  "skipped": false,
+  "skipReason": "",
+  "reviewPath": "~/dev/agent-loop/docs/agent-loop/2026-11-25-wave-3-review.json"
+}
