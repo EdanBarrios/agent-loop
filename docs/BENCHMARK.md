@@ -41,7 +41,7 @@ GitHub cannot hold, so a replay never reaches a real repository.
    `Bash(node <dir>/clone/.claude/scripts/<script> *)` per relay script, for exactly that `--out`. If the Bash sandbox is
    on, add `<dir>` to `sandbox.filesystem.allowWrite`. The preflight of the wave fails without the rules.
 4. **Start the session's shell the way `prepare` said**: `PATH=<dir>/bin:$PATH`, `BENCH_STATE` and `BENCH_CI_JOBS`. Then,
-   in the same Bash call as the wave, run the doctor:
+   in the session's shell and from one Bash tool call before the wave, run the doctor:
 
    ```
    node scripts/bench.js doctor <dir>
@@ -91,12 +91,12 @@ drop. A configuration that changes the models, the effort or the number of fix r
 Plan in two steps, so the first spend is small:
 
 1. **Pilot: 1 run per configuration, before 3.** For two configurations that is two replays, about 3.4M tokens by the
-   estimate. Read `/usage` before and after the pilot. The drop, divided by the tokens the records report, is the cost of
-   a replay in the units of your plan, and it replaces the 1.7M estimate. A pilot also shows the failures that are cheap to
+   estimate. Read `/usage` before and after the pilot. The measured drop per pilot replay replaces the 1.7M
+   estimate; dividing the drop by the tokens the records report converts record tokens into the units of your plan. A pilot also shows the failures that are cheap to
    fix before the larger run: an allow rule that was missed, an environment variable that was not exported, a gh
    subcommand the fake does not have yet (it exits 1 naming it).
-2. **Scale the plan from the measured drop.** Three runs per configuration is the smallest number that gives an interval
-   (2 degrees of freedom, a t quantile of 4.303, so the intervals are wide). The pilot's runs are the first of the three
+2. **Scale the plan from the measured drop.** Three runs per configuration is the planned count. Two runs already give
+   an interval, but a very wide one (1 degree of freedom, a t quantile of 12.706, against 4.303 at three runs). The pilot's runs are the first of the three
    when their preparation is identical, so two configurations need four more replays after the pilot. If the measured
    drop does not fit what is left of the usage window, run fewer configurations, or run the pilot on `synthetic-6`
    first (six small tasks, far fewer tokens than wave 1; not measured here).
@@ -114,8 +114,9 @@ differ, or do not, in time, tokens, merge rate and interventions. The same holds
 is also in the loop checkout.
 
 Only the sandbox read rules (H4) could hide the source checkout and the loop files from agents: the
-`permissions.deny` read rules `scripts/isolation.js` lists. Until they are on, read every correctness figure as a
-comparison between configurations of one loop version, and never compare records of different scenarios or of loop
+`permissions.deny` read rules `scripts/isolation.js` lists. Even with them on, read every correctness figure as a
+comparison between configurations of one loop version until a replay shows the agents could not read the reference
+solutions, and never compare records of different scenarios or of loop
 checkouts at different commits as if they measured the same task.
 
 ## Reading the result

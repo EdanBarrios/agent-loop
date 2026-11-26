@@ -19,9 +19,15 @@ const BENCH = join(root, 'scripts', 'bench.js');
 const dirs: string[] = [];
 vi.setConfig({ testTimeout: 180000, hookTimeout: 300000 });
 afterAll(async () => {
-  await new Promise((r) => setTimeout(r, 300));
+  // the post-receive hook starts each CI runner detached, in its own process group: stop any still running (a failed
+  // expect between a push and its watch leaves one) before their directories go
+  for (const d of dirs) spawnSync('pkill', ['-f', d]);
+  await new Promise((r) => setTimeout(r, 500));
   for (const d of dirs) rmSync(d, { recursive: true, force: true });
 });
+// `gh pr checks --watch` runs in process and blocks the event loop while it polls, so vitest's timeouts cannot end it:
+// each watch gets its own deadline, and a run that does not complete fails the test naming the command
+const WATCH_LIMIT_MS = 120000;
 
 function cleanEnv(extra: Record<string, string> = {}) {
   const env: Record<string, string | undefined> = { ...process.env };
@@ -113,7 +119,18 @@ function driveWave(dir: string, order: string[], opts: { redFirst?: string; toke
   const state = join(dir, 'state');
   const env = cleanEnv({ BENCH_STATE: state, BENCH_CI_JOBS: '2', BENCH_POLL_MS: '100' });
   const gh = (args: string[]) => {
-    const r = runGh(args, { cwd: clone, stdin: () => '', env: { BENCH_STATE: state, BENCH_POLL_MS: '100' }, startRuns: false });
+    const deadline = Date.now() + WATCH_LIMIT_MS;
+    let timedOut = false;
+    const sleep = (ms: number) => {
+      if (Date.now() > deadline) {
+        timedOut = true;
+        throw new Error('watch deadline');
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+    };
+    const r = runGh(args, { cwd: clone, stdin: () => '', env: { BENCH_STATE: state, BENCH_POLL_MS: '100' }, startRuns: false, sleep });
+    // runGh turns a thrown error into exit 1, which a watch expecting a red check would accept: fail here instead
+    if (timedOut) throw new Error(`gh ${args.join(' ')}: CI run not completed within ${WATCH_LIMIT_MS / 1000} s`);
     return { code: r.code as number, out: r.stdout as string, err: r.stderr as string };
   };
   const progress: Progress[] = [];
@@ -193,6 +210,9 @@ type Played = { dir: string; configKey: string; driven: Driven; record: any };
 function replay(label: string, overrides: object, order: string[], opts: Parameters<typeof driveWave>[2]): Played {
   const dir = join(tmp(label), 'run');
   const prepared = prepare('synthetic-6', { loop: root, out: dir, ciJobs: 2, config: overrides });
+  // bound each runner command (ci.js defaults to 30 minutes) so a stuck check ends as a red run, not a wait
+  const ciJson = join(dir, 'state', 'ci.json');
+  writeFileSync(ciJson, JSON.stringify({ ...JSON.parse(readFileSync(ciJson, 'utf8')), timeoutMs: 60000 }));
   const env = cleanEnv({ PATH: `${dir}/bin:${process.env.PATH}`, BENCH_STATE: join(dir, 'state'), BENCH_CI_JOBS: '2' });
   const doctor = cli(['doctor', dir], env);
   expect(doctor.code, doctor.out + doctor.err).toBe(0);
