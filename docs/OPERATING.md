@@ -123,9 +123,9 @@ pause: the task parks as before, and the critic's own swap to the fallback model
 the `paused` tasks as you relaunch parked ones (below). `chain-loop` stops on any gate other than `PASS`, so `PAUSED` stops a chain.
 
 Relaunches (2.3.1):
-- A dependency that is not in the relaunch counts as merged in an earlier run of the wave and is logged once; it is not
-  checked again, so pass only tasks whose missing dependencies did merge. Before 2.3.1 such a task never started and was
-  parked as unschedulable.
+- A dependency that is not in the relaunch was left out because it merged in an earlier run of the wave. Before 2.5.0 the
+  loop took that on trust; now it checks it (see "Dependencies outside the run" below). Before 2.3.1 such a task never
+  started and was parked as unschedulable.
 - The critic sees a task's `resume.items` and `resume.notes` under "Session answers for this relaunch" and treats them
   as authoritative for the questions the worker asked. An answer that lets a task edit a path it does not own still
   needs a record in a read-first file (the owner table in `CONTRACT.md`, say); without it the critic fails checklist
@@ -136,7 +136,69 @@ Relaunches (2.3.1):
   result says `mainCheck: "unverified"`). Anything else escalates as before. Warden 3.3 (PR #45) had merged when its
   relay was killed and was parked anyway.
 
-The result is `{ project, wave, gate, models, state, tasks, escalations, reality, decisions, timings, loopVersion, findings, integration }`
+### Wave-loop wiring (2.5.0)
+
+**Dependencies outside the run.** An id `wave-args.js` keeps is a same-wave dependency; a relaunch that passes only the
+parked tasks leaves some of those out. Before the build loop, one relay runs
+`node <scripts dir>/dep-state.js --repo <repo> --task <id>... --prefix <prefix>` for every dependency that is not in the
+run (the prefix is the text the run's task branches spell before `<id>-`, `task/` by default). A task whose such
+dependency is not `merged` and `onDefault` is parked with the escalation `dependency <id> not merged on the default branch:
+<reason>`, and so are its dependents. A relay that fails, is blocked or prints no JSON parks every such task: the check fails
+closed, and the escalation says why. A dependency that checks out is logged as "treated as merged in an earlier run" with the
+PR and merge commit that proved it. Stated limit: `wave-args.js` drops dependencies on earlier waves, so those stay assumed
+merged. The relay is called without the usage-limit probe, so a null answer parks the tasks instead of pausing the wave.
+
+**Settle main.** `project.settleMain` (default `true`): with `mainCi` set, a merge does not start while an earlier merge's
+deferred check on the default branch (`merge-pr.js --verify-main`) is still running. Workers and critics keep running; only the
+merge waits. A red check is reverted by the script before the next merge starts. A deferred check that ends without a verdict
+(still pending after its watch calls, a blocked relay, no JSON) ends the wait and starts no further merge: each task waiting to
+merge is parked with `main not verified after <task>`. `settleMain: false` restores 2.4: the next PR merges while main's run is
+still going.
+
+**Merge lock.** `merge-pr.js` takes a lock (a directory under the git common dir) before it reads the PR and holds it through the
+merge, the check on main when it is not deferred, and a revert, so two sessions on one repository cannot merge at once. It
+reports `outcome: "locked"` (exit 2) when it waited `project.mergeLockWaitMin` (default 5, lowered to 8 when larger: a merge
+relay's Bash call ends at 10 minutes) and the lock was still held. The workflow treats that as a wait, not a refusal: it runs the
+merge relay again, at most twice more, and then parks the task naming the holder from the script's `message`; no fix round
+starts. A lock is stale when its holder's pid is gone on this host, or when it is older than `project.mergeLockStaleMin`
+(default 30) and its host is another one or its owner file is unreadable. A live pid on this host is never stale. A crashed
+holder whose pid was reused looks live: `locked` then names the lock directory for you to remove.
+
+**Tree reuse.** `project.reuseTreeCi` (default `false`). The check on the default branch is skipped when the merged tree equals
+the tree CI checked only when this is `true` and the main CI workflow file passes a text scan for event-dependent behaviour (no
+`github.event_name`, `github.event.`, `github.ref`, `secrets.`, `vars.`, `schedule:`, path, tag or `branches-ignore` filters, no
+job-level `if:`; `push` and `pull_request` both present). Otherwise the check runs, and the merge result's `treeReuse` says why.
+With it off, invariant 4 (the default branch is checked after every merge) holds without exception.
+
+**Integration gate.** `project.integrationGate` is `"high"` (default), `"medium"` or `"off"`. A finding of the integration review
+at or above the level fails the machine gate, with one escalation per finding, `integration: <what> (<where>)`. A finding is
+cleared by a follow-up task, or accepted by relaunching the wave with `integrationGate` lowered (a relaunch passes no task for
+it). A review that did not run while the level is not `"off"` logs a line starting `WARNING: integration review did not run:`
+and does not gate; `integrationReview: false` with a level other than `"off"` logs a warning too. `"off"` keeps the review
+advisory, as in 2.4. Any other value fails before anything starts.
+
+**Isolation.** The preflight runs `node <scripts dir>/isolation.js --repo <repo>` once, in its own relay after the merge dry run.
+It reads the user, project, project local and managed settings files and prints
+`{ sandbox: { enabled, source }, denyReads: { present, missing }, warnings }`: whether Claude Code's Bash sandbox is on, and which of
+`Read(~/.ssh/**)`, `Read(~/.aws/**)`, `Read(~/.config/gh/**)`, `Read(~/.netrc)` and `Read(**/.env*)` are `permissions.deny` rules. The
+workflow logs each warning as a line starting `WARNING: isolation:` and returns the report as `result.isolation` (`null` when the
+relay did not run; the key is always present). It never fails the wave, and it never writes a setting (invariant 6).
+
+Human steps this adds (the numbering is the build spec's):
+- **H2 (more rules).** Add a `permissions.allow` rule for `dep-state.js` and `isolation.js` as for the others,
+  `Bash(node <scripts dir>/dep-state.js *)` and `Bash(node <scripts dir>/isolation.js *)`, with the path spelled as for `merge-pr.js`.
+  Without them the relay is refused: the dependency check then parks the tasks that need it, and the isolation report is `null`.
+- **H4 (isolation, once per machine).** Add the `permissions.deny` read rules `isolation.js` lists. Then turn on Claude Code's Bash
+  sandbox in one project first: add the `project.worktrees` directory to `sandbox.filesystem.allowWrite` (a sibling of the repo is
+  not writable by default), run the preflight and one small wave, and add what fails (either `api.github.com` to
+  `sandbox.network.allowedDomains`, or `gh *` and `git push *` to `sandbox.excludedCommands`) before turning it on in other
+  projects. The relays write outside the repository and call `gh`, so an unrehearsed sandbox can stop every merge.
+- **H5 (when convenient).** Give each wave a GitHub token limited to the one repository (a fine-grained token), in the session's
+  environment. A shared `gh` login reaches every repository you own. Creating a token is a human step.
+- `install.sh` also writes `.claude/hookify.gh-this-repo.local.md` from the project's `github` field, which blocks `gh` commands
+  that name another repository, and links `hookify.block-credential-reads.local.md`.
+
+The result is `{ project, wave, gate, models, state, tasks, escalations, reality, decisions, timings, loopVersion, findings, integration, isolation }`
 (`gate` is `PASS`, `FAIL`, `BLOCKED` or `PAUSED`; a paused wave adds `paused`).
 Save it as JSON in the session scratchpad, then write the scorecard:
 
@@ -301,6 +363,10 @@ scorecard counts the items failed per checklist number. A round whose critic ret
 | `maxBuilders`, `maxChains`, `fixRounds`, `finishRounds`, `models`, `trailer` | loop knobs; defaults 2 check slots, 6 chains, 3 fix rounds, 2 finish rounds, the roles above, `Co-Authored-By: Claude <noreply@anthropic.com>` |
 | `mainCi` | name of the CI workflow that runs the check on pushes to main; when set, the merger waits for that run instead of running the check on this machine |
 | `syncPolicy` | `always` (merge main into the branch before every merge) or `conflict` (only when GitHub reports a conflict; needs branch protection without the up-to-date rule and `mainCi`) |
+| `mergeLockStaleMin`, `mergeLockWaitMin` | the merge lock (2.5.0): minutes after which a lock whose holder cannot be shown to be alive is stale (default 30), and minutes a merge waits for a held lock before it reports `locked` (default 5, lowered to 8 when larger) |
+| `reuseTreeCi` | `false` by default (2.5.0): the check on the default branch always runs after a merge. `true` lets the merge skip it when the merged tree is the tree CI checked and the main CI workflow file passes the event-dependence scan |
+| `settleMain` | `true` by default (2.5.0): a merge waits for the earlier merge's deferred check on the default branch; `false` restores 2.4 |
+| `integrationGate` | `"high"` (default since 2.5.0), `"medium"` or `"off"`: the lowest integration finding severity that fails the machine gate; `"off"` keeps the review advisory |
 | `loadWarnFactor` | the preflight warns when the 1-minute load average is above this many times the core count (default 4) |
 | `quickCheck` | a shell command with `{files}` (typecheck, lint, related tests) that workers run instead of the full check, through the slot wrapper; CI runs the full check. Empty by default: workers run `check` |
 | `mergePermission` | unset by default: a preflight whose dry run reports that no allow rule covers the merge relay's command fails the wave (H2, above). `"prompt"` logs a warning and continues for a missing allow rule or an ask rule, for projects whose session answers permission prompts; a deny rule fails the preflight either way |
@@ -335,6 +401,9 @@ scorecard counts the items failed per checklist number. A round whose critic ret
 - `scripts/loop-scorecard.py`: per-wave scorecard (rounds, fix items by cause, critic findings, the integration
   review, tokens and minutes per role, rates with 95% intervals, critic misses including escaped defects, and the
   decision rule for moving a role's model or effort); `--pool` prints one table across waves.
+- `scripts/dep-state.js`, `scripts/isolation.js`: the dependency-state and isolation relays' scripts (2.5.0, read only, run from
+  `.claude/scripts`). `dep-state.js --repo <path> --task <id>... [--prefix task/]` prints whether each task's PR is merged and its merge
+  commit is on the default branch; `isolation.js --repo <path>` reports the sandbox and credential-read deny rules from the settings files.
 - `scripts/impact.js`, `scripts/test-edits.js`: the impact and test-edits relays' scripts (read only, run from
   `.claude/scripts`).
 - `scripts/escaped.js`: traces fix commits on the default branch back to the task PR that introduced the lines

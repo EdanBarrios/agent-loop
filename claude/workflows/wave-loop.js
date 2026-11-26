@@ -35,25 +35,34 @@
 // also a FIX item (a MERGE that carries one is turned into FIX in code). Each round record keeps its findings and the
 // result lists them all in findings[]. After the tail, one read-only integration agent on the critic model reviews
 // git diff <wave base sha>..origin/main (the base is the default branch's head recorded by the preflight dry run) and
-// returns findings as result.integration; it never edits and never changes the gate. project.integrationReview: false
-// turns it off.
+// returns findings as result.integration; it never edits. Until v2.5 it never changed the gate (see v2.5 (c) below).
+// project.integrationReview: false turns it off.
 // v2.4: (a) the preflight dry run reports `permission` (scripts/merge-pr.js); a merge command with no allow rule fails the
 // wave with one escalation naming the rule to add (H2), unless project.mergePermission is 'prompt' (a deny rule always
 // fails). (b) A usage limit that resets far out pauses the wave (see "Pause" below): result.gate 'PAUSED', result.paused
 // { resetsAt, resetText, tasks } (resetsAt is null: this script has no clock), tasks come back as state 'paused'.
 // (c) project.ciChunkMin sets the minutes of one CI relay call (default 1.5).
+// v2.5: (a) a dependency the run does not contain (a relaunch left it out) is checked by one dep-state.js relay before the
+// build loop; a task whose such dependency is not merged and on the default branch is parked, and so are its dependents; a
+// relay that fails parks them too (fail closed). Dependencies on earlier waves are dropped by wave-args.js and stay assumed
+// merged (a stated limit). (b) project.settleMain (default true): a merge does not start while an earlier merge's deferred
+// check on the default branch is running; false restores 2.4. A deferred check that ends without a verdict starts no further
+// merge. (c) project.integrationGate 'high' (default), 'medium' or 'off': an integration finding at or above the level fails
+// the machine gate, one escalation per finding. (d) the preflight runs isolation.js once, in its own relay after the merge
+// dry run; result.isolation is its report, or null. (f) a merge result with outcome 'locked' is a wait: the merge relay is
+// run again, at most twice more, and the task is then parked naming the lock's holder.
 
 export const meta = {
   name: 'wave-loop',
   description: 'One wave of spec tasks: parallel tasks through worker -> critic beside a CI wait -> merge script, then the tail alone',
   whenToUse: 'One run per wave of the project spec; pass .claude/loop.local.json as args.project and the wave tasks as args.tasks.',
   phases: [
-    { title: 'Preflight', detail: 'One relay runs merge-pr.js --dry-run; a block or a missing script fails the wave', model: 'sonnet' },
+    { title: 'Preflight', detail: 'One relay runs merge-pr.js --dry-run (a block or a missing script fails the wave), then one runs isolation.js (warnings only); one dep-state.js relay checks dependencies outside the run', model: 'sonnet' },
     { title: 'Build', detail: 'Workers, a few at a time, one git worktree each', model: 'sonnet' },
     { title: 'Review', detail: 'Critic applies the checklist beside a wait-ci.js relay; FIX returns to a worker, max 3 rounds' },
     { title: 'Merge', detail: 'Serialized merge-pr.js relay: sync if needed, wait CI, merge; the check on main is skipped when the merged tree is the tree CI checked, else watched outside the lock; revert once', model: 'sonnet' },
     { title: 'Tail', detail: 'The tail task runs alone after every parallel task is merged or parked' },
-    { title: 'Integration', detail: 'One read-only agent reviews the whole wave diff for duplication, layering, security, performance and dead code; never blocks the gate' },
+    { title: 'Integration', detail: 'One read-only agent reviews the whole wave diff for duplication, layering, security, performance and dead code; a finding at or above project.integrationGate (default high) fails the gate' },
   ],
 }
 
@@ -1000,7 +1009,7 @@ const REALITY_MODEL = { model: 'claude-haiku-5-5', effort: 'low', ...((P.models 
 const CRITIC_FALLBACK = { model: 'opus', effort: 'high' }
 
 const NAME = P.name
-const LOOP_VERSION = '2.4.0'
+const LOOP_VERSION = '2.5.0'
 const REPO = P.repo
 const WT = P.worktrees
 const SPEC = P.spec
@@ -1088,6 +1097,15 @@ if (REALITY_CHECK) {
   if (REALITY_CHECK.readOnly !== true) throw new Error('args.project.realityCheck.readOnly must be true: the reality check must be read-only.')
   if (typeof REALITY_CHECK.command !== 'string' || REALITY_CHECK.command.trim() === '') throw new Error('args.project.realityCheck.command is missing.')
 }
+// v2.5 (b): project.settleMain (default true) holds each merge until the earlier merge's deferred check on the default
+// branch has returned; false restores 2.4's behaviour (the next PR merges while main's run is still going).
+const SETTLE_MAIN = P.settleMain !== false
+// v2.5 (c): the lowest integration finding severity that fails the machine gate. A bad value fails now, not after a wave.
+const INTEGRATION_GATES = ['high', 'medium', 'off']
+if (P.integrationGate !== undefined && !INTEGRATION_GATES.includes(P.integrationGate)) {
+  throw new Error(`args.project.integrationGate must be "high", "medium" or "off" (got ${JSON.stringify(P.integrationGate)}).`)
+}
+const INTEGRATION_GATE = P.integrationGate === undefined ? 'high' : P.integrationGate
 if (args.gates === undefined && P.gates) {
   throw new Error(`args.gates is missing: read ${P.gates} (project.gates), parse it and pass the array as args.gates. A project with gates configured never runs a wave unchecked.`)
 }
@@ -1108,6 +1126,7 @@ if (args.gates !== undefined) {
       reality: null,
       decisions: [],
       loopVersion: LOOP_VERSION, // chain-loop checks it on every wave result (loop 2.3.0)
+      isolation: null,
     }
   }
 }
@@ -2048,6 +2067,12 @@ async function reviewRound(t, w, tag, ph, approved) {
 
 // ---- Merge: merge-pr.js through a relay (or the v2 merger agent when project.merger = 'agent'). ----
 let mergeBlocked = null // set when a merge relay is blocked; later merge relays then escalate without running
+// v2.5: at most this many merge relay runs while merge-pr.js reports the lock held (the first, and two more).
+const MERGE_LOCK_RUNS = 3
+// v2.5 (b): the deferred check on the default branch of the latest merge ({ task, done }), and the task after which a check
+// ended without a verdict (set once; no merge starts after it).
+let mainWatch = null
+let mainUnverified = null
 
 function failedMerge(r, what, question, line) {
   r.merge = { outcome: 'failed', details: line && line.message ? line.message : question, script: line || null }
@@ -2071,44 +2096,106 @@ async function mergeStep(t, w, rr, ph, reopen) {
 
   // With a main CI workflow the merge relay does not wait for main's run inside the lock (--defer-main): the merge
   // script skips that wait when the merged tree is the tree CI checked (mainCheck 'skipped:unchanged'), and otherwise
-  // the run is watched below by a --verify-main relay after the lock is released, so the next PR can sync and merge.
+  // the run is watched below by a --verify-main relay after the lock is released, so the next PR can sync (and its worker and
+  // critic can run). With project.settleMain (default) the next merge still waits for that watch to return; settleMain false
+  // lets it merge while main's run is going (2.4).
   const command = `node ${SCRIPTS}/merge-pr.js ${w.prNumber} --repo ${REPO} --worktree ${w.worktree || wtPath(t)}${MAIN_CI ? ' --defer-main' : ''}`
-  const rr0 = await withMergeLock(async () => {
-    if (mergeBlocked) return { status: 'skipped' }
-    const x = await relay(command, label, ph.merge)
-    if (x.status === 'blocked') mergeBlocked = { command, note: x.note }
-    return x
+  // The whole merge attempt is one section under the merge lock: the settle-main wait, the relay (run again while the script
+  // reports `locked`), the state check after a lost output, and the registration of the deferred check, so the next merge
+  // sees that check before it can start.
+  let releaseMain = null // set when this merge's deferred check is registered in mainWatch
+  const attempt = await withMergeLock(async () => {
+    if (mergeBlocked) return { kind: 'skipped' }
+    if (SETTLE_MAIN) {
+      // v2.5 (b): an earlier merge's deferred check on the default branch is still running; workers and critics go on.
+      while (mainWatch) {
+        const prior = mainWatch
+        await prior.done
+        if (mainWatch === prior) mainWatch = null
+      }
+      if (mainUnverified) {
+        if (pauseInfo) throw wavePausedError() // the watch died on the usage limit: this chain is paused with the wave
+        return { kind: 'unverified', after: mainUnverified }
+      }
+    }
+    let x = null
+    let line = null
+    // v2.5 (f): a `locked` result means another merge holds the script's lock: a wait, not a refusal. The relay is run again,
+    // at most MERGE_LOCK_RUNS in all.
+    for (let n = 1; n <= MERGE_LOCK_RUNS; n++) {
+      x = await relay(command, n === 1 ? label : `${label} locked${n}`, ph.merge)
+      if (x.status === 'blocked') {
+        mergeBlocked = { command, note: x.note }
+        return { kind: 'relay', x }
+      }
+      line = x.status === 'none' ? null : parseJsonLine(x.stdout)
+      if (!(line && line.outcome === 'locked')) break
+      log(`${t.id}: merge-pr.js reports the merge lock is held (${tailOf(line.message, 200)}); run ${n} of ${MERGE_LOCK_RUNS}`)
+      if (n === MERGE_LOCK_RUNS) return { kind: 'locked', line }
+    }
+    if (!line || typeof line.outcome !== 'string') {
+      // v2.3.1: the merge's output was lost (the relay returned nothing, or its Bash was killed: exit 144 in Warden wave 3,
+      // where PR #45 had merged). The merge is never re-run; a read-only state check decides instead.
+      const rec = await stateAfterLostMerge(t, w, ph, label)
+      if (!rec) return { kind: 'lost', x }
+      line = rec
+    }
+    if (SETTLE_MAIN && line.outcome === 'merged' && line.mainCheck === 'deferred') {
+      let done
+      const watch = { task: t.id, done: new Promise((resolve) => (done = resolve)) }
+      mainWatch = watch
+      releaseMain = () => {
+        if (mainWatch === watch) mainWatch = null
+        done()
+      }
+    }
+    return { kind: 'ran', x, line }
   })
-  if (rr0.status === 'skipped') {
+  if (attempt.kind === 'skipped') {
     return failedMerge(r, 'merge not run: a merge relay was blocked earlier in this wave', `Not run: ${command}. The earlier block was for ${mergeBlocked.command}${mergeBlocked.note ? ` (${mergeBlocked.note})` : ''}. Allow it, then relaunch the wave.`)
   }
-  if (rr0.status === 'blocked') {
-    return failedMerge(r, `merge relay blocked: ${command}`, `The permission system refused ${command}${rr0.note ? ` (${rr0.note})` : ''}. It was not retried and no other way was tried. Allow it or merge PR #${w.prNumber} by hand, then relaunch.`)
+  if (attempt.kind === 'unverified') {
+    return failedMerge(r, `main not verified after ${attempt.after}`, `The check on the default branch after ${attempt.after}'s merge ended without a verdict, so no further merge started (project.settleMain). Check the default branch by hand (revert once if it is red), then relaunch the wave; it re-runs parked tasks. PR #${w.prNumber} was not merged.`)
   }
-  let line = rr0.status === 'none' ? null : parseJsonLine(rr0.stdout)
-  if (!line || typeof line.outcome !== 'string') {
-    // v2.3.1: the merge's output was lost (the relay returned nothing, or its Bash was killed: exit 144 in Warden wave 3,
-    // where PR #45 had merged). The merge is never re-run; a read-only state check decides instead.
-    const recovered = await stateAfterLostMerge(t, w, ph, label)
-    if (!recovered) {
-      if (rr0.status === 'none') {
-        r.merge = null
-        return { kind: 'failed', what: 'merge relay returned nothing', question: `Check the state of PR #${w.prNumber} by hand and relaunch; the merge was not re-run.` }
-      }
-      return failedMerge(
-        r,
-        `merge-pr.js printed no JSON line (not re-run): ${command}`,
-        `The merge was not re-run, because a second run on a merged PR reports "refused". Check the state of PR #${w.prNumber} (gh pr view ${w.prNumber} --json state,mergeCommit) and the default branch by hand. Relay exit code ${rr0.exitCode}; output tail: ${tailOf(rr0.stdout, 300) || '(empty)'}`,
-      )
+  if (attempt.kind === 'relay') {
+    return failedMerge(r, `merge relay blocked: ${command}`, `The permission system refused ${command}${attempt.x.note ? ` (${attempt.x.note})` : ''}. It was not retried and no other way was tried. Allow it or merge PR #${w.prNumber} by hand, then relaunch.`)
+  }
+  if (attempt.kind === 'locked') {
+    const message = String(attempt.line.message || '')
+    return failedMerge(r, `merge locked after ${MERGE_LOCK_RUNS} tries: ${message}`, `Another merge held the merge lock on all ${MERGE_LOCK_RUNS} tries (${message || 'holder not named'}). PR #${w.prNumber} was not merged and no fix round started. Wait for that merge to end, or, if its process is gone, remove the lock directory the message names; then relaunch the wave.`, attempt.line)
+  }
+  if (attempt.kind === 'lost') {
+    const rr0 = attempt.x
+    if (rr0.status === 'none') {
+      r.merge = null
+      return { kind: 'failed', what: 'merge relay returned nothing', question: `Check the state of PR #${w.prNumber} by hand and relaunch; the merge was not re-run.` }
     }
-    line = recovered
+    return failedMerge(
+      r,
+      `merge-pr.js printed no JSON line (not re-run): ${command}`,
+      `The merge was not re-run, because a second run on a merged PR reports "refused". Check the state of PR #${w.prNumber} (gh pr view ${w.prNumber} --json state,mergeCommit) and the default branch by hand. Relay exit code ${rr0.exitCode}; output tail: ${tailOf(rr0.stdout, 300) || '(empty)'}`,
+    )
   }
+  const rr0 = attempt.x
+  let line = attempt.line
   addTiming(t.id, 'ciWaitMs', line.ciWaitMs)
   addTiming(t.id, 'mergeMs', line.mergeMs)
   addTiming(t.id, 'mainCheckMs', line.mainCheckMs)
   if (line.mainCheck === 'skipped:unchanged') log(`${t.id}: check on main skipped: the merged tree is the tree CI checked`)
   if (line.outcome === 'merged' && line.mainCheck === 'deferred') {
-    const v = await verifyDeferred(t, w, line, ph, label)
+    let v
+    try {
+      v = await verifyDeferred(t, w, line, ph, label)
+    } catch (e) {
+      // The watch itself died (a usage limit pauses the wave): main is unverified, so no later merge may start.
+      if (SETTLE_MAIN) mainUnverified = mainUnverified || t.id
+      if (releaseMain) releaseMain()
+      throw e
+    }
+    // v2.5 (b): a check that ended without a verdict (pending after its watch calls, a blocked relay, no JSON) starts no
+    // further merge. The flag is set before the waiting merge is released.
+    if (v.failed && SETTLE_MAIN) mainUnverified = mainUnverified || t.id
+    if (releaseMain) releaseMain()
     if (v.failed) return failedMerge(r, v.what, v.question, v.line || line)
     line = v.line
     addTiming(t.id, 'mainCheckMs', line.mainCheckMs)
@@ -2305,6 +2392,21 @@ async function runTask(t, ph) {
 // The default branch's head when the wave starts, from the dry run's baseSha (loop 2.3.0); the integration review diffs
 // from it. null when the dry run did not report one (or project.merger is 'agent', which runs no preflight).
 let waveBase = null
+// v2.5 (d): the isolation report of the preflight ({ sandbox, denyReads, warnings } as scripts/isolation.js printed it), or null
+// when the check did not run. It only reports: a warning is logged and never fails the wave (the loop changes no setting).
+let isolation = null
+async function isolationCheck() {
+  const command = `node ${SCRIPTS}/isolation.js --repo ${REPO}`
+  // probe false: a null answer is not a usage limit here, and the wave goes on without the report.
+  const rr = await relay(command, 'preflight:isolation', 'Preflight', { probe: false })
+  const none = (why) => log(`note: the isolation check did not run: ${why}`)
+  if (rr.status === 'blocked') return none(`the relay was blocked from running ${command}${rr.note ? ` (${tailOf(rr.note, 200)})` : ''}`)
+  if (rr.status === 'none') return none('the relay returned nothing')
+  const line = parseJsonLine(rr.stdout)
+  if (!line || !Array.isArray(line.warnings)) return none(`${command} printed no report (exit ${rr.exitCode}); output tail: ${tailOf(rr.stdout, 200) || '(empty)'}`)
+  isolation = { sandbox: line.sandbox === undefined ? null : line.sandbox, denyReads: line.denyReads === undefined ? null : line.denyReads, warnings: line.warnings.map(String) }
+  for (const w of isolation.warnings) log(`WARNING: isolation: ${w}`)
+}
 async function preflightMerge() {
   const command = `node ${SCRIPTS}/merge-pr.js 0 --repo ${REPO} --dry-run`
   const fail = (why, question) => {
@@ -2357,6 +2459,7 @@ async function preflightMerge() {
   warnLoad(line.load)
   waveBase = SHA_RE.test(String(line.baseSha || '')) ? line.baseSha : null
   if (waveBase) log(`wave base: ${waveBase}`)
+  await isolationCheck()
   return true
 }
 // The dry run reports the machine's 1-minute load average; above the threshold (project.loadWarnFactor, default 4, x the
@@ -2376,7 +2479,7 @@ if (!MERGER_AGENT) {
 }
 if (!pauseInfo && !preflightPassed) {
   log(`Wave ${WAVE} FAILED in preflight: ${escalations[escalations.length - 1].what}`)
-  return { project: NAME, wave: WAVE, gate: 'FAIL', models: MODELS, state: {}, tasks: {}, escalations, reality: null, decisions: [], timings: {}, loopVersion: LOOP_VERSION }
+  return { project: NAME, wave: WAVE, gate: 'FAIL', models: MODELS, state: {}, tasks: {}, escalations, reality: null, decisions: [], timings: {}, loopVersion: LOOP_VERSION, isolation }
 }
 
 phase('Build')
@@ -2387,9 +2490,81 @@ for (const t of TASKS) state[t.id] = 'pending'
 // Before 2.3.1 such a task never started and was parked as 'unschedulable' at the end.
 const IN_RUN = new Set(TASKS.map((t) => t.id))
 const runDeps = (t) => (t.deps || []).filter((d) => IN_RUN.has(d))
+// v2.5 (a): "treated as merged" is no longer an assumption for a dependency the run does not contain: one dep-state.js relay
+// reports, for each, whether its PR is merged and its merge commit is on the default branch. Dependencies on earlier waves
+// never reach this script (wave-args.js drops them) and stay assumed merged: a stated limit. A task whose outside dependency
+// is not merged and on the default branch is parked, and so (by the build loop below) are its dependents. A relay that fails,
+// is blocked or prints no JSON parks every such task: the check fails closed.
+// The text a task branch spells before `<id>-`, as dep-state.js --prefix wants it ('task/' when no branch spells one).
+function branchPrefix() {
+  for (const t of TAIL ? [...TASKS, TAIL] : TASKS) {
+    const b = String(t.branch || '')
+    const head = `${t.id}-`
+    for (let i = b.indexOf(head); i > 0; i = b.indexOf(head, i + 1)) {
+      if (/[/_-]/.test(b[i - 1])) return b.slice(0, i)
+    }
+  }
+  return 'task/'
+}
+const outsideDeps = (t) => (t.deps || []).filter((d) => !IN_RUN.has(d) && d !== t.id)
+// task id -> { what, question } for a task (the tail included) that must be parked before it starts
+const depParked = new Map()
+async function checkOutsideDeps() {
+  const owners = (TAIL ? [...TASKS, TAIL] : TASKS).filter((t) => outsideDeps(t).length)
+  const ids = [...new Set(owners.flatMap(outsideDeps))]
+  if (!ids.length) return
+  const command = `node ${SCRIPTS}/dep-state.js --repo ${REPO} --task ${ids.map(shellWord).join(' ')} --prefix ${shellWord(branchPrefix())}`
+  // probe false: a null answer is not read as a usage limit; it parks the tasks that need the answer (fail closed).
+  const rr = await relay(command, 'deps:outside', 'Preflight', { probe: false })
+  let report = null
+  let why = null
+  if (rr.status === 'blocked') why = `the dep-state relay was blocked${rr.note ? ` (${tailOf(rr.note, 200)})` : ''}`
+  else if (rr.status === 'none') why = 'the dep-state relay returned nothing'
+  else {
+    const line = parseJsonLine(rr.stdout)
+    if (line && line.tasks && typeof line.tasks === 'object' && !Array.isArray(line.tasks)) report = line.tasks
+    else why = `dep-state.js printed no JSON report (exit ${rr.exitCode})`
+  }
+  const verdict = {}
+  for (const id of ids) {
+    const e = report ? report[id] : null
+    if (why) verdict[id] = { ok: false, reason: why }
+    else if (!e || typeof e !== 'object') verdict[id] = { ok: false, reason: `dep-state.js reported nothing for ${id}` }
+    else if (e.merged === true && e.onDefault === true) verdict[id] = { ok: true, pr: Number.isInteger(e.pr) ? e.pr : null, mergeSha: typeof e.mergeSha === 'string' ? e.mergeSha : null }
+    else verdict[id] = { ok: false, reason: typeof e.reason === 'string' && e.reason ? e.reason : e.merged === true ? 'not on default branch' : 'no merged PR' }
+  }
+  for (const t of owners) {
+    const outside = outsideDeps(t)
+    const proven = outside.filter((d) => verdict[d].ok)
+    const bad = outside.filter((d) => !verdict[d].ok)
+    if (proven.length) {
+      const proof = proven.map((d) => `${d}: ${verdict[d].pr === null ? 'PR unknown' : `PR #${verdict[d].pr}`}, merge commit ${verdict[d].mergeSha || 'unknown'}`).join('; ')
+      log(`${t.id}: dependenc${proven.length === 1 ? 'y' : 'ies'} ${proven.join(',')} not in this run; treated as merged in an earlier run (${proof})`)
+    }
+    if (bad.length) {
+      depParked.set(t.id, {
+        what: bad.map((d) => `dependency ${d} not merged on the default branch: ${verdict[d].reason}`).join('; '),
+        question: why
+          ? `The dependency check did not run, so ${t.id} was not started. Run ${command} by hand, or merge the dependency's PR onto the default branch; then relaunch the wave (a relaunch re-runs parked tasks).`
+          : `${bad.join(', ')} must be merged onto the default branch before ${t.id} can start. Merge it (or fix its PR), then relaunch the wave; a relaunch re-runs parked tasks.`,
+      })
+    }
+  }
+}
+if (!pauseInfo) {
+  try {
+    await checkOutsideDeps()
+  } catch (e) {
+    // A far-out usage limit in the relay: no worker has started, so the paused path below settles every task.
+    if (!(e && e.wavePaused)) throw e
+  }
+}
 for (const t of TASKS) {
-  const outside = (t.deps || []).filter((d) => !IN_RUN.has(d))
-  if (outside.length) log(`${t.id}: dependenc${outside.length === 1 ? 'y' : 'ies'} ${outside.join(',')} not in this run; treated as merged in an earlier run`)
+  if (!depParked.has(t.id)) continue
+  const d = depParked.get(t.id)
+  state[t.id] = 'parked'
+  results[t.id] = { task: t.id, title: t.title, pr: null, rounds: [], merge: null, reopened: false, merged: false }
+  escalate(t.id, d.what, d.question)
 }
 const running = new Map()
 const PH = { build: 'Build', review: 'Review', merge: 'Merge' }
@@ -2450,6 +2625,10 @@ if (TAIL) {
   phase('Tail')
   if (pauseInfo) {
     log(`${TAIL.id}: not started, the wave is paused`)
+  } else if (depParked.has(TAIL.id)) {
+    results[TAIL.id] = { task: TAIL.id, title: TAIL.title, pr: null, rounds: [], merge: null, reopened: false, merged: false }
+    state[TAIL.id] = 'parked'
+    escalate(TAIL.id, depParked.get(TAIL.id).what, depParked.get(TAIL.id).question)
   } else if (TASKS.every((t) => state[t.id] === 'merged')) {
     try {
       tail = await runTask(TAIL, { build: 'Tail', review: 'Tail', merge: 'Tail' })
@@ -2493,8 +2672,9 @@ const pausedTasks = pauseInfo ? settlePause() : []
 
 // Integration review (v2.3): the critic reviews one PR at a time, so nothing looked at the wave as a whole (wave 2 of
 // Warden: duplicated helpers across tasks, a connection without TLS, an import too slow at real data sizes). One
-// read-only agent on the critic model reads the whole wave's diff once. It never edits, never escalates and never
-// changes the gate; its findings are returned as result.integration for the scorecard and the human.
+// read-only agent on the critic model reads the whole wave's diff once. It never edits. Until v2.5 it never changed the
+// gate; since v2.5 a finding at or above project.integrationGate ('high' by default; 'medium'; 'off' keeps it advisory)
+// fails the machine gate, with one escalation per finding. Its findings are returned as result.integration either way.
 const INTEGRATION_ON = P.integrationReview !== false
 const INTEGRATION_AREAS = ['duplication', 'layering', 'security', 'performance', 'dead_code', 'other']
 const INTEGRATION_SCHEMA = {
@@ -2540,7 +2720,7 @@ async function integrationReview(merged) {
       .filter((f) => f && SEVERITIES_FOUND.includes(f.severity) && typeof f.what === 'string' && f.what.trim())
       .map((f) => ({ severity: f.severity, area: INTEGRATION_AREAS.includes(f.area) ? f.area : 'other', what: f.what, where: typeof f.where === 'string' ? f.where : '' }))
     const high = findings.filter((f) => f.severity === 'high').length
-    log(`Wave ${WAVE} integration review: ${findings.length} finding${findings.length === 1 ? '' : 's'} (${high} high); the gate does not change`)
+    log(`Wave ${WAVE} integration review: ${findings.length} finding${findings.length === 1 ? '' : 's'} (${high} high); ${INTEGRATION_GATE === 'off' ? 'the gate does not change' : `the gate fails on ${INTEGRATION_GATE === 'high' ? 'a high finding' : 'a high or medium finding'}`}`)
     return { ran: true, baseSha: waveBase, findings, summary: typeof r.summary === 'string' ? r.summary : '' }
   } catch (e) {
     return { ran: false, baseSha: waveBase, findings: [], summary: '', error: String(e && e.message ? e.message : e) }
@@ -2549,6 +2729,26 @@ async function integrationReview(merged) {
 const integration = pauseInfo
   ? INTEGRATION_ON ? { ran: false, baseSha: waveBase, findings: [], summary: '', skipped: 'wave paused' } : null
   : await integrationReview(Object.values(results).filter((r) => r.merged))
+
+// v2.5 (c): the integration gate. A finding at or above the level fails the machine gate (gate below needs no escalation), with
+// one escalation per finding. A review that did not run does not gate, but says so: a gate that silently passes because its
+// reviewer never ran would be no gate.
+const GATING = INTEGRATION_GATE === 'high' ? ['high'] : INTEGRATION_GATE === 'medium' ? ['high', 'medium'] : []
+if (INTEGRATION_GATE !== 'off' && !pauseInfo) {
+  if (!INTEGRATION_ON) {
+    log(`WARNING: project.integrationReview is false while project.integrationGate is "${INTEGRATION_GATE}": no integration review runs, so the integration gate cannot fail the wave. Set integrationGate to "off" to silence this.`)
+  } else if (integration && !integration.ran) {
+    log(`WARNING: integration review did not run: ${integration.skipped || integration.error || 'no reason given'}; the integration gate did not apply`)
+  } else if (integration) {
+    for (const f of integration.findings.filter((x) => GATING.includes(x.severity))) {
+      escalate(
+        'integration',
+        `integration: ${f.what} (${f.where})`,
+        `The integration review found a ${f.severity} ${f.area} problem across the wave's merged PRs. It is cleared by a follow-up task that fixes it, or accepted by relaunching the wave with project.integrationGate lowered (to "medium" or "off"): a relaunch passes no task for this finding, so there is nothing for it to re-run.`,
+      )
+    }
+  }
+}
 
 const everyMerged = Object.values(state).every((s) => s === 'merged')
 const last = TAIL ? tail : Object.values(results).slice(-1)[0]
@@ -2625,6 +2825,7 @@ return {
   loopVersion: LOOP_VERSION,
   findings,
   integration,
+  isolation,
   // resetsAt stays null: the workflow has no clock, so the session computes it from resetText (v2.4).
   ...(pauseInfo ? { paused: { resetsAt: null, resetText: pauseInfo.resetText, tasks: pausedTasks } } : {}),
 }
