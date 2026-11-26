@@ -19,6 +19,8 @@ type TaskArg = { id: string; title: string; branch: string; deps: string[]; text
 const task = (id: string, extra: Partial<TaskArg> = {}): TaskArg => ({ id, title: 'T', branch: `feat/${id}`, deps: [], text: 'x', owns: 'y', notes: '', ...extra });
 
 const ran = (line: unknown, exitCode = 0) => ({ status: 'ran', exitCode, stdout: `${JSON.stringify(line)}\n` });
+// A relay that ran `true` and exited 0: the answer to the probe the workflow sends after an agent returns nothing (decision D1).
+const probeOk = { status: 'ran', exitCode: 0, stdout: '' };
 const preflight = (load?: Json) => ran({ outcome: 'error', exit: 4, mergeSha: null, message: 'could not read PR #0: no pull requests found', loopVersion: LOOP_VERSION, ...(load ? { load } : {}) }, 4);
 
 async function runWave(answers: Record<string, Answer>, extra: { project?: Json; tasks?: TaskArg[] } = {}) {
@@ -200,7 +202,7 @@ describe('perf 3: the check on main', () => {
     const blocked = await runWave({ ...base, 'merger:9.1': mergeRan(deferredLine), 'main:9.1': { status: 'blocked', note: 'denied' } });
     expect(blocked.escalations[0].what).toMatch(/main check relay blocked/);
     expect(blocked.escalations[0].question).toContain('merged at m1');
-    const none = await runWave({ ...base, 'merger:9.1': mergeRan(deferredLine) });
+    const none = await runWave({ ...base, 'merger:9.1': mergeRan(deferredLine), 'probe:main:9.1': probeOk });
     expect(none.escalations[0].what).toMatch(/main check relay returned nothing/);
   });
 });
@@ -227,7 +229,7 @@ describe('perf 6: no second critic round after a MERGE when only CI-only changes
 
   it('runs the critic when ci-only.js says the change is real, or cannot say', async () => {
     for (const delta of [ran({ ciOnly: false, reason: 'changes a.ts beyond formatting' }), { status: 'blocked', note: 'denied' }, undefined]) {
-      const { calls, out } = await runWave({ ...redThenFix, 'delta:9.1 r2': delta, 'critic:9.1 r2': criticMerge });
+      const { calls, out } = await runWave({ ...redThenFix, 'delta:9.1 r2': delta, 'probe:delta:9.1 r2': probeOk, 'critic:9.1 r2': criticMerge });
       expect(calls).toContain('critic:9.1 r2');
       expect(out.tasks['9.1'].rounds[1].criticSkipped).toBeUndefined();
     }

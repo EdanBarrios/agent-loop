@@ -106,6 +106,8 @@ const mergeRan = (over: Json = {}) => {
   const line = mergeLine(over);
   return ran(line, line.exit);
 };
+// A relay that ran `true` and exited 0: the answer to the probe the workflow sends after an agent returns nothing (decision D1).
+const probeOk = { status: 'ran', exitCode: 0, stdout: '' };
 const blocked = (note = 'Permission to run this command was denied.') => ({ status: 'blocked', note });
 const preflightOk = ran({ outcome: 'error', exit: 4, mergeSha: null, message: 'could not read PR #0: no pull requests found', loopVersion: LOOP_VERSION }, 4);
 
@@ -236,7 +238,7 @@ describe('2.1 relay results are parsed in code', () => {
   });
 
   it('a relay that only says it merged is not believed: no JSON line from merge-pr.js escalates with the PR state and is not re-run', async () => {
-    const { out, calls, escalations } = await runWave({ ...happy, 'merger:9.1': { status: 'ran', exitCode: 0, stdout: 'Merged PR 7 successfully.' } });
+    const { out, calls, escalations } = await runWave({ ...happy, 'merger:9.1': { status: 'ran', exitCode: 0, stdout: 'Merged PR 7 successfully.' }, 'probe:merger:9.1 state': probeOk });
     // 2.3.1: one read-only state relay runs (here it returns nothing); the merge itself is never re-run.
     expect(calls.filter((c) => c.startsWith('merger:'))).toEqual(['merger:9.1', 'merger:9.1 state']);
     expect(out.gate).toBe('FAIL');
@@ -271,6 +273,7 @@ describe('2.1 relay results are parsed in code', () => {
       const { out, calls } = await runWave({
         ...happy,
         'merger:9.1': null,
+        'probe:merger:9.1': probeOk,
         'merger:9.1 state': stateLine('MERGED'),
         'main:9.1': mergeRan({ mergeSha: 'm9', mainSha: 'm9', mainCheck: 'green' }),
       });
@@ -294,7 +297,7 @@ describe('2.1 relay results are parsed in code', () => {
       ['a state relay with no JSON line', { status: 'ran', exitCode: 144, stdout: '' }],
       ['a blocked state relay', blocked()],
     ])('%s still escalates, naming the PR, and nothing is re-run', async (_name, state) => {
-      const { out, calls, escalations } = await runWave({ ...happy, 'merger:9.1': killed, 'merger:9.1 state': state });
+      const { out, calls, escalations } = await runWave({ ...happy, 'merger:9.1': killed, 'merger:9.1 state': state, 'probe:merger:9.1 state': probeOk });
       expect(calls.filter((c) => c.startsWith('merger:'))).toEqual(['merger:9.1', 'merger:9.1 state']);
       expect(calls).not.toContain('main:9.1');
       expect(out.tasks['9.1'].merged).toBe(false);
@@ -426,8 +429,8 @@ describe('2.1 a relay that answers blocked', () => {
 
   it('a missing script (no JSON line, exit 127) fails the wave before any worker starts', async () => {
     const missing = { status: 'ran', exitCode: 127, stdout: '', note: 'cannot find module' };
-    const { out, calls, escalations } = await runWave({ 'preflight:merge': missing, 'worker:9.1': w1 });
-    expect(calls).toEqual(['preflight:merge', 'preflight:merge retry']);
+    const { out, calls, escalations } = await runWave({ 'preflight:merge': missing, 'probe:preflight:merge retry': probeOk, 'worker:9.1': w1 });
+    expect(calls).toEqual(['preflight:merge', 'preflight:merge retry', 'probe:preflight:merge retry']);
     expect(out.gate).toBe('FAIL');
     expect(escalations[0].what).toMatch(/preflight/i);
   });
@@ -526,7 +529,7 @@ describe('2.1 exit codes of merge-pr.js', () => {
 
   it('a revert is recorded in the v1 shape', async () => {
     const reverted = mergeRan({ outcome: 'reverted', exit: 3, mainSha: 'm0', revertPrUrl: 'https://example.test/pull/9', message: 'main was red; reverted', logTail: 'FAIL tests/a.test.ts' });
-    const { out } = await runWave({ ...happy, 'merger:9.1': reverted });
+    const { out } = await runWave({ ...happy, 'merger:9.1': reverted, 'probe:worker:9.1 reopen': probeOk });
     expect(out.tasks['9.1'].merge).toMatchObject({ outcome: 'reverted', mergeSha: 'm1', mainSha: 'm0', revertPrUrl: 'https://example.test/pull/9', checkOnMainTail: 'FAIL tests/a.test.ts', details: 'main was red; reverted' });
     expect(out.tasks['9.1'].merge.checkOnMainExitCode).not.toBe(0);
   });

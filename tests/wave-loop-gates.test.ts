@@ -37,6 +37,9 @@ async function runWave(answers: Record<string, Answer>, extra: { project?: Resul
   const prompts: Record<string, string> = {};
   const agent = async (prompt: string, opts: Opts) => {
     if (opts.label.startsWith('ci:')) return greenCi;
+    // Task 2.1 (v2.4): an agent that returns nothing is followed by a `probe:<label>` relay; like ci:, it is answered
+    // by the case and not recorded, so the cases keep their call lists.
+    if (opts.label.startsWith('probe:')) return answers[opts.label] ?? null;
     calls.push(opts.label);
     optsSeen.push(opts);
     prompts[opts.label] = prompt;
@@ -78,6 +81,9 @@ const fix = { ...merge, verdict: 'FIX', fixItems: [{ n: 1, what: 'x', provedBy: 
 const merged = { outcome: 'merged', details: 'ok', mergeSha: 'm', mainSha: 'm', checkOnMainExitCode: 0 };
 const green = { 'worker:2.1': opened, 'critic:2.1 r1': merge, 'merger:2.1': merged };
 const greenCalls = ['worker:2.1', 'critic:2.1 r1', 'merger:2.1'];
+
+// A relay that ran `true` and exited 0: the passing answer to the probe (decision D1: the probe covers every agent but the critic).
+const probeOk = { status: 'ran', exitCode: 0, stdout: '' };
 
 const REALITY = { command: 'node scripts/reality.js', readOnly: true, timeoutSec: 30 };
 const gapsOut = (gaps: unknown[]) => ({ stdout: JSON.stringify({ gaps }), code: 0 });
@@ -158,7 +164,7 @@ describe('wave-loop reality check', () => {
 
   it('runs after the machine gate even when a task parked, and still reports its gaps', async () => {
     const { out, calls } = await runWave(
-      { 'worker:2.1': null, 'reality:check': gapsOut([{ id: 'W1', severity: 'warn', what: 'w' }]) },
+      { 'worker:2.1': null, 'probe:worker:2.1': probeOk, 'reality:check': gapsOut([{ id: 'W1', severity: 'warn', what: 'w' }]) },
       { project: { realityCheck: REALITY } },
     );
     expect(calls).toEqual(['worker:2.1', 'reality:check']);
@@ -273,11 +279,12 @@ describe('wave-loop models', () => {
     expect(critic.reason).not.toBe('usage_limit');
   });
 
-  it('escalates once when the critic returns null on both models, with exactly two critic calls', async () => {
+  it('pauses the wave once when the critic returns null on both models, with exactly two critic calls', async () => {
     const { out, calls, escalations } = await runWave({ 'worker:2.1': opened, 'critic:2.1 r1': null });
     expect(calls.filter((c) => c.startsWith('critic'))).toHaveLength(2);
-    expect(out.gate).toBe('FAIL');
-    expect(escalations).toEqual(['critic agent returned nothing']);
+    expect(out.gate).toBe('PAUSED');
+    expect(escalations).toEqual(['wave paused: usage limit, resets unknown']);
+    expect(out.paused).toMatchObject({ resetText: null });
   });
 
   it('does not retry a critic error that is not a usage limit, and a second limit escalates', async () => {
