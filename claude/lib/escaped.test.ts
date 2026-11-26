@@ -2,9 +2,12 @@ import { spawnSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 // @ts-expect-error plain JavaScript module with JSDoc
 import { isFixTitle, parseBlameOrigins, parseDiffRanges, taskIdOf } from './escaped.js';
+
+// Each CLI run starts node, git and the fake gh; on a loaded machine one run takes several seconds.
+vi.setConfig({ testTimeout: 120_000 });
 
 const root = join(import.meta.dirname, '..', '..');
 const cli = join(root, 'scripts', 'escaped.js');
@@ -162,7 +165,7 @@ beforeAll(() => {
   sha.fix20 = git(repo, 'log', '--first-parent', '--format=%H', '--grep=Merge pull request #20 ', '-n1').trim();
 
   writeFileSync(join(ghDir, 'list.json'), JSON.stringify(merged));
-});
+}, 120_000);
 
 function run(args: string[], env: Record<string, string> = {}) {
   const r = spawnSync(process.execPath, [cli, ...args], {
@@ -185,9 +188,16 @@ function trace(extra: string[] = [], env: Record<string, string> = {}) {
   return r;
 }
 
+// The run with no options is the same for most cases: do it once.
+let plain: ReturnType<typeof trace> | null = null;
+function traced() {
+  plain ??= trace();
+  return plain;
+}
+
 describe('escaped-defect tracer over a temp repo with a fake gh', () => {
   it('a task PR whose line a later fix changes: escaped 1, with the fix listed', () => {
-    const { code, report } = trace();
+    const { code, report } = traced();
     expect(code).toBe(0);
     const t = report.tasks['1.1'];
     expect(t.pr).toBe(1);
@@ -197,26 +207,26 @@ describe('escaped-defect tracer over a temp repo with a fake gh', () => {
   });
 
   it('a later commit that only adds lines does not count and is not listed', () => {
-    const t = trace().report.tasks['1.2'];
+    const t = traced().report.tasks['1.2'];
     expect(t.escaped).toBe(0);
     expect(t.fixes).toEqual([]);
   });
 
   it('a later task PR that changes the line is not counted and not listed', () => {
-    const { tasks } = trace().report;
+    const { tasks } = traced().report;
     expect(tasks['1.3'].escaped).toBe(0);
     expect(tasks['1.3'].fixes).toEqual([]);
     expect(tasks['1.4'].escaped).toBe(0);
   });
 
   it('a later feat: commit that changes the line is listed as other and does not count', () => {
-    const t = trace().report.tasks['1.5'];
+    const t = traced().report.tasks['1.5'];
     expect(t.escaped).toBe(0);
     expect(t.fixes).toEqual([{ sha: sha.feat, title: 'feat: rewrite e1', kind: 'other', files: ['feat.txt'], lines: 1 }]);
   });
 
   it('a loop revert from a revert/ branch is not listed; a reopened task shows the latest PR and every number', () => {
-    const t = trace().report.tasks['1.6'];
+    const t = traced().report.tasks['1.6'];
     expect(t.pr).toBe(12);
     expect(t.prs).toEqual([5, 12]);
     expect(t.fixes.map((f) => f.title)).toEqual(['fix: s2']);
@@ -225,13 +235,13 @@ describe('escaped-defect tracer over a temp repo with a fake gh', () => {
   });
 
   it('a fix: commit pushed straight to the default branch counts', () => {
-    const t = trace().report.tasks['1.7'];
+    const t = traced().report.tasks['1.7'];
     expect(t.escaped).toBe(1);
     expect(t.fixes).toEqual([{ sha: sha.direct, title: 'fix: d1', kind: 'fix', files: ['direct.txt'], lines: 1 }]);
   });
 
   it('a fix touching two tasks lines counts once for each', () => {
-    const { tasks } = trace().report;
+    const { tasks } = traced().report;
     expect(tasks['1.8'].escaped).toBe(1);
     expect(tasks['1.9'].escaped).toBe(1);
     expect(tasks['1.8'].fixes).toEqual([{ sha: sha.both, title: 'fix(scope): x and y', kind: 'fix', files: ['x.txt'], lines: 1 }]);
@@ -239,20 +249,20 @@ describe('escaped-defect tracer over a temp repo with a fake gh', () => {
   });
 
   it('a file renamed before the fix: blame follows the rename, escaped 1', () => {
-    const t = trace().report.tasks['1.10'];
+    const t = traced().report.tasks['1.10'];
     expect(t.escaped).toBe(1);
     expect(t.fixes).toEqual([{ sha: sha.rename, title: 'Fix n3 in the renamed file', kind: 'fix', files: ['new-name.txt'], lines: 1 }]);
   });
 
   it('a squash-merged task PR is found by its (#n) subject and its commit counts as the origin', () => {
-    const t = trace().report.tasks['1.11'];
+    const t = traced().report.tasks['1.11'];
     expect(t.pr).toBe(13);
     expect(t.escaped).toBe(1);
     expect(t.fixes[0].sha).toBe(sha.squash);
   });
 
   it('lists every task PR of the prefix and no others, and counts the later commits it scanned', () => {
-    const { report } = trace();
+    const { report } = traced();
     expect(Object.keys(report.tasks).sort()).toEqual(
       ['1.1', '1.10', '1.11', '1.2', '1.3', '1.4', '1.5', '1.6', '1.7', '1.8', '1.9'].sort(),
     );
