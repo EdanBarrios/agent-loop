@@ -1,0 +1,794 @@
+{
+  "project": "agent-loop",
+  "wave": "2",
+  "accepted": [
+    {
+      "id": "R1",
+      "kind": "defect",
+      "task": "2.1",
+      "category": "ownership",
+      "text": "2.1's Owns clause omits files it has to edit, so a worker limited to its owned paths cannot finish: (1) its own test `tests/wave-loop-v24.test.ts` (the Test line says '(owned)' but the Owns clause does not list it, and wave-args builds `owns` only from that clause); (2) `claude/workflows/chain-loop.js`, whose `LOOP_VERSION` is '2.3.1' and which `claude/lib/chain.test.ts:184` requires to equal package.json, so the bump to 2.4.0 turns that test red; (3) three existing tests that hard-code `loopVersion: '2.3.1'` in the stubbed preflight (loop-perf.test.ts:20, speed-e2e.test.ts:149, wave-loop-relay.test.ts:108), which after the bump fail preflight with 'this wave-loop script is loop 2.4.0, but the loop scripts ... report loop 2.3.1'; (4) if the ciChunkMin default changes (R7), the chunk assertions in wave-loop-relay.test.ts. Recommended: add these to 2.1's Owns, limited to the version literal / chunk assertions, and read the version from package.json in the three tests. Record in the spec that 2.1 owns them. The lint will warn that the task owns more than 6 paths; that is a warning only.",
+      "evidence": "spec: '(owned): preflight fails with no rule' while Owns = `claude/workflows/wave-loop.js`, `package.json`, `docs/OPERATING.md`. claude/workflows/chain-loop.js:246 `const LOOP_VERSION = '2.3.1'`; claude/lib/chain.test.ts:184 `expect(source).toContain(`const LOOP_VERSION = '${VERSION}'`)` with source = chain-loop.js; tests/loop-perf.test.ts:20, tests/speed-e2e.test.ts:149, tests/wave-loop-relay.test.ts:108 `loopVersion: '2.3.1'`; wave-loop.js:1884 `if (line.loopVersion !== LOOP_VERSION) return fail(...)`.",
+      "reverseCost": "One revert PR of the spec text.",
+      "wouldBeWrongIf": "The loop treats a test edit that only follows the task's own change as allowed outside Owns without listing it (the 'Edits outside owned files' rule), and the project's rules allow it.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "`package.json`, `docs/OPERATING.md`. Depends on 1.1 and 1.3.",
+          "replace": "`package.json`, `docs/OPERATING.md`, `claude/workflows/chain-loop.js` (its `LOOP_VERSION` line only, which must equal `package.json`), `tests/wave-loop-v24.test.ts`, and `tests/wave-loop-relay.test.ts`, `tests/loop-perf.test.ts`, `tests/speed-e2e.test.ts` (in those three only the stubbed `loopVersion` literal, read from `package.json`, and the CI chunk assertions if the default changes). Depends on 1.1 and 1.3."
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category ownership is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "The spec is in ~/dev/agent-loop-public (not in ~/dev/agent-loop). There: claude/workflows/chain-loop.js:246 is `const LOOP_VERSION = '2.3.1'` and claude/lib/chain.test.ts:184 requires it to equal package.json; tests/loop-perf.test.ts:20, tests/speed-e2e.test.ts:149 and tests/wave-loop-relay.test.ts:108 hard-code `loopVersion: '2.3.1'`; wave-loop.js:1884 fails preflight on a mismatch. `grep loopVersion tests claude/lib` finds no other hard-coded current version (loop-version, wave-loop-findings and chain tests read package.json). Applied the edit to a scratch copy: scripts/spec-lint.js passes with the warning only, and wave-args.js gives 2.1 nine owned paths including the five new ones. The repo has no CLAUDE.md or CONTRACT.md, so no project rule allows edits outside owned files. A full test run after a simulated bump was aborted (machine load average about 80), so the file list rests on grep.",
+        "reason": "Every claim checks out and the edit parses as intended. One gap it does not cover: tests/loop-perf.test.ts:88 asserts that no log line starts with 'WARNING' for a stubbed preflight that has no `permission` field, and 2.1(a) logs a warning in exactly that case. The worker must word that log differently, or the ownership of loop-perf.test.ts must cover that assertion too."
+      }
+    },
+    {
+      "id": "R3",
+      "kind": "defect",
+      "task": "2.1",
+      "category": "ambiguity",
+      "text": "2.1(b) puts `resetsAt` in `paused` and the reset time in the escalation, but the workflow has no clock, so `classifyFailure` is called with `nowMs` null and always returns `resetsAt: null`. The escalation would say 'resets null'. Recommended: carry the reset text copied from the failure message (`resetText`), keep `resetsAt` null in the result, and let the session compute it with a clock when it reads the result.",
+      "evidence": "spec 1.3: 'the workflow has no clock: `nowMs` may be null, and then `resetsAt` is null'; wave-loop.js:26 'this script has no clock'; `grep -n 'Date\\.' claude/workflows/*.js` finds no clock use.",
+      "reverseCost": "One revert PR of the spec text.",
+      "wouldBeWrongIf": "The runtime exposes a clock to scripts (then `resetsAt` can be computed in the script).",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "`wave paused: usage limit, resets <time>` replaces the per-task ones; the result gains `paused: { resetsAt, tasks }`",
+          "replace": "`wave paused: usage limit, resets <time>` replaces the per-task ones, where `<time>` is the reset text copied from the failure message (`classifyFailure` is called with `nowMs` null, so `resetsAt` is null in the result and the session computes it); the result gains `paused: { resetsAt, resetText, tasks }`"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category ambiguity is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "claude/lib/pause.js:132-138: with `nowMs` null, `parseResetsAt` gives null. `grep 'Date\\.|new Date' claude/workflows/*.js` finds nothing. The Workflow authoring reference says `Date.now()`, `Math.random()` and argless `new Date()` throw in scripts. pause.js exports only `classifyFailure` and `pausePlan`.",
+        "reason": "The escalation would print a null reset time as written. Carrying the text is the smallest fix. Left open: pause.js exports no reset-text helper and 2.1 does not own it, so the spec should say how the text is cut out in wave-loop.js and what the escalation says when the message has no 'resets ...' part."
+      }
+    },
+    {
+      "id": "R5",
+      "kind": "defect",
+      "task": "2.1",
+      "category": "ambiguity",
+      "text": "2.1(b) does not say what a pause does after it starts, and the existing control flow would still do harmful things: dependents of a paused task are parked with a 'dependency parked' escalation each; the tail is parked with a 'tail not run' escalation; then the integration review (a critic-model agent over the whole wave diff), the reality gate and the machine gate still run on an account that just hit its limit. Also `pausePlan` takes states 'merged'|'reverted'|'parked'|'running' with a missing id for not started, but the loop only has 'pending'|'running'|'merged'|'parked' (a reverted task ends 'parked'), and adding a `paused` key to every result breaks the exact key list in wave-loop-gates.test.ts:184. Recommended: spell these out so the escalation list really is the one pause line.",
+      "evidence": "wave-loop.js:1922-1925 `if (runDeps(t).some((d) => state[d] === 'parked')) { state[t.id] = 'parked' ... escalate(t.id, `dependency ... parked`...)`; :1964-1965 `escalate(TAIL.id, 'tail not run', ...)`; :1905 `state[t.id] = 'pending'`; tests/wave-loop-gates.test.ts:184 `expect(Object.keys(out).sort()).toEqual(['decisions', 'escalations', 'findings', 'gate', 'integration', 'loopVersion', 'models', 'project', 'reality', 'state', 'tasks', 'timings', 'wave'])`.",
+      "reverseCost": "One revert PR of the spec text.",
+      "wouldBeWrongIf": "The decision is that a paused wave should still run the integration review and gates (then only the dependent and tail rules change).",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "and `gate: \"PAUSED\"`. The spike in the spec review settles",
+          "replace": "and `gate: \"PAUSED\"` (the `paused` key is absent from the result of a wave that did not pause). A pause also: a task whose dependency is paused is `paused`, not parked, and the tail is `paused` with no 'tail not run' escalation; the machine gate, the reality gate and the integration review do not run; each paused task has `state: \"paused\"` and a result entry with no rounds; the loop's `pending` is passed to `pausePlan` as a missing id and a parked task whose merge outcome is `reverted` as `reverted`; a relaunch passes `paused` tasks as it passes parked ones. The spike in the spec review settles"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category ambiguity is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "wave-loop.js:1922-1925 parks dependents with one escalation each; :1964-1965 parks the tail with 'tail not run'; the integration review, machine gate and reality gate run unconditionally after that; :1905 uses state 'pending'. tests/wave-loop-gates.test.ts:184 pins the exact result key list. claude/lib/chain.js:47 stops a chain on any gate other than 'PASS', so 'PAUSED' needs no chain change. The find string matches once and does not overlap R3's or R4's.",
+        "reason": "Without these rules a paused wave still raises per-task escalations and runs a critic-model agent on a limited account. The edit is consistent with `pausePlan` as merged and keeps the pinned key list green."
+      }
+    },
+    {
+      "id": "R6",
+      "kind": "defect",
+      "task": "2.1",
+      "category": "test",
+      "text": "The 2.1 pause test cannot be built as written: a 4-task wave with 'one task merged, one running (finishes) and two not started' has no task whose worker fails on the limit, and the running task is by definition not the failing one. Recommended: a wave of 5 tasks plus a tail with `maxChains` 3: one merged, one running that finishes and merges, one whose worker fails on the limit, two not started; expect the failed task, the two not started and the tail to be `paused`.",
+      "evidence": "spec 2.1 Test: 'a far-out usage limit on a worker pauses a 4-task wave with one task merged, one running (finishes) and two not started'; spec 1.3: 'tasks not started and tasks whose agent failed on the limit are paused'.",
+      "reverseCost": "One revert PR of the spec text.",
+      "wouldBeWrongIf": "The failing agent is meant to be one of the 'two not started' (a task cannot fail before it starts).",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "pauses a 4-task wave with one task merged, one running (finishes) and two not started;",
+          "replace": "pauses a wave of 5 tasks and a tail (`maxChains` 3) with one task merged, one running (it finishes and merges), one whose worker fails on the limit and two not started (the failed one, the two not started and the tail are `paused`, and one escalation is raised);"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category test is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Spec line 156-158 against 1.3 line 121-122 ('tasks not started and tasks whose agent failed on the limit are paused'): none of the four tasks is the one that fails. The scheduler at wave-loop.js:1918-1941 is a rolling pool that starts the next pending task as soon as a chain ends.",
+        "reason": "The original test cannot be built and the replacement can. Caveat: with `maxChains` 3 and no dependencies, a fourth task starts the moment the first merges, so 'one merged, two not started' at the moment of the pause needs `maxChains` 2 or dependencies on the running task. Say which, or the worker has to find the trick."
+      }
+    },
+    {
+      "id": "R9",
+      "kind": "defect",
+      "task": "2.2",
+      "category": "ambiguity",
+      "text": "The deterministic gate in 2.2(b) is described only for rounds where the critic ran. Two paths merge without it: the fast lane (no critic; eligibility only compares test counts, so `toBe(3)` changed to `toBeGreaterThan(0)` passes) and a round whose critic is skipped as a CI-only change. Goal 4 says the change 'cannot merge without a stated reason', so the gate must also cover these. Recommended: read the report in the fast-lane facts step (non-zero count with `bodySection` false means not eligible, so the critic reviews it), and let a CI-only skipped round reuse the report of the round it follows.",
+      "evidence": "wave-loop.js:1541-1546 `rec({ verdict: 'MERGE', ... checklist: [] }, ci, { lane: 'fast' }) ... return { action: 'merge', critic: null, ci }`; claude/lib/lane.js:200 `if (after < before) return no(`test count fell ...`)` (the only test rule); wave-loop.js:1557-1560 `criticSkipped: 'ci-only'`; spec goal 4.",
+      "reverseCost": "One revert PR of the spec text.",
+      "wouldBeWrongIf": "Fast lane is meant to be exempt from goal 4 (it is off by default: `fastLane.enabled === true` is required).",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "whatever the critic said; the worker",
+          "replace": "whatever the critic said; the same report is read in the fast-lane facts step, where a non-zero count with `bodySection` false makes the task not eligible (the critic reviews it), and a round whose critic is skipped as CI-only reuses the report of the round it follows; the worker"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category ambiguity is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "wave-loop.js:1541-1546 merges a fast-lane task with `critic: null`; the only test rule in claude/lib/lane.js:200 is `after < before`; :1557-1560 reuses the approved verdict for a CI-only round. Goal 4 is spec line 15-16.",
+        "reason": "Both paths skip the gate as the spec is written. Residual hole: a fast-lane task with assertion edits and any `Test edits:` line still merges with no critic judging the reason, although goal 4 also says the edit 'is reported to the critic'. The stricter rule (any non-zero count makes the task not eligible) is simpler and closes it. The edit should also say a fast-lane task is not eligible when the report is unavailable (R10)."
+      }
+    },
+    {
+      "id": "R10",
+      "kind": "defect",
+      "task": "2.2",
+      "category": "test",
+      "text": "2.2(b) says what happens when the impact relay fails but not the test-edits relay. If it is blocked or returns nothing, the gate silently does not run and goal 4 fails open, with nothing in the result to show it. Recommended: one retry when no JSON line is printed; if it is still unavailable, record `testEdits: \"unavailable\"` in the round, tell the critic to run `git diff` over the test files itself, and log it.",
+      "evidence": "spec 2.2(a): 'An impact relay that fails or returns nothing leaves the prompt as before and logs it.' (b) has no such sentence; wave-loop.js:1731-1737 shows the existing relay pattern distinguishes 'blocked' and 'none'.",
+      "reverseCost": "One revert PR of the spec text.",
+      "wouldBeWrongIf": "A silent fail-open on this gate is acceptable to Edan (then only the log line is needed).",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "logs it. (b) Before each critic round, one relay runs `test-edits.js`;",
+          "replace": "logs it. (b) Before each critic round, one relay runs `test-edits.js` (once more when it prints no JSON line; if it is still blocked or empty the round records `testEdits: \"unavailable\"`, the critic prompt tells the critic to run `git diff` over the test files itself, and it is logged);"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category test is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Spec 2.2(a) line 164-165 has a failure sentence for the impact relay; (b) at line 165-169 has none. wave-loop.js:1731-1737 shows the existing relay pattern separating 'blocked' from 'none'.",
+        "reason": "A silent fail-open on the gate that goal 4 depends on should at least be recorded and visible. Retrying only on a missing JSON line, not on a block, respects invariant 6."
+      }
+    },
+    {
+      "id": "R13",
+      "kind": "defect",
+      "task": "2.2",
+      "category": "test",
+      "text": "Goal 5 (the worker sees the tests that touch its files) gets nothing for the files wave 2 changes most. 1.5 finds tests only through import edges, but this repo's tests read `wave-loop.js` and `chain-loop.js` with `readFileSync` and run `loop-scorecard.py` and `merge-pr.js` with `execFile`. Running the merged impact.js on those files returns an empty list while 13 test files name wave-loop.js. Recommended: impact.js also lists, with `via: \"name\"`, a test file holding a quoted string with an owned file's repo-relative path or basename; 2.2 owns the change (R12 adds the paths).",
+      "evidence": "`node scripts/impact.js --repo . --owns claude/workflows/wave-loop.js scripts/loop-scorecard.py package.json --spec docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md` printed `{\"tests\":[]}`; `grep -l wave-loop.js tests/*.ts claude/lib/*.test.ts` lists 13 files (chain-e2e, check, loop-perf, loop-version, speed-e2e, wave-loop-findings, -gates, -prompts, -relay, wave-loop, chain.test, lane.test, pause.test); tests/wave-loop-relay.test.ts:8 `readFileSync(join(import.meta.dirname, '..', 'claude', 'workflows', 'wave-loop.js'), 'utf8')`.",
+      "reverseCost": "One revert PR of the spec text; the code change is one module.",
+      "wouldBeWrongIf": "Imports are the only link that matters for the projects the loop serves (a name match is then noise there; it can be limited to `testGlobs` files).",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "`--spec` when the project has one); the worker prompt lists the tests and their owners",
+          "replace": "`--spec` when the project has one); `impact.js` also lists, with `via: \"name\"`, every test file with a quoted string holding an owned file's repo-relative path or its basename (tests of this repo read `wave-loop.js` with `readFileSync` and run `loop-scorecard.py` with `execFile`, which no import shows; `impact.test.ts` gets a case, and the other fields keep their shape); the worker prompt lists the tests and their owners"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category test is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Ran `node scripts/impact.js --repo . --owns claude/workflows/wave-loop.js scripts/loop-scorecard.py package.json --spec <spec>` in agent-loop-public: it printed `{\"tests\":[]}`. `grep -l wave-loop.js tests/*.ts claude/lib/*.test.ts` lists the 13 files named. tests/wave-loop-relay.test.ts:8 reads the file with `readFileSync`. Control: `--owns claude/lib/pause.js` returns its two importing tests.",
+        "reason": "The gap is real and reproduced. Caveats: wave 2 itself runs on loop 2.3.1, so its workers get no list either way; the benefit comes after the relink. A basename match can be noisy in other projects and should be bounded. `via: \"name\"` overloads a field that holds a module path. It also brings 2.2 to 11 owned paths; a small separate task for the impact files, in parallel with 2.1, would carry less risk."
+      }
+    },
+    {
+      "id": "R15",
+      "kind": "defect",
+      "task": "2.3",
+      "category": "test",
+      "text": "Three loose ends in 2.3. (1) The rename test accepts two outcomes ('blame follows it with `-C`, or the case is noted, not counted'), so it cannot fail. `git blame` follows a whole-file rename without `-C` (`-C` is for lines copied between files), so the case is countable: pin it at escaped 1. (2) Listing the task PRs is not specified; `gh pr list` returns 30 by default and would silently drop older task PRs, and `--since` has no stated meaning. (3) A reopened task has two merged PRs under one task id, but the output has one `pr` per id. Recommended: list with `--limit 1000` and note when it is reached, `--since` filters by merge date, `prs` lists every number and a line from any of them counts.",
+      "evidence": "Experiment in a temp repo: after `git mv f.txt g.txt` and a later edit, `git blame --porcelain HEAD^ -L 2,2 -- g.txt` printed origin b9c979f (the first commit) with no -C; spec 2.3 Test: 'a file renamed before the fix (blame follows it with `-C`, or the case is noted, not counted)'; spec 2.3 names `gh pr view --json commits` only, with no listing command; output shape `{ pr, escaped, fixes }`.",
+      "reverseCost": "One revert PR of the spec text.",
+      "wouldBeWrongIf": "The `gh pr list` default limit were not 30 (it is a documented default of the gh CLI; not re-checked here).",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "follows it with `-C`, or the case is noted, not counted).",
+          "replace": "follows the rename, which `git blame` does by default for a whole-file rename: escaped 1)."
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "Task PRs are the merged PRs whose head branch starts with the prefix (task id parsed from",
+          "replace": "Task PRs are the merged PRs listed with `gh pr list --state merged --limit 1000 --json number,headRefName,mergedAt` (`note` says so when 1000 come back; `--since` keeps those merged on or after the date; a task id with two merged PRs, such as a reopen after a revert, shows the latest as `pr`, every number in `prs`, and a line from any of them counts) whose head branch starts with the prefix (task id parsed from"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category test is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Repeated the experiment in a scratch repo: after `git mv f.txt g.txt` and a later edit, `git blame --porcelain HEAD^ -L 2,2 -- g.txt` gave the first commit with `filename f.txt`, without `-C`. `gh pr list --help` (gh 2.95.0) says '--limit int ... (default 30)' and lists `headRefName`, `mergedAt` and `number` as JSON fields. Both find strings match once.",
+        "reason": "All three points hold. The rename test as written cannot fail, and the default limit would drop older task PRs without notice."
+      }
+    },
+    {
+      "id": "R17",
+      "kind": "question",
+      "task": "2.4",
+      "category": "ambiguity",
+      "text": "Is the new critic decision rule the one Edan wants? 'Lower bound of misses per merged task above 0' is true exactly when at least one task missed (1 of 30 gives a lower bound of 0.6%, 0 of 30 gives 0), so the interval adds nothing and a single miss in a pool moves a role. The worker rule (upper bound under 50% first-pass) needs about 6 failed tasks in a row or more: 0 of 6 has an upper bound of 39%, 1 of 6 about 58%. The old 'bump down after two clean waves' rule is dropped without a replacement. Recommended: a critic rule with a real threshold, e.g. 'lower bound of the share of tasks with a miss above 5%', and a stated rule for moving a role down.",
+      "evidence": "python3 Wilson: (1, 30) lower 0.0059, (0, 30) lower -1.2e-17, (0, 6) upper 0.390; scripts/loop-scorecard.py:474 old rule 'zero misses for two waves with only low findings, bump down'; spec 2.4: 'worker: upper bound under 50% first-pass; critic: lower bound of misses per merged task above 0'.",
+      "reverseCost": "One revert PR; the rule is scorecard text and changes no merge behaviour.",
+      "wouldBeWrongIf": "Edan wants any single escaped defect to trigger a critic change.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category ambiguity is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "python3 Wilson: (1, 30) lower 0.0059; (0, 30) lower 0.0; (0, 6) upper 0.390; (1, 6) upper 0.564. scripts/loop-scorecard.py:474 holds the old rule, including 'zero misses for two waves with only low findings, bump down'.",
+        "reason": "The lower bound is above 0 exactly when k is at least 1, so the interval adds nothing to the critic rule and one miss moves a role. The move-down rule is dropped with no replacement. A real question for Edan; the recommendation's '1 of 6 about 58%' is 56%."
+      }
+    },
+    {
+      "id": "R19",
+      "kind": "defect",
+      "task": "2.5",
+      "category": "ambiguity",
+      "text": "The sheet layout cannot be filled or read back as written. A verdict row with 'each fix item' and one `real?` column per fix item has no fixed width, and `--read` needs a key per answer. Round records also include verdicts no critic produced: fast-lane MERGEs and rounds skipped as CI-only (the approved critic result is copied with a note), plus STOP verdicts; labelling those would corrupt the precision figure. `result.tasks[id].pr` is an object, not a link. Recommended: one row per fix item of a FIX verdict and one per MERGE verdict of a round whose critic ran (no STOP, fast-lane or skipped rounds), keyed by task and round and item number; sample whole verdicts.",
+      "evidence": "wave-loop.js:1811 `r.pr = { number: worker.prNumber, url: worker.prUrl, ... }`; wave-loop.js:1541-1546 `{ lane: 'fast' }` MERGE records with `checklist: []`; wave-loop.js:1558-1559 `criticSkipped: 'ci-only'` with `critic = { ...approved, ...}`; spec 2.5: 'one row per critic verdict (task, round, verdict, each fix item, PR link from `result.tasks[id].pr`), with empty columns `real? (y/n)` per fix item'.",
+      "reverseCost": "One revert PR of the spec text.",
+      "wouldBeWrongIf": "Edan wants fast-lane approvals measured too (they have no critic verdict to label).",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "prints a Markdown sheet: one row per critic",
+          "replace": "prints a Markdown sheet: one row per fix item of a FIX verdict and one row per MERGE verdict of a round whose critic ran (none for STOP, `lane: 'fast'` or `criticSkipped` rounds), each row keyed by task, round and item,"
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "verdict (task, round, verdict, each fix item, PR link from `result.tasks[id].pr`), with empty columns `real? (y/n)`",
+          "replace": "with the verdict, the fix item (`n` and `what`) and the PR link from `result.tasks[id].pr.url`, and an empty `real? (y/n)` column"
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "per fix item and `correct? (y/n)` per MERGE; `--sample` draws n verdicts,",
+          "replace": "on a fix-item row and an empty `correct? (y/n)` column on a MERGE row; `--sample` draws n verdicts (a drawn FIX verdict brings all its rows),"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category ambiguity is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "wave-loop.js:1811 sets `r.pr` to an object with `url`; :1543 records fast-lane MERGE rounds with `checklist: []`; :1558-1559 copies the approved critic result into a skipped round; fix items carry `n` and `what` (:1008-1022). The three find strings match once each.",
+        "reason": "A row per verdict with a variable number of fix items cannot be read back, and rounds no critic produced would distort precision. Note for the worker: a FIX produced by code (the 2.2(b) gate, or a MERGE turned into FIX for a high finding) is not the critic's judgement and should be marked or left out."
+      }
+    },
+    {
+      "id": "R20",
+      "kind": "defect",
+      "task": "2.T",
+      "category": "ownership",
+      "text": "No task owns the documentation of the wave 2 tools. 2.1 owns docs/OPERATING.md but runs in parallel with 2.3, 2.4 and 2.5, so it cannot document `escaped.js`, `--escaped-from`, `--pool` or `label-sheet.py`, nor the `Test edits:` and impact relays of 2.2. The sessions that run waves read OPERATING.md. Recommended: the tail owns the OPERATING.md sections for them, written after 2.2 to 2.5 merged.",
+      "evidence": "spec 2.1: 'Owns ... `docs/OPERATING.md` ... documents `mergePermission`, `ciChunkMin`, `testGlobs`, the `PAUSED` gate, H2, and `wave-args.js --scorecards <dir>`'; 2.3, 2.4, 2.5 Owns lines list no docs; `grep -n 'escaped\\|label' docs/OPERATING.md` has no entry for the new scripts.",
+      "reverseCost": "One revert PR of the spec text.",
+      "wouldBeWrongIf": "The CLIs are documented in their own file headers and that is enough for the sessions that use them.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "- **2.T Wave 2 tail.** Owns `tests/v24-e2e.test.ts`. Depends on",
+          "replace": "- **2.T Wave 2 tail.** Owns `tests/v24-e2e.test.ts` and `docs/OPERATING.md` (the sections for the impact and test-edits relays, `escaped.js` with `--escaped-from`, `--pool` and `label-sheet.py`, written after 2.2 to 2.5 merged). Depends on"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category ownership is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "`grep -n -i 'escaped|label-sheet|--pool|test-edits|impact' docs/OPERATING.md` finds only the old `--escaped <n>` text. 2.3, 2.4 and 2.5 own no docs. Applied the edit to a scratch copy and ran wave-args.js: the tail's `owns` comes out as `tests/v24-e2e.test.ts`, `docs/OPERATING.md`, `escaped.js`, `label-sheet.py`.",
+        "reason": "The gap is real and the tail is the right owner. The edit text needs one fix first: `ownedPaths` in spec-lint.js takes any backticked name with a file extension inside the Owns clause, so the tail would be told it owns two root files that do not exist. Write those two names without backticks in the parenthesis."
+      }
+    },
+    {
+      "id": "R21",
+      "kind": "question",
+      "text": "Does Edan want H2 widened to every script the relays run? H2 and the preflight check cover only `merge-pr.js`. Wave 2 adds two more commands that a relay runs on every task (`impact.js`, `test-edits.js`), next to `wait-ci.js` and `ci-only.js`. A command with no allow rule goes to the auto-mode classifier, which refused a merge relay minutes after it had allowed the same command (Warden wave 1d). A refused test-edits relay opens goal 4 (R10). Recommended: one `permissions.allow` rule per script, each naming the script path (a rule naming only `node` is dropped), and `commandForms()` of merge-pr.js extended later to predict them. The spike for F2 did not settle whether auto mode keeps a rule of the shape `Bash(node /abs/path/.claude/scripts/merge-pr.js *)`: the permission-modes page lists dropped broad rules (blanket Bash(*), wildcarded interpreters, a wrapper followed only by a wildcard, some wildcarded paths) and says narrow rules like `Bash(npm test)` stay, but does not name this shape, and the fetch covered only the first 100000 of about 121905 characters. It also says each subagent action goes through the same rules as the parent but does not name Haiku relays. So F2 stays open: H2 should say the human confirms the rule once by running one relay in auto mode (the preflight passing is not proof the classifier is skipped), and the rule text is kept as narrow as possible (the script path is not wildcarded; only the trailing arguments are). Permission settings are human-only.",
+      "evidence": "spec H2 line 75: 'Add a `permissions.allow` rule for the merge script'; scripts/merge-pr.js `commandForms()` builds only merge-pr.js forms; docs/warden/2026-11-14-wave-1d-loop.md: 'the auto-mode classifier refused its merge relay ... minutes after the same command merged 1.14'; https://code.claude.com/docs/en/permission-modes: 'narrow rules like `Bash(npm test)` stay in effect and resolve immediately'; spike F2: 'The page does not name the shape ... so whether it is kept or dropped is not stated'.",
+      "reverseCost": "Edit or delete rules in ~/.claude/settings.json.",
+      "wouldBeWrongIf": "The page's unread remainder or a test shows the shape is dropped (then the rules do nothing and another mechanism is needed), or the classifier does not refuse read-only scripts such as `impact.js` and `test-edits.js` (then only the merge rule matters).",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "category": "permission",
+      "task": "2.1",
+      "dependsOn": [
+        "F2"
+      ],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "Add a `permissions.allow` rule for the merge script, e.g.",
+          "replace": "Add a `permissions.allow` rule for each script a relay runs (`merge-pr.js`, `wait-ci.js`, `ci-only.js` and, from wave 2, `impact.js` and `test-edits.js`), then confirm once by running one relay in auto mode that the classifier is not consulted, e.g."
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category permission is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Spec H2 (line 75) covers only merge-pr.js; `commandForms()` at scripts/merge-pr.js:156 builds only merge-pr.js forms. The permission-modes page lists the dropped broad rules and says 'Narrow rules like `Bash(npm test)` stay in effect', without naming this shape. docs/warden/2026-11-14-wave-1d-loop.md:68-72 records the classifier refusal. The v2.4 wave 1 scorecard (line 71) records the 1.T merge relay blocked again. `grep merge-pr ~/.claude/settings.json` finds no rule.",
+        "reason": "A valid question in a human-only category, and wave 1 of this very spec hit the block again. Two notes for Edan: H2 has not been done yet, so 2.1's preflight will fail every wave after the relink until it is; and the edited H2 sentence puts the 'e.g.' rule after the confirm step, which reads oddly."
+      }
+    }
+  ],
+  "asked": [
+    {
+      "id": "R2",
+      "kind": "defect",
+      "task": "2.1",
+      "category": "permission",
+      "text": "2.1(a) lets `mergePermission: \"prompt\"` log a warning and continue whenever `permission.allowed` is false. That also covers a matching deny rule, which Claude Code enforces in every mode, so the wave would start workers that can never merge: the exact waste goal 1 forbids, and a way around a refused command (invariant 6). `prompt` should only waive the missing-allow and `ask` cases. Recommended: a non-null `permission.denied` fails preflight in both modes.",
+      "evidence": "spec 2.1(a): 'unless `project.mergePermission` is `\"prompt\"` (new optional field), which logs a warning and continues'; invariant 6: 'never routes around a refused command'; code docs https://code.claude.com/docs/en/permission-modes: 'Deny rules block in every mode'.",
+      "reverseCost": "One revert PR of the spec text.",
+      "wouldBeWrongIf": "A deny rule on the merge script is meant to be overridable by a project field.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [
+        "invariant"
+      ],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "warning and continues. A dry run without",
+          "replace": "warning and continues, but only when `permission.denied` is null (a deny rule fails preflight in either mode); the escalation names the rule as `Bash(node <scripts dir>/merge-pr.js *)` and lists `permission.broad`. A dry run without"
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: touches invariant",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Fetched https://code.claude.com/docs/en/permission-modes: 'Deny rules block in every mode, including `bypassPermissions`.' claude/lib/permission.js:119-154 returns `denied`, `ask` and `broad` as separate fields, and `allowed` is false for any of deny, ask or missing allow. Spec line 146-147 lets `mergePermission: \"prompt\"` continue on any `allowed: false`. The find string matches once.",
+        "reason": "A deny rule cannot be answered by a prompt, so continuing would start workers that can never merge. The edit uses fields that exist and the rule text matches H2."
+      }
+    },
+    {
+      "id": "R4",
+      "kind": "defect",
+      "text": "The pause trigger is under-specified in two places. (1) A usage limit on the critic already has a path: `callCritic` swaps every later critic call to CRITIC_FALLBACK (opus/high) on a limit error. A weekly limit applies to the account, so the swap just burns another call and changes models.critic; the far-out check must come first. Also 2.1 makes `isUsageLimit` call `classifyFailure`, whose pattern adds `weekly limit`, so the swap would fire on new messages. (2) The 'null with a log line' path cannot be classified: the script never sees the log line, so `classifyFailure` has no text and cannot say far-out. 'Both paths are handled' is untestable for null. The spike for F1 found no source saying whether the runtime throws an Error carrying the text or returns a bare null (only that agent() returns null after a terminal API error, and that a session-limit failure shows as a per-agent failure while the run reports completed), and no source on wording stability. So F1 stays open and the spec must not assume either path. Recommended: classify inside the catch of every agent call (worker, fix, relays, critic) before any swap; for a bare null keep today's behaviour and log it; the pause trigger is tested only against the thrown path, and a fixture of a real captured failure (thrown or null) is required before the far-out wording is pinned in a regex.",
+      "evidence": "wave-loop.js:1233-1236 'a call that throws a usage-limit error, or returns null (the runtime's answer when the subagent dies on a terminal API error such as a usage limit), is retried once on CRITIC_FALLBACK ... every later critic call ... starts on the fallback'; wave-loop.js:831 `const CRITIC_FALLBACK = { model: 'opus', effort: 'high' }`; spec 2.1(b) line 152: 'a thrown error, or `null` with a log line; both paths are handled'; spike F1 answer: 'Whether the script gets a thrown Error or null is not stated in any source found, and wording stability is not established' (https://github.com/anthropics/claude-code/issues/94012).",
+      "reverseCost": "One revert PR of the spec text; no code exists yet.",
+      "wouldBeWrongIf": "A captured real usage-limit failure shows the runtime returns an object or text to the script, or the weekly limit is per model so the swap helps.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "category": "ambiguity",
+      "task": "2.1",
+      "dependsOn": [
+        "F1"
+      ],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "(a thrown error, or `null` with a log line); both paths are handled.",
+          "replace": "(a thrown error, or `null` with a log line). A thrown error is classified before any other handling, including the critic's swap to `CRITIC_FALLBACK` (a far-out limit pauses instead of swapping); a bare `null` carries no text, so it is handled as today and logged until a captured real failure shows how the text reaches the script. The far-out wording is pinned in a regex only from such a capture."
+        }
+      ],
+      "decision": "ask",
+      "reason": "adversary disagree: The diagnosis is right, but the edit should not go in as written, for three reasons. (1) It lets only a thrown error pause the wave, while the documented and observed answer to a usage-limit death is a bare null. Goal 2 would then be built and tested on a path that may never occur, and a real weekly limit would still park every task. (2) 'Pinned in a regex only from such a capture' contradicts wave 1: the regex is already merged in a file 2.1 cannot edit, so the worker cannot act on the sentence. (3) Pausing before the critic swap assumes the limit is account-wide, which the recommendation itself lists as unverified; swapping first and pausing only if the fallback also fails costs one call that errors at once. Edan should choose: capture a real failure before building 2.1(b), or define a trigger for the null path. (The Workflow authoring reference says agent() 'Returns null if ... the subagent dies on a terminal API error after retries'; wave-loop.js:1233-1236 says the same, and commit bfe3c0b ('treat a null critic result as the usage-limit case') was added after a real failure. claude/lib/pause.js:137 already pins `/too far out/` (merged in wave 1, not owned by 2.1). docs/pilot/2026-11-02-wave-10-loop.md:90 records the one known use of the fallback: Fable errored and 'the Opus fallback errored at once'. `isUsageLimit` at wave-loop.js:1238 lacks `weekly limit`, as claimed.)",
+      "adversary": {
+        "verdict": "disagree",
+        "evidence": "The Workflow authoring reference says agent() 'Returns null if ... the subagent dies on a terminal API error after retries'; wave-loop.js:1233-1236 says the same, and commit bfe3c0b ('treat a null critic result as the usage-limit case') was added after a real failure. claude/lib/pause.js:137 already pins `/too far out/` (merged in wave 1, not owned by 2.1). docs/pilot/2026-11-02-wave-10-loop.md:90 records the one known use of the fallback: Fable errored and 'the Opus fallback errored at once'. `isUsageLimit` at wave-loop.js:1238 lacks `weekly limit`, as claimed.",
+        "reason": "The diagnosis is right, but the edit should not go in as written, for three reasons. (1) It lets only a thrown error pause the wave, while the documented and observed answer to a usage-limit death is a bare null. Goal 2 would then be built and tested on a path that may never occur, and a real weekly limit would still park every task. (2) 'Pinned in a regex only from such a capture' contradicts wave 1: the regex is already merged in a file 2.1 cannot edit, so the worker cannot act on the sentence. (3) Pausing before the critic swap assumes the limit is account-wide, which the recommendation itself lists as unverified; swapping first and pausing only if the fallback also fails costs one call that errors at once. Edan should choose: capture a real failure before building 2.1(b), or define a trigger for the null path."
+      }
+    },
+    {
+      "id": "R7",
+      "kind": "question",
+      "text": "Should the `ciChunkMin` default become 8 at once? The 1.5-minute chunk exists so a relay call ends inside the Bash tool's 120 s default and cannot be backgrounded; at 8 minutes a CI relay whose Haiku model forgets `timeout=600000` is moved to the background and must read an output file up to 30 times (extra tokens, or a failed wait). The saving is real (a 9-minute budget is 6 relay calls at 1.5 and 2 at 8; a relay run costs about 34k tokens). The spike for F3 did not settle it: the local scorecards record 5 relay backgroundings in pilot waves 8 and 10, all before the `timeout=600000` rule and the chunking, and none since, but no wave has asked a Haiku relay to wait 8 minutes under the current prompt, so reliability is untested and F3 stays open. Recommended: ship the default as 1.5 (nothing changes for existing projects, invariant 5), set `ciChunkMin: 8` in this project's loop.local.json for wave 2 (a config edit), and change the default after one wave shows no relay moved to the background. The edit also states the clamp, which the spec leaves open.",
+      "evidence": "wave-loop.js:905 `const CI_CHUNK_MIN = 1.5 // ... well under the Bash tool's 120 s default timeout`; wave-loop.js:1332 'FIRST RULE: the Bash tool call that runs the command MUST include the parameter timeout=600000. Without it the command is moved to the background after 120 seconds and the task fails'; docs/pilot/2026-11-03-loop-performance.md: waves 8 and 10 had 5 relay blocks from backgrounding; spike F3: 'They do not show whether a Haiku relay reliably passes timeout=600000 on an 8-minute wait, since the current design avoids that wait by chunking'; tests/wave-loop-relay.test.ts:707 'the 9 minute budget is 6 chunks of 1.5'.",
+      "reverseCost": "A config edit (`ciChunkMin`) or one revert PR.",
+      "wouldBeWrongIf": "A wave with chunk 8 shows no relay moved to the background, and the saving is wanted for every project at once.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "category": "quota",
+      "task": "2.1",
+      "dependsOn": [
+        "F3"
+      ],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "from `project.ciChunkMin` (new optional field, default 8, at most `CI_RELAY_MAX_MIN`);",
+          "replace": "from `project.ciChunkMin` (new optional field, default 1.5 as today; a value that is not a number above 0 uses the default and a value above `CI_RELAY_MAX_MIN` is lowered to it);"
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: category quota is human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "wave-loop.js:904-905 (`CI_RELAY_MAX_MIN = 9`, `CI_CHUNK_MIN = 1.5`), :1332 (the `timeout=600000` rule), tests/wave-loop-relay.test.ts:707, and docs/pilot/2026-11-03-loop-performance.md:88 and :259 are as quoted. The loop that runs this project's wave 2 is ~/dev/agent-loop at 2.3.1 (the .claude links and the Bootstrapping fixed decision); its wave-loop.js:905 is a constant and never reads `ciChunkMin`.",
+        "reason": "Keeping 1.5 as the default and stating the clamp is safe, and it is a question for Edan anyway. One part is wrong: setting `ciChunkMin: 8` in this project's loop.local.json does nothing in wave 2, because wave 2 runs on loop 2.3.1. The trial wave has to be the first wave of a project relinked after H1. Also note wave-loop.js:1728 already asks a Haiku relay to wait up to 9 minutes in one call (`--verify-main --timeout-min 9`), so long foreground waits are not wholly untested."
+      }
+    },
+    {
+      "id": "R11",
+      "kind": "defect",
+      "task": "2.2",
+      "category": "ambiguity",
+      "text": "2.2(c) adds `items: [{ n, pass, evidence }]` to the critic schema, but the schema already has a required `checklist: [{ item, pass, evidence }]`, one entry per checklist item, recorded in every round. A second array with a different key (`n` vs `item`) duplicates it, and 2.4's per-item counts and the labelling work would read two sources. What is missing is a completeness check. Worse, the spec routes an incomplete verdict through 'the existing retry path', which is the swap of every later critic call (any task, any round) to opus/high for the rest of the wave: one omitted item would change models.critic and the cost of the whole wave. Recommended: keep `checklist`, check it for completeness, and give the critic one more call on the same model with the missing numbers named; skip the check for fast-lane and skipped rounds (they record `checklist: []`).",
+      "evidence": "wave-loop.js:1000-1006 `checklist: { type: 'array', items: { properties: { item: { type: 'integer' }, pass: { type: 'boolean' }, evidence: { type: 'string' } }, required: ['item','pass','evidence'] } }` and :1029 `required: ['verdict', 'checklist', 'fixItems', 'findings', 'notes']`; wave-loop.js:1233-1236 'every later critic call (any task, any round) starts on the fallback'; :1518,1543 `checklist: []` for fast-lane records.",
+      "reverseCost": "One revert PR of the spec text.",
+      "wouldBeWrongIf": "Edan wants a separate `items` key for a reason not in the spec (for instance a different evidence rule), or wants an incomplete verdict to swap the critic model.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "(c) The critic schema gains `items: [{ n, pass, evidence",
+          "replace": "(c) The critic schema's existing `checklist: [{ item, pass, evidence"
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "`items` array misses a checklist number is treated as the critic returning nothing (the existing retry path); a verdict with no `items` key is recorded without per-item data and logged (the schema requires the key of a real critic; nine existing test files stub critic results without it).",
+          "replace": "`checklist` array misses a checklist number gets one more critic call on the same model with the missing numbers named (never the swap to `CRITIC_FALLBACK`); a second miss is recorded as is and logged; a round with `lane: 'fast'`, `criticSkipped` or `checklist: []` (as the stubs of existing tests have) is not checked."
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "a critic result missing item 9 is retried.",
+          "replace": "a critic result missing item 9 gets one more call on the same model and `models.critic` is unchanged."
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "results carry critic `items` (2.2), the scorecard counts items failed per checklist number.",
+          "replace": "results carry a non-empty critic `checklist`, the scorecard counts items failed per checklist number."
+        }
+      ],
+      "decision": "ask",
+      "reason": "adversary disagree: Reusing `checklist` and re-calling on the same model are both right; the swap problem is real. But exempting `checklist: []` to keep the stubs green opens a hole the original text did not have: a real critic that returns an empty checklist is neither checked nor logged, and 2.4 and 2.5 silently lose its data. That is the worst case of what goal 6 is meant to catch. Edan or the session should choose between updating the stubs and at least recording and logging an empty checklist from a critic that ran. The first edit also leaves its sentence without a verb. (wave-loop.js:1000-1006 and :1029: `checklist` with `item`, `pass`, `evidence` already exists and is required, with no `minItems`. :1233-1267: a null critic result swaps every later critic call to opus/high. Stubs with `checklist: []` are in chain-e2e, loop-perf, speed-e2e, wave-loop-gates, wave-loop-findings, wave-loop, wave-loop-prompts and wave-loop-relay tests.)",
+      "adversary": {
+        "verdict": "disagree",
+        "evidence": "wave-loop.js:1000-1006 and :1029: `checklist` with `item`, `pass`, `evidence` already exists and is required, with no `minItems`. :1233-1267: a null critic result swaps every later critic call to opus/high. Stubs with `checklist: []` are in chain-e2e, loop-perf, speed-e2e, wave-loop-gates, wave-loop-findings, wave-loop, wave-loop-prompts and wave-loop-relay tests.",
+        "reason": "Reusing `checklist` and re-calling on the same model are both right; the swap problem is real. But exempting `checklist: []` to keep the stubs green opens a hole the original text did not have: a real critic that returns an empty checklist is neither checked nor logged, and 2.4 and 2.5 silently lose its data. That is the worst case of what goal 6 is meant to catch. Edan or the session should choose between updating the stubs and at least recording and logging an empty checklist from a critic that ran. The first edit also leaves its sentence without a verb."
+      }
+    },
+    {
+      "id": "R12",
+      "kind": "defect",
+      "task": "2.2",
+      "category": "ownership",
+      "text": "Two ownership gaps in 2.2. (1) Its Owns clause limits wave-loop.js to 'prompt text and the critic schema', but the two new relays, the call order in `reviewRound` and the deterministic gate are control flow, which 2.1 excludes ('no prompt text') and nobody else owns. (2) The new impact and test-edits relays add labels to the stubbed agent calls, so every test that pins the exact `calls` list fails: tests/loop-perf.test.ts:114 and :219, tests/wave-loop-relay.test.ts (about 12 lists), tests/wave-loop-gates.test.ts `greenCalls` (used at :109, :129, :183) and tests/wave-loop.test.ts:68-101. No task owns them. Recommended: 2.2 owns them, limited to the `calls` lists (and, per R13, the impact module).",
+      "evidence": "tests/loop-perf.test.ts:114 `expect(calls).toEqual(['preflight:merge', 'worker:9.1', 'ci:9.1 r1', 'critic:9.1 r1', 'merger:9.1', 'main:9.1'])`; tests/wave-loop-gates.test.ts:80 `const greenCalls = ['worker:2.1', 'critic:2.1 r1', 'merger:2.1']`; tests/wave-loop.test.ts:68 `expect(calls).toEqual(['worker:9.1', 'worker:9.1 finish1', 'ci:9.1 r1', 'critic:9.1 r1', 'merger:9.1'])`; spec 2.1 Owns '(... preflight, failure handling and constants; no prompt text)'.",
+      "reverseCost": "One revert PR of the spec text.",
+      "wouldBeWrongIf": "The relays are made opt-in so default test runs never call them (then no test list changes, but goals 4 and 5 are off by default).",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "schema, after 2.1 has merged), `claude/agents/critic.md`, `claude/agents/producer.md`, `tests/wave-loop-prompts.test.ts`.",
+          "replace": "schema, the two relays and the gate of (a) and (b) in `reviewRound`, after 2.1 has merged), `claude/agents/critic.md`, `claude/agents/producer.md`, `tests/wave-loop-prompts.test.ts`, `claude/lib/impact.js`, `claude/lib/impact.test.ts`, `scripts/impact.js`, `tests/wave-loop.test.ts`, `tests/wave-loop-gates.test.ts`, `tests/wave-loop-relay.test.ts`, `tests/loop-perf.test.ts` (in the last four only the exact `calls` lists)."
+        }
+      ],
+      "decision": "ask",
+      "reason": "adversary disagree: The direction is right, but the list is incomplete in the same way as the defect it fixes: tests/loop-version.test.ts is owned by nobody, and the 2.2 worker cannot avoid breaking line 74. Add it before applying. Two smaller points: the impact relay runs before the worker, not in `reviewRound`, and the three impact paths belong in the list only if R13 is accepted. (The pinned `calls` lists in tests/loop-perf.test.ts:114 and :219, tests/wave-loop-gates.test.ts:80-263, tests/wave-loop.test.ts:68-101 and tests/wave-loop-relay.test.ts (20 matches) are as claimed. Missed: tests/loop-version.test.ts:74, `expect(calls.slice(0, 2)).toEqual(['preflight:merge', 'worker:9.1'])`; an impact relay before the worker makes the second entry the relay's label. The edited spec passes spec-lint with a warning that 2.2 owns 11 paths.)",
+      "adversary": {
+        "verdict": "disagree",
+        "evidence": "The pinned `calls` lists in tests/loop-perf.test.ts:114 and :219, tests/wave-loop-gates.test.ts:80-263, tests/wave-loop.test.ts:68-101 and tests/wave-loop-relay.test.ts (20 matches) are as claimed. Missed: tests/loop-version.test.ts:74, `expect(calls.slice(0, 2)).toEqual(['preflight:merge', 'worker:9.1'])`; an impact relay before the worker makes the second entry the relay's label. The edited spec passes spec-lint with a warning that 2.2 owns 11 paths.",
+        "reason": "The direction is right, but the list is incomplete in the same way as the defect it fixes: tests/loop-version.test.ts is owned by nobody, and the 2.2 worker cannot avoid breaking line 74. Add it before applying. Two smaller points: the impact relay runs before the worker, not in `reviewRound`, and the three impact paths belong in the list only if R13 is accepted."
+      }
+    },
+    {
+      "id": "R14",
+      "kind": "defect",
+      "task": "2.3",
+      "category": "ambiguity",
+      "text": "The escaped-defect rule double counts the loop's own reverts. When main goes red after a merge the merger opens `revert/<id>`, merges it, and the task is recorded `reopened`; the scorecard already counts that as a critic miss (`reverts`). The revert is a later commit not from a `task/` branch that deletes every line of the task, so 2.3 counts it again as an escaped defect, and 2.4 adds both (`reverts + escaped`). Recommended: exclude `revert/` branches from later commits.",
+      "evidence": "wave-loop.js merger prompt: 'git worktree add ${WT}/revert-${t.id} -b revert/${t.id} main, git revert -m 1 <mergeSha>'; scripts/loop-scorecard.py:344-345,465 `if t.get(\"reopened\"): reverts += 1` ... `Critic misses: {reverts + escaped}`; spec Escaped defect: 'A later commit ..., not from a task branch of the same project, that changes or deletes a line'.",
+      "reverseCost": "One revert PR of the spec text.",
+      "wouldBeWrongIf": "A reverted task is meant to count twice (a miss and an escaped defect).",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [
+        "fixed_decision"
+      ],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "not from a task branch of the same project, that changes or",
+          "replace": "not from a task branch or a `revert/` branch of the same project (the loop's own revert is already counted as `reopened`), that changes or"
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: touches fixed_decision",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "claude/lib/merge.js:469 names the script's revert branch `revert/pr-<n>`, and the agent merger prompt uses `revert/<id>`; both start with `revert/`. scripts/loop-scorecard.py:344-345 counts `reopened` as a revert and :465 prints `reverts + escaped`.",
+        "reason": "The loop's own revert deletes the task's lines from a branch that is not a task branch, so it would be counted twice. The prefix covers both revert forms. It changes a fixed decision, so it is Edan's to accept."
+      }
+    },
+    {
+      "id": "R16",
+      "kind": "defect",
+      "task": "2.4",
+      "category": "ambiguity",
+      "text": "'Critic misses per merged task' is not a proportion, so a Wilson interval is undefined for it. Misses are reverts plus escaped fixes counted per (fix commit, task PR) pair, so they can exceed the number of merged tasks (3 misses over 2 tasks); Wilson needs k at most n and the formula then fails. Also the lower bound for 0 misses comes out as -1.2e-17 in floating point, so 'lower bound above 0' can flip on rounding noise. Recommended: define the critic rate as the share of merged tasks with at least one miss (k at most n), print the count of fix commits beside it, and clamp bounds to [0, 1] with values under 1e-9 taken as 0.",
+      "evidence": "python3: Wilson(k=3, n=2) raises `math domain error`; Wilson(0, 30) = (-1.2302421700937121e-17, 0.1135); spec Escaped defect: 'Counted once per (fix commit, task PR) pair'; spec 2.4: 'critic misses per merged task ... with its 95% Wilson interval'.",
+      "reverseCost": "One revert PR of the spec text.",
+      "wouldBeWrongIf": "Misses are meant to be an event rate (then a Poisson interval is needed, which changes the Intervals fixed decision).",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [
+        "fixed_decision"
+      ],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "task) is printed with its 95% Wilson interval.",
+          "replace": "task) is printed with its 95% Wilson interval. The critic rate is the share of merged tasks with at least one miss (a revert after MERGE or one or more escaped fixes), so k is at most n; the number of fix commits is printed beside it, not inside the interval; bounds are clamped to 0 and 1 and a lower bound under 1e-9 counts as 0."
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: touches fixed_decision",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "python3: Wilson(3, 2) raises 'math domain error'; Wilson(0, 6) lower bound is 2.8e-17, above 0 by rounding noise. Spec line 67 counts once per (fix commit, task PR) pair, so misses can exceed merged tasks.",
+        "reason": "A count that can exceed n is not a proportion, and the clamp is needed (0 of 6 already shows the noise). Gap to state: with the old `--escaped <n>` flag alone there is no per-task attribution, so the share of tasks with a miss cannot be computed. Say what the scorecard prints then."
+      }
+    },
+    {
+      "id": "R18",
+      "kind": "defect",
+      "task": "2.4",
+      "category": "ambiguity",
+      "text": "2.4 leaves four inputs undefined that 2.1 and 2.3 now produce. (1) Paused or never-reviewed tasks have no rounds; the scorecard's `n = len(tasks)` would count them as first-pass failures. (2) `--escaped-from` is a whole-repo file, but a wave's scorecard must only count that wave's tasks; both `--escaped` and `--escaped-from` given is unspecified. (3) `--pool <result.json>` is described as taking wave results, but tokens per task come from the per-agent records in the workflow output, which the scorecard already takes as its positional files. Recommended: n counts tasks with at least one critic round; unknown tasks in the escaped file are ignored with a note; both flags is an error; `--pool` takes the same workflow-output files.",
+      "evidence": "scripts/loop-scorecard.py:468-460 `n = len(tasks)` / `out.append(f\"- Worker first-pass MERGE: {first_pass}/{n}\")`; scripts/loop-scorecard.py:303-305 `result, agents = merge_results(paths)` and `total_tokens = sum(r[\"tokens\"] for r in by_role.values())` (tokens come from `agents`); spec 2.4: '`--pool <result.json>...`', '`--escaped-from <escaped.json>` ... instead of `--escaped <n>`'.",
+      "reverseCost": "One revert PR of the spec text.",
+      "wouldBeWrongIf": "Paused tasks are meant to count against the first-pass rate (they should not: no worker ran).",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "count per task instead of `--escaped <n>`, and the scorecard lists each fix commit.",
+          "replace": "count per task instead of `--escaped <n>` (both given is an error; tasks of the file that are not in the given runs are ignored and counted in a note), and the scorecard lists each fix commit; a rate counts only tasks with at least one critic round, so a task `paused` or parked before review is not in n."
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "`--pool <result.json>...` prints",
+          "replace": "`--pool <workflow-output.json>...` (the files the scorecard already reads, whose agent records hold the tokens) prints"
+        }
+      ],
+      "decision": "ask",
+      "reason": "adversary disagree: Points 2 and 3 hold. Point 1 goes too far: 'only tasks with at least one critic round' also drops tasks whose worker ran and failed before review, which are the worst worker outcomes, so the first-pass rate rises and the 'upper bound under 50%' rule is harder to trigger. It also leaves open whether a fast-lane MERGE, counted as first-pass today, is a 'critic round'. Narrow it to tasks that never started (paused, dependency parked, tail not run) and state the fast-lane case. (scripts/loop-scorecard.py:341-345 counts first-pass as `rounds[0].verdict == 'MERGE'` over `n = len(tasks)` (:459). tests/wave-loop.test.ts:79 and :88 show tasks parked with no round because the worker ran and never delivered a PR. Fast-lane merges are recorded as a round with verdict MERGE and no critic (wave-loop.js:1543). The scorecard's positional inputs are workflow-output files whose agent records hold the tokens (:303-305).)",
+      "adversary": {
+        "verdict": "disagree",
+        "evidence": "scripts/loop-scorecard.py:341-345 counts first-pass as `rounds[0].verdict == 'MERGE'` over `n = len(tasks)` (:459). tests/wave-loop.test.ts:79 and :88 show tasks parked with no round because the worker ran and never delivered a PR. Fast-lane merges are recorded as a round with verdict MERGE and no critic (wave-loop.js:1543). The scorecard's positional inputs are workflow-output files whose agent records hold the tokens (:303-305).",
+        "reason": "Points 2 and 3 hold. Point 1 goes too far: 'only tasks with at least one critic round' also drops tasks whose worker ran and failed before review, which are the worst worker outcomes, so the first-pass rate rises and the 'upper bound under 50%' rule is harder to trigger. It also leaves open whether a fast-lane MERGE, counted as first-pass today, is a 'critic round'. Narrow it to tasks that never started (paused, dependency parked, tail not run) and state the fast-lane case."
+      }
+    },
+    {
+      "id": "R22",
+      "kind": "question",
+      "task": "2.3",
+      "category": "ambiguity",
+      "text": "Should every later non-task PR that touches a task's lines count as an escaped defect? The rule counts any later first-parent commit that changes or deletes such a line, so a feature PR that extends a module or a docs PR counts the same as a bug fix. In this repository's first-parent history the merges by branch prefix are feat 29, docs 8, task 6, fix 5, spec 1: most later commits are not fixes, so the count would measure churn and push the critic rule (R17) the wrong way. Recommended: count only branches named `fix/` or `hotfix/` (or whose PR title starts with 'fix'), and list the others in `fixes` with a `kind` so a human can reclassify.",
+      "evidence": "`git log --first-parent --merges --format=%s main | sed ... | uniq -c` printed 29 feat, 8 docs, 6 task, 5 fix, 1 spec; spec Escaped defect: 'A later commit on the default branch, not from a task branch of the same project, that changes or deletes a line'.",
+      "reverseCost": "One revert PR of the spec text and one change in escaped.js.",
+      "wouldBeWrongIf": "Edan wants any later change to a task's line counted, as a proxy for rework, and accepts the noise.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [
+        "fixed_decision"
+      ],
+      "dependsOn": [],
+      "edits": [],
+      "decision": "ask",
+      "reason": "envelope: touches fixed_decision",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "`git log --first-parent --merges --format=%s main` in agent-loop-public, grouped by branch prefix: 29 feat, 8 docs, 6 task, 5 fix, 1 spec. Spec line 66-67 counts any later non-task commit that changes or deletes a task's line.",
+        "reason": "Most later commits in this history are features and docs, so the rule as written would measure churn and feed the critic decision rule. It changes a fixed decision, so it is Edan's call; no edit is proposed."
+      }
+    }
+  ],
+  "spikes": [
+    {
+      "id": "F1",
+      "fact": "How does the Workflow runtime report a subagent's usage-limit failure to the script (a thrown Error whose message carries the 'usage limit; resets ..., too far out to wait for' text, or a bare null with only a log line), and is that wording stable? The pause trigger of 2.1 depends on it.",
+      "status": "answered",
+      "answer": "Not settled from a source. No documentation found for the exact 'too far out to wait for' phrase. Local grep of ~/dev/agent-loop found nothing. The workflow-authoring skill says agent() returns null when a subagent dies on a terminal API error after retries; it does not mention usage-limit errors. GitHub issue 94012 reports a subagent hitting a session limit as a per-agent failure while the run still reports status completed. Whether the script gets a thrown Error or null is not stated in any source found, and wording stability is not established.",
+      "source": "https://github.com/anthropics/claude-code/issues/94012",
+      "retrieved": "2026-11-25",
+      "error": ""
+    },
+    {
+      "id": "F2",
+      "fact": "Does Claude Code auto mode keep an allow rule of the exact shape `Bash(node /abs/path/.claude/scripts/merge-pr.js *)` (not dropped as a broad rule), and does it apply to Bash calls made by a Haiku relay subagent? The permission-modes page says narrow rules stay and lists wildcarded paths such as `Bash($HOME/bin/*)` as dropped, but does not name this shape.",
+      "status": "answered",
+      "answer": "Not settled. The page says that on entering auto mode, broad allow rules that grant arbitrary code execution are dropped, including blanket Bash(*), wildcarded interpreters like Bash(python*), a wrapper followed only by a wildcard like Bash(timeout *), shell rules starting with a wildcard like Bash(* --version), some wildcarded paths like Bash($HOME/bin/*), package-manager run commands, Agent allow rules, and Monitor allow rules. It says narrow rules like Bash(npm test) stay in effect. The page does not name the shape Bash(node /abs/path/.claude/scripts/merge-pr.js *), so whether it is kept or dropped is not stated. The closest listed examples are wildcarded paths (the script path here is not wildcarded, only the trailing arguments) and a wrapper followed only by a wildcard (node is not listed as a wrapper), so the page does not clearly place it in either category. On subagents: the page says Agent allow rules are dropped, that the permissionMode in a subagent's frontmatter is ignored, and that each subagent action goes through the same decision order and rules as the parent session. It does not mention Haiku relay subagents specifically. On models: it lists Haiku 5.5 as supported for auto mode on the Anthropic API, and notes Haiku 4.5 is not supported. Whether the rule applies to Bash calls made by a Haiku relay subagent is therefore implied only by the general subagent statement, not stated directly for this rule shape. The read covered only the first 100000 of about 121905 characters; the remaining text was not read.",
+      "source": "WebFetch https://code.claude.com/docs/en/permission-modes (prompt-based extraction). The docs search tool was refused in this session, so no search results were used.",
+      "retrieved": "2026-11-25",
+      "error": ""
+    },
+    {
+      "id": "F3",
+      "fact": "Will a Haiku relay reliably pass `timeout=600000` on a CI wait of 8 minutes, or will some be moved to the background after 120 seconds? Count 'moved to the background' reads in the relay agent records of earlier scorecards.",
+      "status": "answered",
+      "answer": "Not settled from an external source. I did not consult the Claude Code Bash tool docs. From the local record: the exact phrase \"moved to the background\" appears 0 times in the scorecards under ~/dev/agent-loop/docs/ (grep -rIi, 2026-11-25). Related relay backgrounding is recorded in the pilot scorecards and was not stated as an exact phrase: wave 8 (docs/pilot/2026-11-02-wave-8-loop.md) has 3 relay backgroundings (wf_d448c95c-672 on the 8.1 CI relay, wf_838c904c-555 on the 8.3 merge relay, wf_4dd9a04c-77b on the tail merge relay); wave 10 (docs/pilot/2026-11-02-wave-10-loop.md) has 2 (wf_ea0bdd87-bdd on the 10.1 CI relay, wf_f3762d82-9a2 on the 10.3 CI relay). docs/pilot/2026-11-03-loop-performance.md says waves 8 and 10 had 5 relay \"blocks\" from backgrounding. docs/agent-loop-v2/RELEASE-v2.1.md says these relays ran with the default 120 s timeout. Those waves predate the fix: the current prompt in ~/dev/agent-loop/claude/workflows/wave-loop.js (line 1332) requires timeout=600000, and CI waits are chunked to 1.5 minutes (line 905, 1397). The 2026-11-24 wave-1 loop record (docs/agent-loop/2026-11-24-v24-wave-1-loop.md) has no backgrounding mention. So the sources show 5 backgroundings before the fix and none recorded after it, in one wave of evidence. They do not show whether a Haiku relay reliably passes timeout=600000 on an 8-minute wait, since the current design avoids that wait by chunking.",
+      "source": "Local files: grep -rIi \"moved to the background\" ~/dev/agent-loop/docs (0 matches); ~/dev/agent-loop/docs/pilot/2026-11-02-wave-8-loop.md lines 88-92; ~/dev/agent-loop/docs/pilot/2026-11-02-wave-10-loop.md lines 87-95; ~/dev/agent-loop/docs/pilot/2026-11-03-loop-performance.md lines 88, 259; ~/dev/agent-loop/docs/agent-loop-v2/RELEASE-v2.1.md line 53; ~/dev/agent-loop/claude/workflows/wave-loop.js lines 905, 1332, 1397-1401.",
+      "retrieved": "2026-11-25",
+      "error": ""
+    }
+  ],
+  "gates": [
+    {
+      "id": "G-2.1-quota",
+      "what": "Check Claude Code weekly usage headroom before launching wave 2; read the estimate printed by `wave-args.js --scorecards <dir>`",
+      "why": "The budget is Claude Code usage only; Warden wave 4 spent 2.75M tokens and then hit the weekly limit, which was too far out to wait for. 2.1's pause exists because of this.",
+      "owner": "human",
+      "before": "2",
+      "leadTime": "days",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-2.1-account",
+      "what": "Add `permissions.allow` rules in ~/.claude/settings.json for the merge script (H2), written exactly as project.repo plus /.claude/scripts spells it, absolute and not the link's target",
+      "why": "Every wave merges through merge-pr.js; Warden wave 4 and wave 1d were refused there, and 2.1's preflight fails without the rule. Permission settings are human-only (invariant 6).",
+      "owner": "human",
+      "before": "2",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-2.2-account",
+      "what": "Add allow rules for the other scripts relays run (wait-ci.js, ci-only.js, impact.js, test-edits.js), if Edan accepts R21",
+      "why": "2.2 adds two commands a relay runs on every task; an unlisted command goes to the auto-mode classifier, and a refused test-edits relay leaves goal 4 open.",
+      "owner": "human",
+      "before": "2",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-2.T-account",
+      "what": "Relink projects with install.sh to this checkout and point ~/.claude/CLAUDE.md at it (H1), after the last wave",
+      "why": "Changes the loop version for every project on Edan's machine and his global instructions; the loop must not change itself mid-run. Reversible by relinking, but human-only.",
+      "owner": "human",
+      "before": "2",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    }
+  ],
+  "specEdits": [
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "`package.json`, `docs/OPERATING.md`. Depends on 1.1 and 1.3.",
+      "replace": "`package.json`, `docs/OPERATING.md`, `claude/workflows/chain-loop.js` (its `LOOP_VERSION` line only, which must equal `package.json`), `tests/wave-loop-v24.test.ts`, and `tests/wave-loop-relay.test.ts`, `tests/loop-perf.test.ts`, `tests/speed-e2e.test.ts` (in those three only the stubbed `loopVersion` literal, read from `package.json`, and the CI chunk assertions if the default changes). Depends on 1.1 and 1.3.",
+      "recId": "R1"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "`wave paused: usage limit, resets <time>` replaces the per-task ones; the result gains `paused: { resetsAt, tasks }`",
+      "replace": "`wave paused: usage limit, resets <time>` replaces the per-task ones, where `<time>` is the reset text copied from the failure message (`classifyFailure` is called with `nowMs` null, so `resetsAt` is null in the result and the session computes it); the result gains `paused: { resetsAt, resetText, tasks }`",
+      "recId": "R3"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "and `gate: \"PAUSED\"`. The spike in the spec review settles",
+      "replace": "and `gate: \"PAUSED\"` (the `paused` key is absent from the result of a wave that did not pause). A pause also: a task whose dependency is paused is `paused`, not parked, and the tail is `paused` with no 'tail not run' escalation; the machine gate, the reality gate and the integration review do not run; each paused task has `state: \"paused\"` and a result entry with no rounds; the loop's `pending` is passed to `pausePlan` as a missing id and a parked task whose merge outcome is `reverted` as `reverted`; a relaunch passes `paused` tasks as it passes parked ones. The spike in the spec review settles",
+      "recId": "R5"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "pauses a 4-task wave with one task merged, one running (finishes) and two not started;",
+      "replace": "pauses a wave of 5 tasks and a tail (`maxChains` 3) with one task merged, one running (it finishes and merges), one whose worker fails on the limit and two not started (the failed one, the two not started and the tail are `paused`, and one escalation is raised);",
+      "recId": "R6"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "whatever the critic said; the worker",
+      "replace": "whatever the critic said; the same report is read in the fast-lane facts step, where a non-zero count with `bodySection` false makes the task not eligible (the critic reviews it), and a round whose critic is skipped as CI-only reuses the report of the round it follows; the worker",
+      "recId": "R9"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "logs it. (b) Before each critic round, one relay runs `test-edits.js`;",
+      "replace": "logs it. (b) Before each critic round, one relay runs `test-edits.js` (once more when it prints no JSON line; if it is still blocked or empty the round records `testEdits: \"unavailable\"`, the critic prompt tells the critic to run `git diff` over the test files itself, and it is logged);",
+      "recId": "R10"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "`--spec` when the project has one); the worker prompt lists the tests and their owners",
+      "replace": "`--spec` when the project has one); `impact.js` also lists, with `via: \"name\"`, every test file with a quoted string holding an owned file's repo-relative path or its basename (tests of this repo read `wave-loop.js` with `readFileSync` and run `loop-scorecard.py` with `execFile`, which no import shows; `impact.test.ts` gets a case, and the other fields keep their shape); the worker prompt lists the tests and their owners",
+      "recId": "R13"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "follows it with `-C`, or the case is noted, not counted).",
+      "replace": "follows the rename, which `git blame` does by default for a whole-file rename: escaped 1).",
+      "recId": "R15"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "Task PRs are the merged PRs whose head branch starts with the prefix (task id parsed from",
+      "replace": "Task PRs are the merged PRs listed with `gh pr list --state merged --limit 1000 --json number,headRefName,mergedAt` (`note` says so when 1000 come back; `--since` keeps those merged on or after the date; a task id with two merged PRs, such as a reopen after a revert, shows the latest as `pr`, every number in `prs`, and a line from any of them counts) whose head branch starts with the prefix (task id parsed from",
+      "recId": "R15"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "prints a Markdown sheet: one row per critic",
+      "replace": "prints a Markdown sheet: one row per fix item of a FIX verdict and one row per MERGE verdict of a round whose critic ran (none for STOP, `lane: 'fast'` or `criticSkipped` rounds), each row keyed by task, round and item,",
+      "recId": "R19"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "verdict (task, round, verdict, each fix item, PR link from `result.tasks[id].pr`), with empty columns `real? (y/n)`",
+      "replace": "with the verdict, the fix item (`n` and `what`) and the PR link from `result.tasks[id].pr.url`, and an empty `real? (y/n)` column",
+      "recId": "R19"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "per fix item and `correct? (y/n)` per MERGE; `--sample` draws n verdicts,",
+      "replace": "on a fix-item row and an empty `correct? (y/n)` column on a MERGE row; `--sample` draws n verdicts (a drawn FIX verdict brings all its rows),",
+      "recId": "R19"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "- **2.T Wave 2 tail.** Owns `tests/v24-e2e.test.ts`. Depends on",
+      "replace": "- **2.T Wave 2 tail.** Owns `tests/v24-e2e.test.ts` and `docs/OPERATING.md` (the sections for the impact and test-edits relays, `escaped.js` with `--escaped-from`, `--pool` and `label-sheet.py`, written after 2.2 to 2.5 merged). Depends on",
+      "recId": "R20"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "Add a `permissions.allow` rule for the merge script, e.g.",
+      "replace": "Add a `permissions.allow` rule for each script a relay runs (`merge-pr.js`, `wait-ci.js`, `ci-only.js` and, from wave 2, `impact.js` and `test-edits.js`), then confirm once by running one relay in auto mode that the classifier is not consulted, e.g.",
+      "recId": "R21"
+    }
+  ],
+  "needsSecondRound": false,
+  "skipped": false,
+  "skipReason": "",
+  "reviewPath": "~/dev/agent-loop/docs/agent-loop/2026-11-25-wave-2-review.json"
+}

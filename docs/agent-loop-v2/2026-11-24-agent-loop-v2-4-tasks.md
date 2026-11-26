@@ -1,4 +1,4 @@
-# agent-loop v2.4 reliability and measurement: ordered task list (draft 2, after the wave 1 review)
+# agent-loop v2.4 reliability and measurement: ordered task list (draft 3, after the wave 2 review)
 
 Date: 2026-11-24. Source: the red team in `docs/RED-TEAM.md` (findings 1, 2, 3, 5, 6, 9 and 11). Execution model: as
 v2. Waves; tasks in a wave run in parallel unless a task names a dependency; each wave ends with a tail task that runs
@@ -63,8 +63,12 @@ irreversible production steps; changing a fixed decision or invariant.
   `Bash(<exact command>)`, `Bash(<prefix>:*)` and `Bash(<prefix> *)`. Rules are matched with Claude Code's wildcard semantics: `*` matches any sequence, and a trailing ` *` or `:*` also matches the bare prefix. Evaluation order is deny, then ask, then allow; a matching deny rule sets `denied`, a matching ask rule sets `ask` (a relay cannot answer a prompt), and either makes `allowed` false. An allow rule counts only when the text before its first `*` names the merge script's path; `Bash`, `Bash(*)` and rules that name only an interpreter (`Bash(node *)`, `Bash(node*)`) are returned as `broad` and never make `allowed` true, because auto mode drops them. `checkPermission` returns `{ allowed: boolean, rule: string|null, source: string|null, denied: string|null, ask: string|null, broad: string[], autoModeRules: number, checked: [{ path, error }] }`. Managed settings (`/Library/Application Support/ClaudeCode/managed-settings.json` on macOS, `/etc/claude-code/managed-settings.json` on Linux) are read when present, for their deny and ask rules.
   Auto-mode prose rules (`autoMode.allow`) cannot be evaluated by code; they are counted and reported, never treated
   as an allow.
-- **Escaped defect.** A later commit on the default branch, not from a task branch of the same project, that changes or
-  deletes a line whose last change before it came from a task PR's commits. Counted once per (fix commit, task PR) pair.
+- **Escaped defect.** A later commit on the default branch, not from a task branch or a `revert/` branch of the same
+  project (the loop's own revert is already counted as `reopened`), that changes or deletes a line whose last change
+  before it came from a task PR's commits, and is a fix: its subject, or the title of the PR it merges, starts with
+  `fix` (`fix:`, `fix(scope):`, `Fix ...`), direct pushes to the default branch included. Counted once per (fix commit,
+  task PR) pair. Other later commits that touch such lines are listed with `kind: "other"` (fixes with `kind: "fix"`)
+  so a human can reclassify them; they do not count.
 - **Intervals.** 95% Wilson score intervals, printed as `72% (55–84%, n=30)`.
 
 ## Human checklist
@@ -72,7 +76,7 @@ irreversible production steps; changing a fixed decision or invariant.
 | id | before | what | why |
 |---|---|---|---|
 | H1 | after the last wave | Relink projects (`install.sh`) to this checkout and point `~/.claude/CLAUDE.md` at it | the loop must not change itself mid-run; Edan's machine |
-| H2 | before wave 1 | Add a `permissions.allow` rule for the merge script, e.g. `Bash(node /path/to/repo/.claude/scripts/merge-pr.js *)` (the path exactly as `project.repo` plus `/.claude/scripts` spells it, absolute and not the link's target), in `~/.claude/settings.json` | every wave merges through that script, and Warden wave 4 was refused there; 2.1's preflight fails without it; permission settings are human-only |
+| H2 | before wave 1 | Add a `permissions.allow` rule for each script a relay runs (`merge-pr.js`, `wait-ci.js`, `ci-only.js` and, from wave 2, `impact.js` and `test-edits.js`), then confirm once by running one relay in auto mode that the classifier is not consulted, e.g. `Bash(node /path/to/repo/.claude/scripts/merge-pr.js *)` (the path exactly as `project.repo` plus `/.claude/scripts` spells it, absolute and not the link's target), in `~/.claude/settings.json` | every wave merges through that script, and Warden wave 4 was refused there; 2.1's preflight fails without it; permission settings are human-only |
 
 ## Wave 1: pure modules (1.5 after 1.2; the rest in parallel)
 
@@ -141,66 +145,66 @@ irreversible production steps; changing a fixed decision or invariant.
 ## Wave 2: wire it in, and measure (2.2 after 2.1; the rest in parallel)
 
 - **2.1 Wave-loop control flow.** Owns `claude/workflows/wave-loop.js` (bundled regions via `scripts/bundle-workflows.js`,
-  preflight, failure handling and constants; no prompt text), `package.json`, `docs/OPERATING.md`. Depends on 1.1 and 1.3.
+  preflight, failure handling and constants; no prompt text), `package.json`, `docs/OPERATING.md`, `claude/workflows/chain-loop.js` (its `LOOP_VERSION` line only, which must equal `package.json`), `tests/wave-loop-v24.test.ts`, and `tests/wave-loop-relay.test.ts`, `tests/loop-perf.test.ts`, `tests/speed-e2e.test.ts` (in those three only the stubbed `loopVersion` literal, read from `package.json`, and the CI chunk assertions if the default changes). Depends on 1.1 and 1.3.
   (a) Preflight: when the dry run reports `permission.allowed` false, the wave fails in preflight with one escalation
   that names the rule to add (H2), unless `project.mergePermission` is `"prompt"` (new optional field), which logs a
-  warning and continues. A dry run without a `permission` field (an older `merge-pr.js`) logs a warning and continues.
+  warning and continues, but only when `permission.denied` is null (a deny rule fails preflight in either mode); the escalation names the rule as `Bash(node <scripts dir>/merge-pr.js *)` and lists `permission.broad`. A dry run without a `permission` field (an older `merge-pr.js`) logs a warning and continues.
   (b) Pause: an agent failure that `classifyFailure` reads as a far-out usage limit sets the wave to paused: no new task
   chain starts, agents already running finish, `pausePlan` decides each task's state, and one escalation
-  `wave paused: usage limit, resets <time>` replaces the per-task ones; the result gains `paused: { resetsAt, tasks }`
-  and `gate: "PAUSED"`. The spike in the spec review settles how the Workflow runtime reports a usage-limit failure to
-  the script (a thrown error, or `null` with a log line); both paths are handled. (c) CI waits: `CI_CHUNK_MIN` comes
-  from `project.ciChunkMin` (new optional field, default 8, at most `CI_RELAY_MAX_MIN`); the relay prompt's timeout
+  `wave paused: usage limit, resets <time>` replaces the per-task ones, where `<time>` is the reset text copied from the failure message (`classifyFailure` is called with `nowMs` null, so `resetsAt` is null in the result and the session computes it); the result gains `paused: { resetsAt, resetText, tasks }`
+  and `gate: "PAUSED"` (the `paused` key is absent from the result of a wave that did not pause). A pause also: a task whose dependency is paused is `paused`, not parked, and the tail is `paused` with no 'tail not run' escalation; the machine gate, the reality gate and the integration review do not run; each paused task has `state: "paused"` and a result entry with no rounds; the loop's `pending` is passed to `pausePlan` as a missing id and a parked task whose merge outcome is `reverted` as `reverted`; a relaunch passes `paused` tasks as it passes parked ones. The spike in the spec review settles how the Workflow runtime reports a usage-limit failure to
+  the script. A thrown error whose text `classifyFailure` reads as a far-out limit pauses the wave, and is classified before any other handling, except that the critic's swap to `CRITIC_FALLBACK` stays first: the wave pauses when the fallback call also fails on a limit or returns `null`. A bare `null` from any other agent (the runtime's documented answer when a subagent dies on a terminal API error) is followed by one probe, a relay that runs `true`: when the probe also returns `null` or throws a usage-limit error, the wave pauses with `resetText` null; when the probe succeeds, the `null` is handled as today. The pattern in `claude/lib/pause.js` (wave 1, merged) is not changed. (c) CI waits: `CI_CHUNK_MIN` comes
+  from `project.ciChunkMin` (new optional field, default 1.5 as today; a value that is not a number above 0 uses the default and a value above `CI_RELAY_MAX_MIN` is lowered to it; the default moves to 8 only after one wave run with `ciChunkMin: 8` shows no relay moved to the background); the relay prompt's timeout
   rule is unchanged. (d) `LOOP_VERSION` and `package.json` `version` become `2.4.0`. `docs/OPERATING.md` documents
   `mergePermission`, `ciChunkMin`, `testGlobs`, the `PAUSED` gate, H2, and `wave-args.js --scorecards <dir>` (the token estimate to read before launching a wave). Test: in `tests/wave-loop-v24.test.ts`
   (owned): preflight fails with no rule; `mergePermission: "prompt"` continues; a far-out usage limit on a worker
-  pauses a 4-task wave with one task merged, one running (finishes) and two not started; a short usage limit does not
-  pause; `ciChunkMin` 8 makes one relay call per 8 minutes of CI.
-- **2.2 Wave-loop prompts.** Owns `claude/workflows/wave-loop.js` (worker, fix and critic prompt text and the critic
-  schema, after 2.1 has merged), `claude/agents/critic.md`, `claude/agents/producer.md`, `tests/wave-loop-prompts.test.ts`.
+  pauses a wave of 5 tasks and a tail (`maxChains` 3) with one task merged, one running (it finishes and merges), one whose worker fails on the limit and two not started (the failed one, the two not started and the tail are `paused`, and one escalation is raised); a short usage limit does not
+  pause; a worker `null` and a `null` probe pause the wave, a worker `null` and a passing probe do not; a deny rule fails preflight with `mergePermission: "prompt"`; an unset `ciChunkMin` keeps 1.5-minute calls and `ciChunkMin` 8 makes one relay call per 8 minutes of CI.
+- **2.2 Wave-loop prompts.** Owns `claude/workflows/wave-loop.js` (worker, fix and critic prompt text, the critic
+  schema, the impact relay before the worker, and the test-edits relay and gate of (b) in `reviewRound`, after 2.1 has merged), `claude/agents/critic.md`, `claude/agents/producer.md`, `tests/wave-loop-prompts.test.ts`, `claude/lib/impact.js`, `claude/lib/impact.test.ts`, `scripts/impact.js`, `tests/wave-loop.test.ts`, `tests/wave-loop-gates.test.ts`, `tests/wave-loop-relay.test.ts`, `tests/loop-perf.test.ts`, `tests/loop-version.test.ts` (in the last five only the exact `calls` lists).
   Depends on 2.1, 1.2 and 1.5. (a) Before the worker starts, one relay runs `impact.js` for the task's `owns` (with
-  `--spec` when the project has one); the worker prompt lists the tests and their owners and tells the worker to run
+  `--spec` when the project has one); `impact.js` also lists, with `via: "name"`, every test file with a quoted string holding an owned file's repo-relative path or its basename (tests of this repo read `wave-loop.js` with `readFileSync` and run `loop-scorecard.py` with `execFile`, which no import shows; `impact.test.ts` gets a case, and the other fields keep their shape); the worker prompt lists the tests and their owners and tells the worker to run
   them before opening the PR and to stop with a question when a change breaks a test another task owns (the existing
   ownership rule, now with the list). An impact relay that fails or returns nothing leaves the prompt as before and
-  logs it. (b) Before each critic round, one relay runs `test-edits.js`; the critic prompt gets the report under
+  logs it. (b) Before each critic round, one relay runs `test-edits.js` (once more when it prints no JSON line; if it is still blocked or empty the round records `testEdits: "unavailable"`, the critic prompt tells the critic to run `git diff` over the test files itself, and it is logged); the critic prompt gets the report under
   "Test edits after the test-first commit", and checklist item 3 adds: an assertion removed or changed after the
   test-first commit is a FIX unless the PR body's `Test edits:` section justifies each one and the justification
   holds. Deterministic gate: `assertionsRemoved + assertionsChanged > 0` with `bodySection` false makes the verdict FIX
-  (cause `defect`, item "restore the assertion or justify it under Test edits:") whatever the critic said; the worker
-  prompt and `producer.md` describe the `Test edits:` section. (c) The critic schema gains `items: [{ n, pass, evidence
-  }]`, one entry per checklist item, `evidence` a quote from the diff, a file:line or a command output; a verdict whose
-  `items` array misses a checklist number is treated as the critic returning nothing (the existing retry path); a verdict with no `items` key is recorded without per-item data and logged (the schema requires the key of a real critic; nine existing test files stub critic results without it). Test: prompt
-  snapshots for each case; the gate turns a MERGE into FIX; a critic result missing item 9 is retried.
+  (cause `defect`, item "restore the assertion or justify it under Test edits:") whatever the critic said; the same report is read in the fast-lane facts step, where a non-zero count with `bodySection` false makes the task not eligible (the critic reviews it), and a round whose critic is skipped as CI-only reuses the report of the round it follows; the worker
+  prompt and `producer.md` describe the `Test edits:` section. (c) The critic schema's existing `checklist: [{ item, pass, evidence
+  }]` (one entry per checklist item, `evidence` a quote from the diff, a file:line or a command output) is checked for completeness: a
+  `checklist` that misses a checklist number gets one more critic call on the same model with the missing numbers named (never the swap to `CRITIC_FALLBACK`); a second miss is recorded as is and logged. Rounds with `lane: 'fast'` or `criticSkipped` are not checked. A critic that ran and returned `checklist: []` is not retried (the stubs of existing tests return it), but the round records `checklistEmpty: true` and logs a line starting `note:` (not `WARNING`, which tests/loop-perf.test.ts:88 rejects). Test: prompt
+  snapshots for each case; the gate turns a MERGE into FIX; a critic result missing item 9 gets one more call on the same model and `models.critic` is unchanged; an empty checklist is recorded with `checklistEmpty: true`.
 - **2.3 Escaped-defect tracer.** Owns `claude/lib/escaped.js`, `claude/lib/escaped.test.ts`, `scripts/escaped.js`.
   A CLI `node scripts/escaped.js --repo <path> [--since <YYYY-MM-DD>] [--prefix task/]` prints
-  `{ tasks: { "<task id>": { pr, escaped, fixes: [{ sha, title, files, lines }] } }, scanned, note }` per the
-  Escaped-defect decision. Task PRs are the merged PRs whose head branch starts with the prefix (task id parsed from
+  `{ tasks: { "<task id>": { pr, escaped, fixes: [{ sha, title, kind, files, lines }] } }, scanned, note }` per the
+  Escaped-defect decision. Task PRs are the merged PRs listed with `gh pr list --state merged --limit 1000 --json number,headRefName,mergedAt` (`note` says so when 1000 come back; `--since` keeps those merged on or after the date; a task id with two merged PRs, such as a reopen after a revert, shows the latest as `pr`, every number in `prs`, and a line from any of them counts) whose head branch starts with the prefix (task id parsed from
   `task/<id>-<slug>`, where `<id>` is digits, dots and `T`); their commits come from `gh pr view <n> --json commits`.
   Later commits are the first-parent commits on the default branch after each task's merge that are not themselves
-  merges of a task branch. For each changed or deleted line range of a later commit, `git blame --porcelain
+  merges of a task branch or a `revert/` branch. For each changed or deleted line range of a later commit, `git blame --porcelain
   <commit>^ -L <a>,<b> -- <file>` gives the origin commit. Reads or writes: reads. Test: a temp repo with a fake `gh`:
   a task PR whose line a later fix changes (escaped 1); a later commit that only adds lines (0); a later task PR that
-  changes the line (not counted); a fix touching two tasks' lines (one each); a file renamed before the fix (blame
-  follows it with `-C`, or the case is noted, not counted).
+  changes the line (not counted); a later `feat:` commit that changes the line (listed as `other`, escaped 0); a loop revert from a `revert/` branch (not listed); a `fix:` commit pushed straight to the default branch (escaped 1); a fix touching two tasks' lines (one each); a file renamed before the fix (blame
+  follows the rename, which `git blame` does by default for a whole-file rename: escaped 1).
 - **2.4 Pooled scorecard with intervals.** Owns `scripts/loop-scorecard.py`, `tests/scorecard.test.ts`,
   `tests/fixtures/scorecard-pool-*.json`. Every rate in the scorecard (worker first-pass MERGE, critic misses per merged
-  task) is printed with its 95% Wilson interval. `--escaped-from <escaped.json>` (2.3's format) fills the escaped
-  count per task instead of `--escaped <n>`, and the scorecard lists each fix commit. `--pool <result.json>...` prints
+  task) is printed with its 95% Wilson interval. The critic rate is the share of merged tasks with at least one miss (a revert after MERGE or one or more escaped fixes), so k is at most n; the number of fix commits is printed beside it, not inside the interval; bounds are clamped to 0 and 1 and a lower bound under 1e-9 counts as 0. With only `--escaped <n>` there is no per-task attribution: the critic rate counts reverts only and the escaped count is printed beside it without an interval. `--escaped-from <escaped.json>` (2.3's format) fills the escaped
+  count per task instead of `--escaped <n>` (both given is an error; tasks of the file that are not in the given runs are ignored and counted in a note), and the scorecard lists each fix commit. A rate leaves out only tasks that never started (`paused`, parked for a parked dependency, or a tail not run): a task whose worker ran and delivered no PR counts as not first-pass, and a fast-lane MERGE counts as first-pass. `--pool <workflow-output.json>...` (the files the scorecard already reads, whose agent records hold the tokens) prints
   one pooled table across the given runs (rates, intervals, fix items by cause, tokens per task) without a per-task
   section. The decision rule text changes: a role moves only when the pooled interval lies wholly on one side of the
-  threshold (worker: upper bound under 50% first-pass; critic: lower bound of misses per merged task above 0). When
-  results carry critic `items` (2.2), the scorecard counts items failed per checklist number. Reads or writes: reads.
-  Test: interval values against hand-computed Wilson bounds (0/6, 6/6, 20/30); a pool of two fixture results; an
+  threshold (worker: an upper bound of first-pass MERGE under 50% moves the worker up; critic: a lower bound of the share of merged tasks with a miss above 5% moves the critic up, and an upper bound under 10% with only low findings moves it down). When
+  results carry a non-empty critic `checklist`, the scorecard counts items failed per checklist number. Reads or writes: reads.
+  Test: interval values against hand-computed Wilson bounds (0/6, 6/6, 20/30); the critic rule fires on 4 of 20 (lower bound 8%) and not on 1 of 30; a 0-of-6 lower bound prints as 0; a pool of two fixture results; an
   escaped file with two fixes; existing scorecard tests pass.
 - **2.5 Critic labelling sheet.** Owns `scripts/label-sheet.py`, `tests/label-sheet.test.ts`. `python3 -I
-  scripts/label-sheet.py <result.json>... [--sample <n>] [--seed <s>]` prints a Markdown sheet: one row per critic
-  verdict (task, round, verdict, each fix item, PR link from `result.tasks[id].pr`), with empty columns `real? (y/n)`
-  per fix item and `correct? (y/n)` per MERGE; `--sample` draws n verdicts, FIX and MERGE in their observed proportion,
+  scripts/label-sheet.py <result.json>... [--sample <n>] [--seed <s>]` prints a Markdown sheet: one row per fix item of a FIX verdict and one row per MERGE verdict of a round whose critic ran (none for STOP, `lane: 'fast'` or `criticSkipped` rounds), each row keyed by task, round and item,
+  with the verdict, the fix item (`n` and `what`) and the PR link from `result.tasks[id].pr.url`, and an empty `real? (y/n)` column
+  on a fix-item row and an empty `correct? (y/n)` column on a MERGE row; `--sample` draws n verdicts (a drawn FIX verdict brings all its rows), FIX and MERGE in their observed proportion,
   reproducibly by seed. `--read <filled sheet>` prints precision: share of FIX items labelled real, share of MERGEs
   labelled correct, each with a Wilson interval, and the count left unlabelled. Reads or writes: reads. Test: a fixture
   result gives the expected rows; the same seed gives the same sample; a filled sheet gives the expected precision;
   unlabelled rows are counted, not guessed.
-- **2.T Wave 2 tail.** Owns `tests/v24-e2e.test.ts`. Depends on 2.1, 2.2, 2.3, 2.4 and 2.5. Test: a stubbed four-task
+- **2.T Wave 2 tail.** Owns `tests/v24-e2e.test.ts` and `docs/OPERATING.md` (the sections for the impact and test-edits relays, `escaped.js` with `--escaped-from`, `--pool` and `label-sheet.py`, written after 2.2 to 2.5 merged). Depends on 2.1, 2.2, 2.3, 2.4 and 2.5. Test: a stubbed four-task
   wave: preflight fails when the fake settings lack the rule; with the rule, a task whose branch changes an assertion
   without `Test edits:` gets FIX; a far-out usage limit pauses the rest; the result renders in the scorecard with
   intervals and in the labelling sheet; `escaped.js` over a temp repo feeds `--escaped-from`. Done: `npm run check`
