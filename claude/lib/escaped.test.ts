@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { isFixTitle, parseBlameOrigins, parseDiffRanges, taskIdOf } from './escaped.js';
 
 // Each CLI run starts node, git and the fake gh; on a loaded machine one run takes several seconds.
-vi.setConfig({ testTimeout: 120_000 });
+vi.setConfig({ testTimeout: 300_000 });
 
 const root = join(import.meta.dirname, '..', '..');
 const cli = join(root, 'scripts', 'escaped.js');
@@ -165,7 +165,7 @@ beforeAll(() => {
   sha.fix20 = git(repo, 'log', '--first-parent', '--format=%H', '--grep=Merge pull request #20 ', '-n1').trim();
 
   writeFileSync(join(ghDir, 'list.json'), JSON.stringify(merged));
-}, 120_000);
+}, 300_000);
 
 function run(args: string[], env: Record<string, string> = {}) {
   const r = spawnSync(process.execPath, [cli, ...args], {
