@@ -563,6 +563,8 @@ describe('mergePr: tree reuse needs the main CI workflow to show no event-depend
     ['branches on pull_request', (w) => w.replace('  pull_request:\n', '  pull_request:\n    branches: [main]\n')],
     ['push branches that do not list the default branch', (w) => w.replace('[main]', '[release]')],
     ['a job-level if', (w) => w.replace('    runs-on: ubuntu-latest\n', '    runs-on: ubuntu-latest\n    if: always()\n')],
+    ['a job-level if as the first key of the job', (w) => w.replace('  check:\n', '  check:\n    if: always()\n')],
+    ['a job-level if as the first key of a second job', (w) => `${w}  deploy:\n    if: always()\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo done\n`],
   ];
 
   it.each(variants)('%s prevents the skip: the check on main runs and message names the reason', async (_name, edit) => {
