@@ -98,7 +98,7 @@ async function launch(opts: { project?: Any; waves: string[]; gates: Any[]; gaps
 }
 
 const wavesRun = (r: { workflowCalls: Array<{ args: Any }> }) => r.workflowCalls.map((c) => c.args.wave);
-const taskAgents = (wave: string) => [`worker:${wave}.1`, `critic:${wave}.1 r1`, `merger:${wave}.1`];
+const taskAgents = (wave: string) => [`worker:${wave}.1`, `test-edits:${wave}.1 r1`, `critic:${wave}.1 r1`, `merger:${wave}.1`];
 const ranGreen = (wave: string) => [...taskAgents(wave), 'reality:check'];
 
 describe('chain-loop over wave-loop: three waves, a gate before wave 3 and a reality gap in wave 2', () => {
