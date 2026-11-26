@@ -1,0 +1,231 @@
+{
+ "summary": "One wave of spec tasks",
+ "agentCount": 8,
+ "logs": [],
+ "result": {
+  "project": "demo",
+  "wave": "2",
+  "gate": "PASS",
+  "loopVersion": "2.4.0",
+  "models": {
+   "worker": {
+    "model": "claude-sonnet-5-5",
+    "effort": "high"
+   },
+   "critic": {
+    "model": "claude-sonnet-5-5",
+    "effort": "high"
+   },
+   "merger": {
+    "model": "claude-sonnet-5-5",
+    "effort": "low"
+   }
+  },
+  "state": {
+   "2.1": "merged",
+   "2.2": "merged",
+   "2.3": "merged",
+   "2.4": "merged"
+  },
+  "tasks": {
+   "2.1": {
+    "task": "2.1",
+    "title": "Task 2.1",
+    "pr": {
+     "number": 21,
+     "url": "https://example.invalid/demo/pull/2.1",
+     "branch": "task/2.1"
+    },
+    "rounds": [
+     {
+      "round": 1,
+      "verdict": "MERGE",
+      "ci": "green",
+      "fixItems": [],
+      "notes": "n",
+      "checklist": [],
+      "findings": []
+     }
+    ],
+    "merge": {
+     "outcome": "merged",
+     "mergeSha": "0123456789abcdef0123456789abcdef01234567"
+    },
+    "reopened": false,
+    "merged": true
+   },
+   "2.2": {
+    "task": "2.2",
+    "title": "Task 2.2",
+    "pr": {
+     "number": 22,
+     "url": "https://example.invalid/demo/pull/2.2",
+     "branch": "task/2.2"
+    },
+    "rounds": [
+     {
+      "round": 1,
+      "verdict": "MERGE",
+      "ci": "green",
+      "fixItems": [],
+      "notes": "n",
+      "checklist": [],
+      "findings": [],
+      "lane": "fast"
+     }
+    ],
+    "merge": {
+     "outcome": "merged",
+     "mergeSha": "0123456789abcdef0123456789abcdef01234567"
+    },
+    "reopened": false,
+    "merged": true
+   },
+   "2.3": {
+    "task": "2.3",
+    "title": "Task 2.3",
+    "pr": {
+     "number": 23,
+     "url": "https://example.invalid/demo/pull/2.3",
+     "branch": "task/2.3"
+    },
+    "rounds": [
+     {
+      "round": 1,
+      "verdict": "MERGE",
+      "ci": "green",
+      "fixItems": [],
+      "notes": "n",
+      "checklist": [],
+      "findings": []
+     }
+    ],
+    "merge": {
+     "outcome": "merged",
+     "mergeSha": "0123456789abcdef0123456789abcdef01234567"
+    },
+    "reopened": true,
+    "merged": true
+   },
+   "2.4": {
+    "task": "2.4",
+    "title": "Task 2.4",
+    "pr": {
+     "number": 24,
+     "url": "https://example.invalid/demo/pull/2.4",
+     "branch": "task/2.4"
+    },
+    "rounds": [
+     {
+      "round": 1,
+      "verdict": "MERGE",
+      "ci": "green",
+      "fixItems": [],
+      "notes": "n",
+      "checklist": [],
+      "findings": []
+     }
+    ],
+    "merge": {
+     "outcome": "merged",
+     "mergeSha": "0123456789abcdef0123456789abcdef01234567"
+    },
+    "reopened": false,
+    "merged": true
+   }
+  },
+  "escalations": [],
+  "decisions": [],
+  "reality": null
+ },
+ "workflowProgress": [
+  {
+   "type": "workflow_agent",
+   "index": 1,
+   "label": "worker:2.1",
+   "agentId": "agent1",
+   "state": "done",
+   "tokens": 10000,
+   "toolCalls": 5,
+   "durationMs": 300000,
+   "model": "claude-sonnet-5-5"
+  },
+  {
+   "type": "workflow_agent",
+   "index": 2,
+   "label": "critic:2.1 r1",
+   "agentId": "agent2",
+   "state": "done",
+   "tokens": 5000,
+   "toolCalls": 5,
+   "durationMs": 300000,
+   "model": "claude-sonnet-5-5"
+  },
+  {
+   "type": "workflow_agent",
+   "index": 3,
+   "label": "worker:2.2",
+   "agentId": "agent3",
+   "state": "done",
+   "tokens": 7000,
+   "toolCalls": 5,
+   "durationMs": 300000,
+   "model": "claude-sonnet-5-5"
+  },
+  {
+   "type": "workflow_agent",
+   "index": 4,
+   "label": "worker:2.3",
+   "agentId": "agent4",
+   "state": "done",
+   "tokens": 10000,
+   "toolCalls": 5,
+   "durationMs": 300000,
+   "model": "claude-sonnet-5-5"
+  },
+  {
+   "type": "workflow_agent",
+   "index": 5,
+   "label": "critic:2.3 r1",
+   "agentId": "agent5",
+   "state": "done",
+   "tokens": 5000,
+   "toolCalls": 5,
+   "durationMs": 300000,
+   "model": "claude-sonnet-5-5"
+  },
+  {
+   "type": "workflow_agent",
+   "index": 6,
+   "label": "worker:2.3 reopen",
+   "agentId": "agent6",
+   "state": "done",
+   "tokens": 6000,
+   "toolCalls": 5,
+   "durationMs": 300000,
+   "model": "claude-sonnet-5-5"
+  },
+  {
+   "type": "workflow_agent",
+   "index": 7,
+   "label": "worker:2.4",
+   "agentId": "agent7",
+   "state": "done",
+   "tokens": 9000,
+   "toolCalls": 5,
+   "durationMs": 300000,
+   "model": "claude-sonnet-5-5"
+  },
+  {
+   "type": "workflow_agent",
+   "index": 8,
+   "label": "critic:2.4 r1",
+   "agentId": "agent8",
+   "state": "done",
+   "tokens": 5000,
+   "toolCalls": 5,
+   "durationMs": 300000,
+   "model": "claude-sonnet-5-5"
+  }
+ ]
+}
