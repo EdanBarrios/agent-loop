@@ -1,8 +1,10 @@
 # Results
 
-What the loop did on a real project, taken from the per-wave scorecards in [`docs/warden/`](docs/warden/).
-[Warden](https://govwarden.vercel.app) is my own civic-data site (Next.js, Postgres; live, code private); the loop
-opened 61 of its 145 merged PRs (waves 1 to 4). Measurements come first, then what I concluded from them, kept apart on purpose.
+What the loop did on two projects, taken from the per-wave scorecards. First
+[Warden](https://govwarden.vercel.app), my own civic-data site (Next.js, Postgres; live, code private), where the loop
+opened 61 of its 145 merged PRs (waves 1 to 4; scorecards in [`docs/warden/`](docs/warden/)). Then this repository:
+the loop built its own v2.4 and v2.5 from the [red team](docs/RED-TEAM.md) and an outside review (scorecards in
+[`docs/agent-loop/`](docs/agent-loop/)). Measurements come first, then what I concluded from them, kept apart on purpose.
 
 ## Measurements: Warden waves 1 to 4 (13 to 17 Nov 2026)
 
@@ -58,6 +60,45 @@ usage-limit pause, not loop time.
 About 565K tokens per task, against 316K in wave 2. The four relaunches (7.6M tokens, 383 minutes) were caused by
 the spec and the loop, not by the code the workers wrote.
 
+## Measurements: the loop builds itself, v2.4 waves 1 to 4 (24 to 26 Nov 2026)
+
+The fixes for the [red team](docs/RED-TEAM.md) findings were written as a spec
+([v2.4 tasks](docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md)) and built by the loop on this repository.
+Waves 1 and 2 ran on loop 2.3.1; waves 3 and 4 ran on a frozen copy of the v2.4.0 they had just built, so the loop
+never changed under a running wave.
+
+| Wave | What it built | Loop | Tasks | First-pass MERGE | Launches | Merges refused | Escalations | Tokens |
+|---|---|---|---|---|---|---|---|---|
+| [1](docs/agent-loop/2026-11-24-v24-wave-1-loop.md) | permission preflight, usage-limit classification, test-edit report, test-impact map, token estimate | 2.3.1 | 6 | 6/6 | 1 | 1 | 1 | 1.66M |
+| [2](docs/agent-loop/2026-11-25-v24-wave-2-loop.md) | wiring for wave 1, escaped-defect tracer, pooled scorecard with intervals, critic labelling sheet | 2.3.1 | 6 | 6/6 | 3 | 3 | 9 | 2.35M |
+| [3](docs/agent-loop/2026-11-26-v24-wave-3-loop.md) | the outside review's six assumptions: dependency state, merge lock, settle main, opt-in CI tree reuse, isolation rules, integration gate (v2.5.0) | 2.4.0 | 5 | 4/5 | 1 | 0 | 0 | 2.46M |
+| 4 | benchmark harness: fake `gh`, local CI, scenarios, metrics and compare | 2.4.0 | 4 | 2/3 so far | see below | 0 | 0 | not yet scored |
+
+Pooled over waves 1 to 3 (5 runs, `loop-scorecard.py --pool`): worker first-pass MERGE 16/19, 84% (95% Wilson
+interval 62–94%); critic misses 0/13 merged tasks (0–23%), counting reverts and, new in 2.4, escaped defects: a fix
+commit after the wave that traces back to a line a task's PR added. `escaped.js` over 17 task PRs and 39 later
+commits found none. About 340K tokens per task.
+
+The refused merges in waves 1 and 2 had one cause: the merge relay ran `cd <repo> && node merge-pr.js`, and a
+permission rule matches only the bare command, so the permission system refused it. I merged those PRs by hand and
+fixed the relay prompt. The other wave 2 escalations were two workers stopping on an ambiguous spec line (answered,
+then relaunched) and the tasks waiting on them. Wave 3 was the first wave with no human input
+at all: one launch, no worker question, no refused merge, about 95 minutes for 5 tasks.
+
+![Timeline of v2.4 wave 3](docs/img/v24-wave-3-timeline.svg)
+
+Wave 4 merged 4.1 to 4.3 on its first launch (4.1 after one FIX round). Its tail was interrupted twice by the
+machine, not the loop: macOS's program check (`syspolicyd`) stalled every new process until a restart, and the tail's
+end-to-end test, which starts many short-lived processes, could not finish locally while it passed on CI in 44
+seconds. Its scorecard will follow once the tail merges.
+
+**Before and after, read with care.** Warden waves 1 to 4 (loop 2.2–2.3): 75% first-pass (44/59), 316K to 565K
+tokens per task, four relaunches in wave 3 alone. v2.4 waves 1 to 3: 84% (62–94%), about 340K per task, one wave
+with no human input. The intervals overlap, and the projects differ (a web app against this repository of scripts
+and tests), so this does not show the loop got better; it shows it did not get worse while gaining the checks. A
+controlled answer is what wave 4's benchmark is for: it replays one task graph from one commit under two
+configurations and reports intervals for the difference. Those comparisons have not been run yet.
+
 ## What I concluded, and what changed
 
 **Tests that pin an earlier wave's output block later waves.** Wave 3 replaced code whose exact output was pinned
@@ -80,6 +121,6 @@ of the same work shaped both ways.
 
 ## What these numbers do not show
 
-- One project, one author, one machine (an 8 GB Mac). No comparison against a single agent doing the same spec.
-- The critic's 0 reverts means no merged PR had to be undone; it does not prove the critic missed nothing.
+- Two projects, one author, one machine (an 8 GB Mac). No comparison against a single agent doing the same spec, and no controlled comparison of loop versions yet (the wave 4 harness exists; the runs cost about 1.7M tokens each).
+- The critic's 0 reverts and 0 traced escaped defects mean no merged PR had to be undone or fixed later; they do not prove the critic missed nothing. Its false alarms are not measured yet (`label-sheet.py` makes the sheet; nobody has labelled one).
 - Token counts are subagent tokens from the Workflow runs, not dollars.
