@@ -1,4 +1,4 @@
-# agent-loop v2.4 reliability and measurement: ordered task list (draft 5: after the wave 3 review)
+# agent-loop v2.4 reliability and measurement: ordered task list (draft 6: after the wave 4 review)
 
 Date: 2026-11-24. Source: the red team in `docs/RED-TEAM.md` (findings 1, 2, 3, 5, 6, 9 and 11). Execution model: as
 v2. Waves; tasks in a wave run in parallel unless a task names a dependency; each wave ends with a tail task that runs
@@ -82,6 +82,7 @@ irreversible production steps; changing a fixed decision or invariant.
 | H4 | after wave 3 | Add the `permissions.deny` read rules `isolation.js` lists. Then turn on Claude Code's Bash sandbox in one project first: add the `project.worktrees` directory to `sandbox.filesystem.allowWrite` (a sibling of the repo is not writable by default), run the preflight and one small wave, and add what fails (either `api.github.com` to `sandbox.network.allowedDomains`, or `gh *` and `git push *` to `sandbox.excludedCommands`) before turning it on in other projects | agents run with your privileges; the loop can only check and warn (invariant 6); the relays write outside the repository and call gh, so an unrehearsed sandbox can stop every merge |
 | H5 | when convenient | Give each wave a GitHub token limited to the one repository (a fine-grained token), in the session's environment | a shared `gh` login reaches every repository you own; creating a token is human-only |
 | H6 | after wave 4 | Run the benchmark comparisons in `docs/BENCHMARK.md` (each costs Claude Code usage) | the before/after needs controlled runs |
+| H7 | before H6 | Add the `permissions.allow` rules `prepare` prints (one `Bash(node <out>/clone/.claude/scripts/<script> *)` per relay script, for one fixed `--out`, with no `*` before the script name; add `<out>` to `sandbox.filesystem.allowWrite` if the sandbox is on), and launch the benchmark session from a shell with the environment `prepare` prints | the preflight fails without the rules (H2); permission settings are human-only |
 
 ## Wave 1: pure modules (1.5 after 1.2; the rest in parallel)
 
@@ -300,46 +301,46 @@ copy of v2.4.0, not by loop 2.3.1 (see Bootstrapping).
   relaunch with an unmerged outside dependency parks; `reuseTreeCi` off runs the check on main; a high integration
   finding fails the gate. Done: `npm run check` green on main; `LOOP_VERSION` is 2.5.0.
 
-## Wave 4: controlled benchmark (4.3 after 4.1 and 4.2)
+## Wave 4: controlled benchmark (4.1 after 4.2; 4.3 after 4.1 and 4.2)
 
 Source: the same review. Results so far are observational (different tasks, machine load, mid-run fixes). Wave 4
 builds a harness that replays one task graph from one starting commit under different loop configurations, with no
 GitHub repository and no CI minutes, and reports makespan, tokens, merge rate, correctness and human interventions.
 Running the comparisons is a human step (H6): each costs Claude Code usage.
 
-- **4.1 Fake GitHub.** Owns `bench/fake-gh.js`, `bench/fake-gh.test.ts`, `bench/bin/gh`. A `gh` replacement backed by a
+- **4.1 Fake GitHub.** Depends on 4.2 (its run records and `enqueueRun`). Owns `bench/fake-gh.js`, `tests/bench-fake-gh.test.ts`, `bench/bin/gh`. A `gh` replacement backed by a
   local bare remote and a state directory (`$BENCH_STATE`), covering exactly the subcommands, flags and `--json` fields
-  the loop's scripts, workflows and agent prompts use (the spec review lists them from a grep; at least `pr create`,
+  the loop's scripts, workflows and agent prompts use (the list from a grep of `claude/`, `scripts/` and the prompts: flags `--base --head --title --body --body-file --draft --comments --watch --fail-fast --state --limit --branch --workflow --commit --log-failed --exit-status --match-head-commit --delete-branch --merge/--squash/--rebase` and `-q` with only `.mergeable`, `.files[].path` and `.body` (no `jq` binary); `--json` fields `number, title, state, body, headRefName, baseRefName, headRefOid, mergeStateStatus, mergeable, mergeCommit ({ oid }), mergedAt, files, commits ({ oid, ... }), name, bucket, link, workflow, databaseId, status, conclusion`; output shapes match `tests/fixtures/gh-*.json`; `pr create` also creates `refs/pull/<n>/head` in the bare remote (`test-edits.js` fetches it); at least `pr create`, `pr comment`, (this list is grepped from loop 2.5.0; a loop under test that needs more gets exit 1 naming the subcommand or flag, and the list grows); `pr comment` (the fix prompt writes one) and reading comments through `pr view --comments` and the `comments` field; plain-text output, not only `--json`, for `pr view` and `pr checks` as `gh` prints them; at least `pr create`,
   `pr view`, `pr list`, `pr edit`, `pr ready`, `pr diff`, `pr checks`, `pr merge`, `run list`, `run view`, `run watch`).
   PRs are JSON files; `pr merge --merge` makes a real `git merge --no-ff` into the bare remote's default branch and
-  refuses with GitHub's message when the branch conflicts; checks and runs come from 4.2's records. An unsupported
+  refuses with GitHub's message when the branch conflicts, and then calls 4.2's `enqueueRun` for the new default-branch sha with event `push`, because a ref moved inside the bare remote runs no post-receive hook; checks and runs come from 4.2's records. An unsupported
   subcommand or field exits 1 naming it. Reads or writes: writes-files (the state directory and the bare remote).
   Test: create, view, list, edit, ready, diff, merge (clean and conflicting), checks with pending, green and red runs,
   `--json` field selection and `-q` jq expressions as the loop uses them; an unknown subcommand.
-- **4.2 Local CI.** Owns `bench/ci.js`, `bench/ci.test.ts`. A `post-receive` hook installed in the bare remote records a
-  run per pushed sha (event `pull_request` for a PR head, `push` for the default branch) and runs the project's install
-  and check in a clean clone at that sha, at most `BENCH_CI_JOBS` at once (default 2), recording `{ id, sha, event,
-  status, conclusion, startedAt, durationMs, logTail }`. Reads or writes: writes-files. Test: a push records a queued
+- **4.2 Local CI.** Owns `bench/ci.js`, `tests/bench-ci.test.ts`. A `post-receive` hook installed in the bare remote records a
+  run per pushed sha (event `push` for the default branch, `pull_request` for every other branch, decided at push time because a worker pushes before `gh pr create`; the hook only writes a `queued` record and starts a detached runner, then exits 0, because `git push` waits for post-receive) and runs the project's install
+  and check (the `install`, `check` and `mainCi` values of `$BENCH_STATE/ci.json`, which `prepare` writes from `loop.local.json`; a missing file is an error, so tests and 4.T write trivial commands) in a clean clone at that sha, at most `BENCH_CI_JOBS` at once (default 2), recording `{ id, sha, event,
+  status, conclusion, startedAt, durationMs, logTail, branch, workflow, name }`, one file `$BENCH_STATE/runs/<id>.json` per run (`id` a positive integer, the `databaseId` of `gh run list`; written under a temporary name and renamed; `status` is `queued`, `in_progress` or `completed`; `workflow` and `name` are the `mainCi` value). `bench/ci.js` exports `enqueueRun(stateDir, { sha, branch, event })` and `listRuns(stateDir)`, which 4.1 calls. Reads or writes: writes-files. Test: a push records a queued
   run that turns green or red; the concurrency cap holds; a run's log tail is kept for `run view --log-failed`.
-- **4.3 Scenarios, prepare, metrics and compare.** Owns `bench/scenario.js`, `bench/scenario.test.ts`, `scripts/bench.js`,
-  `bench/scenarios/v24-wave-1.json`, `bench/scenarios/synthetic-6.json`, `bench/metrics.js`, `bench/metrics.test.ts`. Depends on 4.1 and 4.2. A scenario is `{ name,
-  source, baseSha, spec, wave, holdout: [test files], overrides }`. `node scripts/bench.js prepare <scenario> --loop
-  <loop checkout> --config <overrides.json> --out <dir>` makes the bare remote at `baseSha`, a working clone, the loop
+- **4.3 Scenarios, prepare, metrics and compare.** Owns `bench/scenario.js`, `tests/bench-scenario.test.ts`, `scripts/bench.js`,
+  `bench/scenarios/v24-wave-1.json`, `bench/scenarios/v24-wave-1.holdout/**`, `bench/scenarios/synthetic-6.json`, `bench/scenarios/synthetic-6/**` (the seed repo, its spec and its holdout), `bench/metrics.js`, `tests/bench-metrics.test.ts`. Depends on 4.1 and 4.2. A scenario is `{ name,
+  source, baseSha, spec, wave, holdout: [test files], project }` (`project` is the fixed base `loop.local.json`: `mainCi`, `maxBuilders`, `maxChains`, `models`, `syncPolicy`, `install`, `check`, with `github` set as the safety rule of this task says; `--config` fields are merged over it field by field; the config key that `collect` records and `compare` groups by is the sha-256 of the canonical JSON (keys sorted) of the merged project without per-run paths (`repo`, `worktrees`, `github`), plus the loop checkout's commit and `LOOP_VERSION`, the scenario name and `BENCH_CI_JOBS`, so two loop versions with the same settings never pool). `node scripts/bench.js prepare <scenario> --loop
+  <loop checkout> --config <overrides.json> --out <dir>` makes a bare remote holding only the history up to `baseSha` (`git init --bare <out>/remote.git`, then `git -C <source> push <out>/remote.git <baseSha>:refs/heads/main`, never `git clone --bare`, so no later commit, tag or `refs/pull` object is copied; the clone's `origin` is the bare remote, never `source`), a working clone, the loop
   links (`install.sh`), `loop.local.json` with the overrides, and the holdout tests moved out of the clone (the agents
-  never see them), and prints the environment for the session (`PATH=<dir>/bin:$PATH`, `BENCH_STATE`) and the wave
-  args. Two scenarios: this repo's v2.4 wave 1 (base `844e886`, the commit wave 1 started from; holdout `tests/v24-wave1.test.ts`, wave 1's tail test)
-  and a synthetic six-task graph with two dependency chains. Reads or writes: writes-files. Test: prepare a scenario in
-  a temp dir: the clone is at `baseSha`, the holdout files are absent from it, the gh shim answers `pr list`.
+  never see them), and prints the allow rules H7 needs (it never writes a settings file; invariant 6, and it refuses an `--out` other than the one the rules name) and the environment for the session (`PATH=<dir>/bin:$PATH`, `BENCH_STATE`, `BENCH_CI_JOBS`), writes `github: "bench.invalid/bench"` (a name GitHub cannot hold; never this project's repository), and `bench.js doctor <dir>` exits 1 unless `command -v gh` is `<dir>/bin/gh`, `gh pr list` answers from `BENCH_STATE`, and both variables are set, run in the session's shell and from one Bash tool call before the wave; the fake gh refuses to run when `BENCH_STATE` is unset and the wave
+  args. Two scenarios: this repo's v2.4 wave 1 (base `844e886f5901023a6f458bfebac07527c7d6f4a6`, the full sha of the commit wave 1 started from; holdout `tests/v24-wave1.test.ts`, wave 1's tail test, which does not exist at `baseSha`: a copy taken from the 1.T merge commit is committed under `bench/scenarios/v24-wave-1.holdout/`, the scenario records `holdoutTotal`, its case count, and the replayed wave keeps its tail 1.T, whose own test lands at the same path, so `collect` copies the holdout over that path in a scratch worktree of the final default branch and runs it there)
+  and a synthetic six-task graph with two dependency chains: a seed repo of a few files, a spec that passes `scripts/spec-lint.js` (wave-args refuses one that does not), six tasks that own distinct files, and a holdout test, all committed under `bench/scenarios/synthetic-6/`. Reads or writes: writes-files. Test: prepare a scenario in
+  a temp dir from a fixture source repo the test builds (the CI checkout is shallow, so `844e886` does not exist there, and `.skip` is not allowed; the real scenario files are checked for a full 40-hex `baseSha` and for the spec and holdout copy being present): the clone is at that fixture's `baseSha`, the holdout files are absent from it, a commit made after `baseSha` is not in the bare remote (`git cat-file -e` fails), the gh shim answers `pr list`.
   Metrics (formerly 4.4): `bench.js collect <dir> <run output.json>...` prints one
   record: makespan (first agent start to last merge), agent minutes, tokens per role, tasks merged of tasks, fix rounds,
   escalations (human interventions), reverts, the holdout tests' pass count when run on the final default branch, and
-  the machine's load average samples. `bench.js compare <record.json>...` groups records by config and prints, per
-  metric, the mean with a 95% interval (Wilson for rates, a t interval for times and tokens) and the difference between
-  two configs, saying when the intervals overlap. Test: collect on a fixture run and state; compare two groups of three
+  the machine's load average samples (`bench.js sample <dir> [--every-s 30]` is started in the background by the session after `prepare` and appends `{ t, load1 }` lines to `$BENCH_STATE/load.jsonl` until its pid file is removed; `collect` reads it and reports `load: null` when it is absent). Makespan runs from the first agent `startedAt` to the end (`startedAt + durationMs`) of the last agent labelled as a merge relay. `bench.js compare <record.json>...` groups records by config and prints, per
+  metric, the mean with a 95% interval (Wilson for rates, a t interval for times and tokens, from a constant table of two-sided 95% t quantiles for 1 to 30 degrees of freedom in `bench/metrics.js`, 1.96 above 30, no interval for fewer than 2 records; the test pins 4.303 for 2 degrees of freedom and 2.776 for 4) and the difference between
+  two configs, with a Welch 95% interval for the difference of the means (degrees of freedom rounded down), printing both whether the two single-config intervals overlap and whether the difference interval includes 0. Test: collect on a fixture run and state; compare two groups of three
   records with hand-computed intervals.
 - **4.T Wave 4 tail.** Owns `tests/bench-e2e.test.ts`, `docs/BENCHMARK.md`. Depends on 4.1, 4.2 and 4.3. Test: prepare the
   synthetic scenario, drive a stubbed wave through the fake `gh` and local CI (no real agent), collect and compare two
-  configs. `docs/BENCHMARK.md` says how to run a comparison and what it costs. Done: `npm run check` green on main.
+  configs. `docs/BENCHMARK.md` says how to run a comparison and what it costs: about 1.7M tokens per replay of wave 1 (source: the wave 1 scorecard), a pilot of 1 run per configuration before 3, and a /usage reading before and after the pilot to scale the plan; the figure is one observation of one wave, an estimate to be replaced by the pilot's measured drop. It also states the contamination limit: a loop under test at 2.4.0 or later carries wave 1's reference solutions in its own files (reachable through the clone's `.claude` links), so the v24-wave-1 scenario supports relative comparisons between configurations, not an absolute correctness score; only the sandbox read rules (H4) could hide the source checkout and the loop files from agents. Done: `npm run check` green on main.
 
 ## Later (not in this spec)
 
