@@ -5,6 +5,8 @@ import { describe, expect, it } from 'vitest';
 // Task 4.2: prompt snapshot tests. The wave-loop script runs with stubbed agents that record every prompt by label,
 // so the tests assert on the exact text each role is given. No network, no real agent.
 const root = join(import.meta.dirname, '..');
+// The stubbed dry run reports the version of the loop under test (package.json), so a version bump needs no edit here.
+const VERSION: string = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
 // Task 2.1: the project uses the merger agent here and the CI relay answers green by default; the critic prompt has no
 // CI instructions (item 5 is supplied by the workflow). Relay prompts are covered in tests/wave-loop-relay.test.ts.
 const source = readFileSync(join(root, 'claude', 'workflows', 'wave-loop.js'), 'utf8').replace(/^export const meta/m, 'const meta');
@@ -608,7 +610,7 @@ describe('2.2 relays run their command alone', () => {
     expect(probed.prompts['probe:worker:9.1'][0]).not.toMatch(/\bcd\b/);
     expect(probed.prompts['probe:worker:9.1'][0].split('\n')).toContain('true');
     const script = await run22(
-      { ...happy22, 'preflight:merge': relayRan({ outcome: 'error', exit: 4, message: 'no pull requests found', loopVersion: '2.4.0' }, 4), 'merger:9.1': relayRan({ outcome: 'merged', exit: 0, mergeSha: 'm', mainSha: 'm', ciState: 'green', failing: [], conflictFiles: [], revertPrUrl: null, message: 'merged', logTail: '', mainCheck: 'green' }) },
+      { ...happy22, 'preflight:merge': relayRan({ outcome: 'error', exit: 4, message: 'no pull requests found', loopVersion: VERSION }, 4), 'merger:9.1': relayRan({ outcome: 'merged', exit: 0, mergeSha: 'm', mainSha: 'm', ciState: 'green', failing: [], conflictFiles: [], revertPrUrl: null, message: 'merged', logTail: '', mainCheck: 'green' }) },
       { project: { merger: 'script' } },
     );
     for (const label of ['preflight:merge', 'merger:9.1']) {
@@ -825,7 +827,7 @@ describe('2.2 (c) the critic checklist is checked for completeness', () => {
   });
 
   it('a second miss is recorded as is and logged, with no third call', async () => {
-    const { calls, rounds, logs, out } = await run22({ ...happy22, 'critic:9.1 r1': { ...mergeFull, checklist: without(9) }, 'critic:9.1 r1 retry': { ...mergeFull, checklist: without(8, 9) } });
+    const { calls, rounds, logs, out } = await run22({ ...happy22, 'critic:9.1 r1': { ...mergeFull, checklist: without(9) }, 'critic:9.1 r1 retry': { ...mergeFull, checklist: without(8, 9) } }, { project: { integrationGate: 'off' } });
     expect(calls.filter((c) => c.startsWith('critic:'))).toHaveLength(2);
     expect(rounds[0].checklist).toHaveLength(7);
     expect(logs.some((l) => /still no entry for items 8, 9/.test(l))).toBe(true);
@@ -844,7 +846,7 @@ describe('2.2 (c) the critic checklist is checked for completeness', () => {
   });
 
   it('an empty checklist is not retried; the round records checklistEmpty and a note: line is logged, never a WARNING', async () => {
-    const { calls, rounds, logs } = await run22({ ...happy22, 'critic:9.1 r1': { ...merge, findings: [] } });
+    const { calls, rounds, logs } = await run22({ ...happy22, 'critic:9.1 r1': { ...merge, findings: [] } }, { project: { integrationGate: 'off' } });
     expect(calls.filter((c) => c.startsWith('critic:'))).toEqual(['critic:9.1 r1']);
     expect(rounds[0].checklistEmpty).toBe(true);
     const noteLines = logs.filter((l) => /checklist/i.test(l));

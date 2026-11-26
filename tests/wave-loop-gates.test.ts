@@ -187,7 +187,7 @@ describe('wave-loop without gates or reality', () => {
   it('gives the v1 result plus empty reality and decisions', async () => {
     const { out, calls } = await runWave(green);
     expect(calls).toEqual(greenCalls);
-    expect(Object.keys(out).sort()).toEqual(['decisions', 'escalations', 'findings', 'gate', 'integration', 'loopVersion', 'models', 'project', 'reality', 'state', 'tasks', 'timings', 'wave']);
+    expect(Object.keys(out).sort()).toEqual(['decisions', 'escalations', 'findings', 'gate', 'integration', 'isolation', 'loopVersion', 'models', 'project', 'reality', 'state', 'tasks', 'timings', 'wave']);
     expect(out.gate).toBe('PASS');
     expect(out.reality).toBeNull();
     expect(out.decisions).toEqual([]);

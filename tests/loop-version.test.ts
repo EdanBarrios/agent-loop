@@ -71,7 +71,7 @@ describe('loop version stamp', { timeout: 120_000 }, () => {
 
   it('a matching version lets the wave past preflight to the worker', async () => {
     const { calls } = await runWave({ 'preflight:merge': preflight({ loopVersion: VERSION }) });
-    expect(calls.slice(0, 2)).toEqual(['preflight:merge', 'worker:9.1']);
+    expect(calls.slice(0, 3)).toEqual(['preflight:merge', 'preflight:isolation', 'worker:9.1']);
   });
 
   it('merge-pr.js --dry-run prints the loop version from package.json', async () => {

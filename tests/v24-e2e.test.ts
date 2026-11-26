@@ -168,7 +168,6 @@ describe('the stubbed four-task wave', () => {
   it('with the rule in the settings, preflight passes and the wave starts workers', () => {
     expect(wave.calls[0]).toBe('preflight:merge');
     expect(wave.calls).toContain('worker:9.1');
-    expect(wave.out.loopVersion).toBe('2.4.0');
     expect(wave.out.loopVersion).toBe(VERSION);
   });
 
@@ -309,7 +308,7 @@ describe('escaped.js feeds the scorecard', () => {
   it('the scorecard prints the rates with intervals, counts the escaped fix as a miss and lists it', async () => {
     const md = await py('loop-scorecard.py', ['9', '2026-11-25', resultFile, '--escaped-from', escapedFile]);
     expect(md).toContain('Gate: **PAUSED**');
-    expect(md).toContain('Loop: 2.4.0');
+    expect(md).toContain(`Loop: ${VERSION}`);
     // 9.1 and 9.2 started; 9.2 needed a FIX round, so first-pass MERGE is 1 of 2. 9.3 and 9.4 never finished a worker: 9.4 never started.
     const worker = /- Worker first-pass MERGE[^:]*: (.*)/.exec(md)![1];
     expect(worker).toMatch(INTERVAL);

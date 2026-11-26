@@ -233,7 +233,7 @@ describe('2.1 (b) a far-out usage limit pauses the wave', () => {
 
   it('a bare null from a worker followed by a null probe pauses the wave with resetText null', async () => {
     const { out, calls, escalations } = await runWave({ 'worker:9.1': null, 'probe:worker:9.1': null });
-    expect(calls).toEqual(['preflight:merge', 'worker:9.1', 'probe:worker:9.1']);
+    expect(calls).toEqual(['preflight:merge', 'preflight:isolation', 'worker:9.1', 'probe:worker:9.1']);
     expect(out.gate).toBe('PAUSED');
     expect(out.paused).toEqual({ resetsAt: null, resetText: null, tasks: ['9.1'] });
     expect(escalations).toHaveLength(1);
@@ -258,7 +258,7 @@ describe('2.1 (b) a far-out usage limit pauses the wave', () => {
 
   it('a bare null from a worker followed by a passing probe does not pause: the task parks as before', async () => {
     const { out, calls, escalations } = await runWave({ 'worker:9.1': null, 'probe:worker:9.1': ran({}) });
-    expect(calls).toEqual(['preflight:merge', 'worker:9.1', 'probe:worker:9.1']);
+    expect(calls).toEqual(['preflight:merge', 'preflight:isolation', 'worker:9.1', 'probe:worker:9.1']);
     expect(out.gate).toBe('FAIL');
     expect(out.state['9.1']).toBe('parked');
     expect('paused' in out).toBe(false);
@@ -341,17 +341,17 @@ describe('2.1 (c) project.ciChunkMin sets the length of a CI relay call', () => 
   });
 });
 
-describe('2.1 (d) the loop version is 2.4.0 everywhere it is stamped', () => {
-  it('package.json, wave-loop and chain-loop agree on 2.4.0', () => {
-    expect(VERSION).toBe('2.4.0');
-    expect(source).toContain("const LOOP_VERSION = '2.4.0'");
+describe('2.1 (d) the loop version is the same everywhere it is stamped', () => {
+  it('package.json, wave-loop and chain-loop agree (the version is read from package.json)', () => {
+    expect(VERSION).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(source).toContain(`const LOOP_VERSION = '${VERSION}'`);
     const chain = readFileSync(join(ROOT, 'claude', 'workflows', 'chain-loop.js'), 'utf8');
-    expect(chain).toContain("const LOOP_VERSION = '2.4.0'");
+    expect(chain).toContain(`const LOOP_VERSION = '${VERSION}'`);
   });
 
-  it('the result carries loopVersion 2.4.0', async () => {
+  it('the result carries the loop version of package.json', async () => {
     const { out } = await runWave(happy);
-    expect(out.loopVersion).toBe('2.4.0');
+    expect(out.loopVersion).toBe(VERSION);
   });
 });
 

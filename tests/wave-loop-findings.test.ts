@@ -150,7 +150,7 @@ describe('integration review', () => {
   });
 
   it('never blocks the gate: a high integration finding leaves the gate PASS and raises no escalation', async () => {
-    const { out } = await runWave({ ...happy, 'integration:wave': integ });
+    const { out } = await runWave({ ...happy, 'integration:wave': integ }, { integrationGate: 'off' });
     expect(out.gate).toBe('PASS');
     expect(out.escalations).toEqual([]);
   });

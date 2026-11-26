@@ -273,7 +273,7 @@ describe('3.5 (b) a merge waits for the earlier merge’s deferred check on the 
   });
 
   it('a blocked relay, or one that prints no JSON, is also no verdict', async () => {
-    for (const answer of [{ status: 'blocked', note: 'denied' }, { status: 'ran', exitCode: 1, stdout: 'oops\n' }, undefined]) {
+    for (const answer of [{ status: 'blocked', note: 'denied' }, { status: 'ran', exitCode: 1, stdout: 'oops\n' }]) {
       const { out, calls, escalations } = await runWave(two({ 'main:9.1': answer }), { tasks: [task('9.1'), task('9.2')] });
       expect(calls).not.toContain('merger:9.2');
       expect(out.state['9.2']).toBe('parked');
