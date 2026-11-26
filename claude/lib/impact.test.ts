@@ -2,7 +2,10 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+
+// Each CLI case starts node and git on a temp repo; a loaded machine needs more than the default 5 seconds.
+vi.setConfig({ testTimeout: 30000 });
 // @ts-expect-error plain JavaScript module with JSDoc
 import { impactMap, parseAliases, parseImports, parseOwners, resolveSpecifier } from './impact.js';
 

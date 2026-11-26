@@ -80,7 +80,7 @@ const merge = { verdict: 'MERGE', prHeadSha: 'abc', checklist: [], fixItems: [],
 const fix = { ...merge, verdict: 'FIX', fixItems: [{ n: 1, what: 'x', provedBy: 'y', cause: 'defect' }] };
 const merged = { outcome: 'merged', details: 'ok', mergeSha: 'm', mainSha: 'm', checkOnMainExitCode: 0 };
 const green = { 'worker:2.1': opened, 'critic:2.1 r1': merge, 'merger:2.1': merged };
-const greenCalls = ['worker:2.1', 'critic:2.1 r1', 'merger:2.1'];
+const greenCalls = ['worker:2.1', 'test-edits:2.1 r1', 'critic:2.1 r1', 'merger:2.1'];
 
 // A relay that ran `true` and exited 0: the passing answer to the probe (decision D1: the probe covers every agent but the critic).
 const probeOk = { status: 'ran', exitCode: 0, stdout: '' };
@@ -231,7 +231,7 @@ describe('wave-loop models', () => {
       return merge;
     };
     const { out, calls, optsSeen, escalations } = await runWave({ ...green, 'critic:2.1 r1': limited });
-    expect(calls).toEqual(['worker:2.1', 'critic:2.1 r1', 'critic:2.1 r1', 'merger:2.1']);
+    expect(calls).toEqual(['worker:2.1', 'test-edits:2.1 r1', 'critic:2.1 r1', 'critic:2.1 r1', 'merger:2.1']);
     const critics = optsSeen.filter((o) => o.label.startsWith('critic'));
     expect(critics.map((o) => [o.model, o.effort])).toEqual([
       ['claude-fable-5-1', 'high'],
@@ -266,7 +266,7 @@ describe('wave-loop models', () => {
   it('treats a null critic result as the usage-limit case: swaps once to opus/high and retries', async () => {
     const nullOnFable = (opts: Opts) => (opts.model === 'claude-fable-5-1' ? null : merge);
     const { out, calls, optsSeen, escalations } = await runWave({ ...green, 'critic:2.1 r1': nullOnFable });
-    expect(calls).toEqual(['worker:2.1', 'critic:2.1 r1', 'critic:2.1 r1', 'merger:2.1']);
+    expect(calls).toEqual(['worker:2.1', 'test-edits:2.1 r1', 'critic:2.1 r1', 'critic:2.1 r1', 'merger:2.1']);
     expect(optsSeen.filter((o) => o.label.startsWith('critic')).map((o) => [o.model, o.effort])).toEqual([
       ['claude-fable-5-1', 'high'],
       ['opus', 'high'],

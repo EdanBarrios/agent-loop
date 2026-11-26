@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 // Usage: node scripts/impact.js --repo <path> --owns <path>... [--spec <spec.md>]
-// Lists the existing test files that import an owned path directly or through one intermediate non-test module.
+// Lists the existing test files that import an owned path directly or through one intermediate non-test module, and
+// the test files that name an owned file in a quoted string (a path or a basename: tests that read it with
+// readFileSync or run it with execFile import nothing).
 // Prints one JSON line: { tests: [{ path, via, owner }] }, where `via` names the intermediate module (null when the
-// import is direct) and `owner` is the task id whose Owns line in --spec lists the test file (null when none does or
+// import is direct, "name" when the test only names an owned file in a string) and `owner` is the task id whose Owns line in --spec lists the test file (null when none does or
 // without --spec). Test files come from `testGlobs` in <repo>/.claude/loop.local.json (default globs when the file or
 // field is missing); aliases come from `compilerOptions.paths` in <repo>/tsconfig.json. See claude/lib/impact.js.
 // Exit codes: 0 map printed, 1 git or the spec failed (the JSON line carries `tests: []` and note "error: ..."),

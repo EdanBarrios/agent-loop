@@ -1,7 +1,9 @@
 // Test-impact map: which existing test files import the files a task owns, directly or through one module?
 // Pure functions with injected I/O (read); scripts/impact.js wires `git ls-files` and the file system.
 // Imports are found by regex, not by a parser, so a commented-out import still counts: the map errs toward listing
-// one test too many, never one too few. It imports node:path, so it is for CLIs and tests, not for bundling into a
+// one test too many, never one too few. A test that reads or runs an owned file without importing it (readFileSync,
+// execFile) is found by name: it has a quoted string holding the owned file's path or basename, and is listed with
+// via "name". It imports node:path, so it is for CLIs and tests, not for bundling into a
 // workflow file (scripts/bundle-workflows.js copies only import-free libs).
 // Reads or writes: reads (only the files it is given).
 import { matchesGlob, posix } from 'node:path'
@@ -22,7 +24,8 @@ import { DEFAULT_TEST_GLOBS, isTestFile } from './testedits.js'
 /**
  * @typedef {Object} ImpactTest
  * @property {string} path
- * @property {string|null} via    the one intermediate module, or null when the test imports an owned path directly
+ * @property {string|null} via    the one intermediate module, null when the test imports an owned path directly, or "name"
+ *                                when it only names an owned file in a quoted string
  * @property {string|null} owner  the task id whose Owns line lists the test file, or null
  */
 
@@ -55,6 +58,20 @@ export function parseImports(source) {
     for (const m of text.matchAll(pattern)) found.add(m[1])
   }
   return [...found]
+}
+
+/**
+ * The file-name tokens of every quoted string ('...', "..." or `...`, one line each) of a source text: runs of
+ * letters, digits and `_ . @ + -`, so 'claude/lib/a.js' and `${dir}/a.js` both give a.js. A trailing dot is dropped.
+ * @param {string} source
+ * @returns {Set<string>}
+ */
+export function quotedNameTokens(source) {
+  const tokens = new Set()
+  for (const m of String(source).matchAll(/(['"`])((?:\\.|(?!\1)[^\\\n])*)\1/g)) {
+    for (const t of m[2].match(/[\w.@+-]+/g) ?? []) tokens.add(t.replace(/\.+$/, ''))
+  }
+  return tokens
 }
 
 /** A repo-relative POSIX path: no "./" prefix, no trailing slash, "" for the repo root. */
@@ -226,7 +243,8 @@ function patternMatches(pattern, path) {
 }
 
 /**
- * Every test file that imports an owned path directly, or through one intermediate non-test module.
+ * Every test file that imports an owned path directly, or through one intermediate non-test module, plus (via "name")
+ * every test file with a quoted string holding the repo-relative path or the basename of a tracked owned file.
  * @param {Object} input
  * @param {string[]} input.files               every tracked file (repo-relative POSIX paths)
  * @param {string[]} input.owns                owned paths; a directory matches every file under it
@@ -243,18 +261,35 @@ export async function impactMap(input, io) {
   const owners = input.spec ? parseOwners(input.spec) : []
   const owned = input.owns.map(clean).filter((p) => p !== '')
   const isOwned = (path) => owned.some((o) => path === o || path.startsWith(`${o}/`))
+  // The tracked files the task owns, by basename, for the by-name rule.
+  /** @type {Map<string, string[]>} */
+  const ownedByName = new Map()
+  for (const f of files) {
+    if (!isOwned(f)) continue
+    const name = posix.basename(f)
+    ownedByName.set(name, [...(ownedByName.get(name) ?? []), f])
+  }
 
   /** @type {Map<string, string[]>} */
   const cache = new Map()
-  async function importsOf(path) {
-    const hit = cache.get(path)
-    if (hit) return hit
+  /** @type {Map<string, string>} */
+  const sources = new Map()
+  async function sourceOf(path) {
+    const hit = sources.get(path)
+    if (hit !== undefined) return hit
     let source = ''
     try {
       source = (await io.read(path)) ?? ''
     } catch {
       source = ''
     }
+    sources.set(path, source)
+    return source
+  }
+  async function importsOf(path) {
+    const hit = cache.get(path)
+    if (hit) return hit
+    const source = await sourceOf(path)
     const targets = new Set()
     for (const spec of parseImports(source)) {
       const target = resolveSpecifier(spec, path, files, aliases)
@@ -277,6 +312,18 @@ export async function impactMap(input, io) {
         if (!SOURCE_FILE.test(mid) || isTestFile(mid, globs)) continue
         if ((await importsOf(mid)).some(isOwned)) {
           via = mid
+          hit = true
+          break
+        }
+      }
+    }
+    if (!hit && ownedByName.size > 0) {
+      // No import shows it: a quoted string that holds an owned file's path or basename does (the file's own name in
+      // its own text does not count).
+      for (const token of quotedNameTokens(await sourceOf(path))) {
+        const named = ownedByName.get(token)
+        if (named && named.some((f) => f !== path)) {
+          via = 'name'
           hit = true
           break
         }

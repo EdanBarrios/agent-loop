@@ -65,7 +65,7 @@ describe('wave-loop: a worker that returns before its check finishes', () => {
       'critic:9.1 r1': merge,
       'merger:9.1': merged,
     });
-    expect(calls).toEqual(['worker:9.1', 'worker:9.1 finish1', 'ci:9.1 r1', 'critic:9.1 r1', 'merger:9.1']);
+    expect(calls).toEqual(['worker:9.1', 'worker:9.1 finish1', 'ci:9.1 r1', 'test-edits:9.1 r1', 'critic:9.1 r1', 'merger:9.1']);
     expect(out.gate).toBe('PASS');
     expect(escalations).toEqual([]);
   });
@@ -98,7 +98,7 @@ describe('wave-loop: a worker that returns before its check finishes', () => {
       'critic:9.1 r2': merge,
       'merger:9.1': merged,
     });
-    expect(calls).toEqual(['worker:9.1', 'ci:9.1 r1', 'critic:9.1 r1', 'worker:9.1 fix1', 'worker:9.1 finish1', 'ci:9.1 r2', 'critic:9.1 r2', 'merger:9.1']);
+    expect(calls).toEqual(['worker:9.1', 'ci:9.1 r1', 'test-edits:9.1 r1', 'critic:9.1 r1', 'worker:9.1 fix1', 'worker:9.1 finish1', 'ci:9.1 r2', 'test-edits:9.1 r2', 'critic:9.1 r2', 'merger:9.1']);
     expect(out.gate).toBe('PASS');
   });
 });
