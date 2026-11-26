@@ -7,6 +7,7 @@ const rules = [
   'hookify.block-force-push.local.md',
   'hookify.block-secrets.local.md',
   'hookify.block-commit-on-main.local.md',
+  'hookify.block-credential-reads.local.md',
 ];
 
 describe('hookify rules', () => {
@@ -52,5 +53,43 @@ describe('block-secrets pattern', () => {
     ['a version string', 'v2.3.0'],
   ])('allows %s', (_name, sample) => {
     expect(pattern.test(sample)).toBe(false);
+  });
+});
+
+// The credential rule: a single-line pattern that is a valid JavaScript regular expression with no inline flags
+// (claude/lib/merge.test.ts reads every rule that way). Ten sample commands: five that read credentials, five that do not.
+describe('block-credential-reads pattern', () => {
+  const text = readFileSync(join(root, 'claude', 'hookify.block-credential-reads.local.md'), 'utf8');
+  const pattern = new RegExp(/^pattern:\s*(.+)$/m.exec(text)![1]);
+
+  it('is an event: bash rule that blocks', () => {
+    expect(text).toMatch(/^event:\s*bash\s*$/m);
+    expect(text).toMatch(/^action:\s*block\s*$/m);
+    expect(text.match(/^pattern:/gm)).toHaveLength(1);
+    expect(/^pattern:\s*\(\?[a-z]+\)/m.test(text)).toBe(false);
+  });
+
+  it.each([
+    'cat ~/.ssh/id_ed25519',
+    'cat $HOME/.aws/credentials',
+    'less ~/.config/gh/hosts.yml',
+    'TOKEN=$(gh auth token)',
+    'security find-generic-password -s example -w',
+    'security find-internet-password -s example.com',
+    'cp ~/.netrc /tmp/x',
+    'tar czf - /home/someone/.ssh',
+  ])('blocks %s', (cmd) => {
+    expect(pattern.test(cmd)).toBe(true);
+  });
+
+  it.each([
+    'ssh -V',
+    'git push origin task/3.4-x',
+    'gh auth status',
+    'gh pr view 1',
+    'ls ~/dev',
+    'npm run check',
+  ])('allows %s', (cmd) => {
+    expect(pattern.test(cmd)).toBe(false);
   });
 });
