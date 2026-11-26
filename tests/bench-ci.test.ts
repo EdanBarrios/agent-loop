@@ -135,7 +135,7 @@ describe('post-receive hook', () => {
   it('keeps the tail of a failed run log for run view --log-failed', async () => {
     const f = setup({ install: 'true', check: 'for i in $(seq 1 500); do echo "line $i"; done; echo "boom: assertion failed" >&2; exit 3', mainCi: 'ci' });
     commit(f, 'a.txt');
-    push(f, 'task/x');
+    push(f, 'HEAD:refs/heads/task/x');
     const run = await waitFor(() => {
       const r = listRuns(f.state)[0];
       return r && r.status === 'completed' && r;
@@ -174,31 +174,45 @@ describe('post-receive hook', () => {
   });
 
   it('holds the BENCH_CI_JOBS cap across runners, and defaults to 2', async () => {
-    const script = [
-      'mkdir -p "$BENCH_ACTIVE"',
-      'touch "$BENCH_ACTIVE/$$"',
-      'ls "$BENCH_ACTIVE" | wc -l >> "$BENCH_COUNTS"',
-      'sleep 0.6',
-      'rm "$BENCH_ACTIVE/$$"',
-    ].join('; ');
     for (const [jobs, expected] of [['1', 1], [undefined, 2]] as const) {
-      const f = setup({ install: 'true', check: script, mainCi: 'ci' });
-      const env: Record<string, string> = { BENCH_ACTIVE: join(f.dir, 'active'), BENCH_COUNTS: join(f.dir, 'counts') };
+      // each check registers itself in an "active" directory, records how many are active, and waits for the gate
+      const f = setup((gate) => ({
+        install: 'true',
+        check: [
+          'mkdir -p "$BENCH_ACTIVE"',
+          'touch "$BENCH_ACTIVE/$$"',
+          'ls "$BENCH_ACTIVE" | wc -l >> "$BENCH_COUNTS"',
+          `while [ ! -f ${gate} ]; do sleep 0.05; done`,
+          'rm "$BENCH_ACTIVE/$$"',
+        ].join('; '),
+        mainCi: 'ci',
+      }));
+      const active = join(f.dir, 'active');
+      const env: Record<string, string> = { BENCH_ACTIVE: active, BENCH_COUNTS: join(f.dir, 'counts') };
       if (jobs) env.BENCH_CI_JOBS = jobs;
       writeFileSync(join(f.dir, 'counts'), '');
       commit(f, 'a.txt');
       push(f, 'main', env);
-      for (const b of ['b1', 'b2', 'b3']) {
+      for (const b of ['b1', 'b2']) {
         git(f.work, 'checkout', '-q', '-b', b, 'main');
         commit(f, `${b}.txt`);
         push(f, b, env);
       }
-      await waitFor(() => listRuns(f.state).length === 4 && listRuns(f.state).every((r: { status: string }) => r.status === 'completed'), 30000);
+      const running = () => (existsSync(active) ? readdirSync(active).length : 0);
+      await waitFor(() => running() === expected);
+      await sleep(700); // long enough for a runner above the cap to have started
+      expect(running()).toBe(expected);
+      const runs = listRuns(f.state);
+      expect(runs).toHaveLength(3);
+      expect(runs.filter((r: { status: string }) => r.status === 'in_progress')).toHaveLength(expected);
+      expect(runs.filter((r: { status: string }) => r.status === 'queued')).toHaveLength(3 - expected);
+      writeFileSync(f.gate, 'go');
+      await waitFor(() => listRuns(f.state).every((r: { status: string }) => r.status === 'completed'), 40000);
       const counts = readFileSync(join(f.dir, 'counts'), 'utf8').trim().split('\n').map(Number);
-      expect(counts).toHaveLength(4);
+      expect(counts).toHaveLength(3);
       expect(Math.max(...counts)).toBe(expected);
       expect(listRuns(f.state).every((r: { conclusion: string }) => r.conclusion === 'success')).toBe(true);
       expect(existsSync(join(f.state, 'ci-slots')) ? readdirSync(join(f.state, 'ci-slots')) : []).toEqual([]);
     }
-  }, 60000);
+  }, 120000);
 });
