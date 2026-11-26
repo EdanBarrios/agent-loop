@@ -1,0 +1,728 @@
+{
+  "project": "agent-loop",
+  "wave": "4",
+  "accepted": [
+    {
+      "id": "W4-R1",
+      "kind": "defect",
+      "task": "4.1",
+      "category": "tests",
+      "text": "The wave 4 tests are owned under bench/, but vitest only collects tests/** and claude/lib/**. 4.1, 4.2 and 4.3 would each report a green `npm run check` and `vitest related` quickCheck while running none of their own tests, and the Fixed decision already says test files live under tests/ or claude/lib/. Recommend moving the four test files to tests/bench-*.test.ts, which keeps the Fixed decision and needs no vitest.config.ts edit. No other task owns vitest.config.ts, so widening `include` would need a new owner and would make 4.2 and 4.3 wait for it. 4.T already uses tests/bench-e2e.test.ts.",
+      "evidence": "vitest.config.ts: `include: ['tests/**/*.test.ts', 'claude/lib/**/*.test.ts']`. Spec Fixed decisions: \"Test files are `*.test.ts` under `tests/` or `claude/lib/`.\" Spec 4.1: \"Owns `bench/fake-gh.js`, `bench/fake-gh.test.ts`, `bench/bin/gh`\"; 4.2: \"Owns `bench/ci.js`, `bench/ci.test.ts`\"; 4.3: \"`bench/scenario.test.ts`\" and \"`bench/metrics.test.ts`\".",
+      "reverseCost": "One revert PR of the spec edit; before any worker starts it is only a spec edit.",
+      "wouldBeWrongIf": "vitest.config.ts is changed to include bench/** by an owned task before 4.1 starts, or the Fixed decision on test locations is amended.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "`bench/fake-gh.test.ts`",
+          "replace": "`tests/bench-fake-gh.test.ts`"
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "`bench/ci.test.ts`",
+          "replace": "`tests/bench-ci.test.ts`"
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "`bench/scenario.test.ts`",
+          "replace": "`tests/bench-scenario.test.ts`"
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "`bench/metrics.test.ts`",
+          "replace": "`tests/bench-metrics.test.ts`"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category tests is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "~/dev/agent-loop-public/vitest.config.ts has include ['tests/**/*.test.ts','claude/lib/**/*.test.ts']; package.json check ends in `vitest run`; .claude/loop.local.json quickCheck uses `vitest related --run --passWithNoTests {files}`. Spec Fixed decisions line 'Test files are *.test.ts under tests/ or claude/lib/'. Applied all four edits to a scratch copy: spec-lint exits 0 and wave-args prints the new tests/bench-*.test.ts paths in each task's owns. No existing tests/bench-* file collides (ls tests).",
+        "reason": "Holds. Tests under bench/ would never be collected, and --passWithNoTests would make that silent. Moving them keeps the Fixed decision and needs no new owner for vitest.config.ts."
+      }
+    },
+    {
+      "id": "W4-R2",
+      "kind": "defect",
+      "task": "4.1",
+      "category": "dependency",
+      "text": "4.1 reads \"4.2's records\" but lists no dependency on 4.2, and 4.2 fixes neither where a run record lives nor the fields the loop reads. 4.1 and 4.2 are written in parallel against a schema nobody states. The record has no workflow name, branch or check name, yet the loop reads `--json name,state,bucket,link,workflow` from `gh pr checks` and filters `gh run list --branch --workflow --commit`. Recommend 4.1 after 4.2 (project config has maxBuilders 1, so there is no parallelism to lose), with the record path, field names and exported functions stated in 4.2.",
+      "evidence": "Spec 4.1: \"checks and runs come from 4.2's records\"; header \"(4.3 after 4.1 and 4.2)\"; 4.2 record: \"`{ id, sha, event, status, conclusion, startedAt, durationMs, logTail }`\". claude/lib/ci.js:75: `gh pr checks ${prNumber} --json name,state,bucket,link,workflow`; claude/lib/merge.js:577: `gh run list --branch ${base} --workflow ${mainCi} --commit ${sha} --json databaseId,status,conclusion`.",
+      "reverseCost": "One revert PR of the spec edit.",
+      "wouldBeWrongIf": "4.1's tests are meant to use hand-written run files and the schema is pinned elsewhere, e.g. a bench/README read first by both workers.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "## Wave 4: controlled benchmark (4.3 after 4.1 and 4.2)",
+          "replace": "## Wave 4: controlled benchmark (4.1 after 4.2; 4.3 after 4.1 and 4.2)"
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "- **4.1 Fake GitHub.** Owns",
+          "replace": "- **4.1 Fake GitHub.** Depends on 4.2 (its run records and `enqueueRun`). Owns"
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "status, conclusion, startedAt, durationMs, logTail }`.",
+          "replace": "status, conclusion, startedAt, durationMs, logTail, branch, workflow, name }`, one file `$BENCH_STATE/runs/<id>.json` per run (`id` a positive integer, the `databaseId` of `gh run list`; written under a temporary name and renamed; `status` is `queued`, `in_progress` or `completed`; `workflow` and `name` are the `mainCi` value). `bench/ci.js` exports `enqueueRun(stateDir, { sha, branch, event })` and `listRuns(stateDir)`, which 4.1 calls."
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category dependency is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "claude/lib/ci.js:75 and claude/lib/merge.js:577 read as quoted; merge.js takes runs[0] of `gh run list`. Scratch copy with the edits: wave-args gives 4.1 deps ['4.2'] and the Owns clause still parses, spec-lint exits 0 but adds a warning: 'wave 4: dependency chain 4.2 -> 4.1 -> 4.3 is 3 tasks deep (more than 2); each hop costs about 15 min'. claude/workflows/wave-loop.js:1019-1020: `MAX_BUILDERS = P.maxBuilders || 2 // machine-wide check slots` and `MAX_CHAINS = P.maxChains || 6 // task chains in flight at once`; the project config has maxChains 3.",
+        "reason": "The schema gap is real and the pinned record plus exports close it, so the edits hold up. One stated premise is false: maxBuilders 1 limits check slots, not tasks; with maxChains 3, 4.1 and 4.2 would run in parallel today, so the dependency does cost one hop (about 15 min) and triggers the loop's own chain-depth warning. Worth it because 4.1 imports 4.2's enqueueRun, but the cost should be recorded as real, not zero. Two details are still unstated: how run ids are allocated when two hooks race, and the order `run list` returns duplicates in (merge.js reads runs[0])."
+      }
+    },
+    {
+      "id": "W4-R3",
+      "kind": "defect",
+      "task": "4.1",
+      "category": "correctness",
+      "text": "A merge made by the fake gh inside the bare remote runs no post-receive hook, so the default-branch (`push`) run for the merge commit is never recorded. The loop then waits for it: after a deferred merge it polls `gh run list --branch main --workflow <mainCi> --commit <sha>` until a run appears, and 3.5 settleMain parks the next merge as `main not verified`. Every benchmark merge with `mainCi` set would end parked or hang. Recommend 4.1's `pr merge` calls 4.2's `enqueueRun` for the new default-branch sha, and the test asserts a `push` run exists after a merge.",
+      "evidence": "Spec 4.1: \"`pr merge --merge` makes a real `git merge --no-ff` into the bare remote's default branch\"; 4.2: \"A `post-receive` hook installed in the bare remote records a run per pushed sha\". git runs post-receive only in receive-pack, i.e. on a push. claude/workflows/wave-loop.js:1445 and claude/lib/merge.js:577 poll `gh run list ... --commit <mergeSha>`.",
+      "reverseCost": "One revert PR of the spec edit.",
+      "wouldBeWrongIf": "4.1 performs the merge by pushing to the bare remote from a clone, which fires the hook.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "refuses with GitHub's message when the branch conflicts;",
+          "replace": "refuses with GitHub's message when the branch conflicts, and then calls 4.2's `enqueueRun` for the new default-branch sha with event `push`, because a ref moved inside the bare remote runs no post-receive hook;"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category correctness is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "merge.js:565-590 waitMainRun polls `gh run list --branch <base> --workflow <mainCi> --commit <sha>` until runs[0].status is 'completed'; wave-loop.js:1445 merger prompt does the same; spec line 284 parks later merges as 'main not verified after <task>'. Spec 4.2 records runs only from a post-receive hook, which git runs only on a push.",
+        "reason": "The defect is real: a ref moved inside the bare remote records no run and every merge with mainCi set would wait or park. The edit is necessary but leaves a gap with R2 and R4: enqueueRun as defined only writes a queued record, and only the hook 'starts a detached runner', so a run enqueued by `pr merge` could stay queued forever, which is the same hang. Add to the text that enqueueRun also starts the runner, that it is idempotent per (sha, event) in case the merge is implemented as a push from a scratch clone (hook fires too), and that the test asserts the push run reaches `completed`, not only that it exists. R3 depends on R2's edit for the name enqueueRun although dependsOn is empty."
+      }
+    },
+    {
+      "id": "W4-R4",
+      "kind": "defect",
+      "task": "4.2",
+      "category": "correctness",
+      "text": "Two problems with the hook as written. (1) post-receive runs inside `git push`, so a hook that runs install and check blocks the worker's push for minutes, and the cap of BENCH_CI_JOBS cannot hold across separate hook processes without a queue. (2) The event is decided at push time, but workers push first and open the PR second, so a hook cannot know whether a sha is a PR head. Recommend the hook only writes a `queued` record and starts one detached runner, then exits 0 in under a second. The runner takes jobs from the queued records with a lock and respects the cap. The event is `push` for the default branch and `pull_request` for any other branch.",
+      "evidence": "Spec 4.2: \"records a run per pushed sha (event `pull_request` for a PR head, `push` for the default branch) and runs the project's install and check ... at most `BENCH_CI_JOBS` at once\". wave-loop.js:1316: \"git push -u origin ${t.branch} and open a PR with gh pr create\" (push before PR). The spec's test says \"a push records a queued run that turns green or red; the concurrency cap holds\".",
+      "reverseCost": "One revert PR of the spec edit.",
+      "wouldBeWrongIf": "The runner is meant to be started by `gh pr create`, not by the push, so no run exists until the PR does.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "(event `pull_request` for a PR head, `push` for the default branch)",
+          "replace": "(event `push` for the default branch, `pull_request` for every other branch, decided at push time because a worker pushes before `gh pr create`; the hook only writes a `queued` record and starts a detached runner, then exits 0, because `git push` waits for post-receive)"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category correctness is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "wave-loop.js:1316 worker prompt: 'git push -u origin <branch> and open a PR with gh pr create' (push first). Spec 4.2 text as quoted. merge.js and ci.js never filter runs by event (grep for 'event' finds only the workflow-file scan), so the event is informational. Edit applied cleanly in the scratch copy.",
+        "reason": "Holds. A hook that runs install and check inline would block every worker push for the length of a check, and separate hook processes cannot hold a shared cap without a queue. Deciding the event by branch at push time is the only thing a hook can know. Small additions worth making: the hook must detach the runner's stdio or `git push` still waits, and it must skip branch deletions (all-zero new sha)."
+      }
+    },
+    {
+      "id": "W4-R5",
+      "kind": "defect",
+      "task": "4.2",
+      "category": "config",
+      "text": "4.2 runs \"the project's install and check\" but says neither where ci.js reads them nor what a test uses. The real values (`npm ci`, `npm run check`) need the network and about 3.5 minutes, and tests use no network. 4.T also drives a stubbed wave through this CI. Recommend `prepare` writes `$BENCH_STATE/ci.json` with `install`, `check` and `mainCi` copied from loop.local.json. ci.js reads only that file, and the tests and 4.T write trivial commands (`true`, `exit 1`).",
+      "evidence": "Spec 4.2: \"runs the project's install and check in a clean clone at that sha\"; Fixed decisions: \"Tests use no network and no real agent.\" .claude/loop.local.json: `\"install\": \"npm ci\", \"check\": \"npm run check\"`. vitest.config.ts comment: \"The whole suite ... about 3.5 min\".",
+      "reverseCost": "One revert PR of the spec edit.",
+      "wouldBeWrongIf": "ci.js is meant to be given the commands as flags or env by the hook installer, which would be an equivalent fix.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "and check in a clean clone at that sha, at most",
+          "replace": "and check (the `install`, `check` and `mainCi` values of `$BENCH_STATE/ci.json`, which `prepare` writes from `loop.local.json`; a missing file is an error, so tests and 4.T write trivial commands) in a clean clone at that sha, at most"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category config is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "~/dev/agent-loop-public/.claude/loop.local.json: install 'npm ci', check 'npm run check'; vitest.config.ts comment 'about 3.5 min'; Fixed decisions 'Tests use no network and no real agent'; extraRules 'No network or real agent in tests'. Spec 4.2 says only 'the project's install and check'.",
+        "reason": "Holds. Without a stated source the worker would either hard-code the real commands (network, minutes) or invent a mechanism 4.3 and 4.T do not know. One loose end: the sentence is added to 4.2's bullet only; 4.3's bullet (which owns `prepare`) is not edited to say it writes ci.json, so the 4.3 worker learns of it only by reading 4.2. The 'missing file is an error' rule makes 4.T catch an omission."
+      }
+    },
+    {
+      "id": "W4-R6",
+      "kind": "question",
+      "task": "4.2",
+      "category": "measurement",
+      "text": "Should the local CI occupy the machine's check slots, and what is the default BENCH_CI_JOBS? Real CI is remote and free of local load. Here it runs `npm run check` (about 3.5 min and heavy on memory) on the same 8 GB machine as the agents, so CI wait time, which ciChunkMin, settleMain and reuseTreeCi are meant to be compared on, becomes a function of local load. If it uses slot.sh with the loop's SLOT_MAX, CI queues behind agents' own checks. If it does not, 2 CI jobs plus agents can exceed memory and time out. Recommendation: CI does not take slots, BENCH_CI_JOBS defaults to 1 and is recorded in the run record and in `collect`, and BENCHMARK.md says CI minutes are local minutes. The human decides because it sets what the benchmark can say about CI waits.",
+      "evidence": "vitest.config.ts: \"One fork per test file (25 files) on an 8 GB Mac under memory pressure timed them out.\" scripts/slot.sh header: \"an agent only needs real memory while it runs the project's install and check commands. Those go through this wrapper\". Spec 4.2: \"at most `BENCH_CI_JOBS` at once (default 2)\".",
+      "reverseCost": "A config default and one BENCHMARK.md paragraph; runs already made under the other default are not comparable.",
+      "wouldBeWrongIf": "The first benchmark comparisons do not involve CI timing (only model routing), so CI contention is the same noise in both configs.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category measurement is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "scripts/slot.sh header lines 4-7 as quoted; vitest.config.ts comment '(25 files) on an 8 GB Mac under memory pressure timed them out'; docs/OPERATING.md:321 'default 2 on an 8 GB machine; one check peaks near 1.7 GB'; spec 4.2 'at most BENCH_CI_JOBS at once (default 2)'; project config maxBuilders 1.",
+        "reason": "A genuine question for the human: it decides what the benchmark can say about CI waits, and runs under different defaults are not comparable. The recommendation (no slots, default 1, value recorded in the record, BENCHMARK.md says CI minutes are local) is consistent with the project's own maxBuilders 1. No edit is attached, so nothing is applied without the decision."
+      }
+    },
+    {
+      "id": "W4-R9",
+      "kind": "defect",
+      "task": "4.3",
+      "category": "correctness",
+      "text": "The v24-wave-1 holdout `tests/v24-wave1.test.ts` does not exist at `baseSha`, because wave 1's tail task creates it, so \"moved out of the clone\" has nothing to move and there is no source for the holdout. The replayed wave also contains tail 1.T, which writes a test at the same path. wave-args picks the `.T` task as tail unless told otherwise. Recommend a committed copy of the holdout (taken from the 1.T merge) under a scenario directory that 4.3 owns. Keep the tail in the replay. `collect` copies the holdout over that path in a scratch worktree of the final default branch and runs it there. The scenario records `holdoutTotal` (the case count), because a holdout that fails to import yields no pass count at all.",
+      "evidence": "Command output: `git ls-tree -r --name-only 844e886 | grep v24` printed nothing; the file arrives with `f48f2db Merge pull request #11 from EdanBarrios/task/1.T-wave-1-tail`. Spec 4.3: \"holdout `tests/v24-wave1.test.ts`, wave 1's tail test\"; 1.T: \"Owns `tests/v24-wave1.test.ts`\"; scripts/wave-args.js:124: `tailTask = tasks.find((t) => /\\.T$/i.test(t.id))`.",
+      "reverseCost": "One revert PR of the spec edit.",
+      "wouldBeWrongIf": "Wave 1 is replayed without 1.T and the holdout is always run from a copy, in which case only the tail sentence is unneeded.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "`bench/scenarios/v24-wave-1.json`,",
+          "replace": "`bench/scenarios/v24-wave-1.json`, `bench/scenarios/v24-wave-1.holdout/**`,"
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "holdout `tests/v24-wave1.test.ts`, wave 1's tail test)",
+          "replace": "holdout `tests/v24-wave1.test.ts`, wave 1's tail test, which does not exist at `baseSha`: a copy taken from the 1.T merge commit is committed under `bench/scenarios/v24-wave-1.holdout/`, the scenario records `holdoutTotal`, its case count, and the replayed wave keeps its tail 1.T, whose own test lands at the same path, so `collect` copies the holdout over that path in a scratch worktree of the final default branch and runs it there)"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category correctness is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "`git ls-tree -r --name-only 844e886 | grep -c v24` prints 0 test files (only the spec matches 'v2-4'); `git ls-tree -r --name-only f48f2db` lists tests/v24-wave1.test.ts; the spec at 844e886 has '1.T Wave 1 tail. Owns tests/v24-wave1.test.ts' (line 135); scripts/wave-args.js:124 picks the task whose id ends in .T as tail. The holdout at f48f2db imports ../claude/lib/pause.js and has 5 `it(` cases. Scratch copy with the edit: Owns clause parses with the new `bench/scenarios/v24-wave-1.holdout/**` path; vitest's include does not collect a .test.ts under bench/.",
+        "reason": "Holds: there is nothing at baseSha to 'move out', and the replay's own 1.T writes the same path, so a committed copy plus a copy-over in a scratch worktree is the only reading that yields a pass count. Notes for whoever applies it: five cases is a coarse correctness measure, so holdoutTotal matters; `collect` needs an install in the scratch worktree before it can run the test, which is not stated; and the contamination path in R8 (the loop links) applies to this holdout too."
+      }
+    },
+    {
+      "id": "W4-R10",
+      "kind": "defect",
+      "task": "4.3",
+      "category": "completeness",
+      "text": "The synthetic-6 scenario has no owner for the files it needs. `scenario.json` alone is not a scenario: it needs a seed repo, a spec that passes spec-lint (wave-args exits 1 on a spec that fails lint), six task bullets with Owns and dependencies, and a holdout. 4.3 owns only `bench/scenarios/synthetic-6.json`. Recommend extending the 4.3 Owns line and describing the contents.",
+      "evidence": "Spec 4.3: \"Owns ... `bench/scenarios/v24-wave-1.json`, `bench/scenarios/synthetic-6.json`\"; \"a synthetic six-task graph with two dependency chains\". scripts/spec-lint.js REQUIRED_SECTIONS: End goal, Invariants, Budget, Decision envelope, Fixed decisions, Human checklist; wave-args.js: \"Exit 1: the spec fails spec-lint\".",
+      "reverseCost": "One revert PR of the spec edit.",
+      "wouldBeWrongIf": "The synthetic scenario is meant to reuse a spec elsewhere in the repo, which the spec does not say.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "`bench/scenarios/synthetic-6.json`,",
+          "replace": "`bench/scenarios/synthetic-6.json`, `bench/scenarios/synthetic-6/**` (the seed repo, its spec and its holdout),"
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "a synthetic six-task graph with two dependency chains.",
+          "replace": "a synthetic six-task graph with two dependency chains: a seed repo of a few files, a spec that passes `scripts/spec-lint.js` (wave-args refuses one that does not), six tasks that own distinct files, and a holdout test, all committed under `bench/scenarios/synthetic-6/`."
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category completeness is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "scripts/spec-lint.js REQUIRED_SECTIONS is the six sections quoted; scripts/wave-args.js header 'Exit 1: the spec fails spec-lint' and waveArgs returns lint errors first. Spec 4.3 Owns line has only `bench/scenarios/synthetic-6.json` for the synthetic scenario. Scratch copy with the edit: ownedPaths accepts `bench/scenarios/synthetic-6/**` followed by the parenthetical; lint exit 0 (4.3 now owns 9 paths, warning only; it was 7 before).",
+        "reason": "Holds: a JSON file is not a scenario, and without an owner the seed files, spec and holdout could not be committed by 4.3. One thing the edit leaves open and R8 and R16 make sharper: a scenario is `{ source, baseSha, ... }` and R8's prepare pushes `<baseSha>` from a git `source`, but a directory of committed seed files has no commit. The text should say that for a seed directory `prepare` makes the commit itself (and what `baseSha` holds in synthetic-6.json), because 4.T prepares this scenario on a shallow CI checkout."
+      }
+    },
+    {
+      "id": "W4-R12",
+      "kind": "defect",
+      "task": "4.3",
+      "category": "completeness",
+      "text": "Two metrics have no source. (1) `collect` is a one-shot after the run and cannot take \"load average samples\"; no task samples during the run. merge-pr.js --dry-run prints one load sample at preflight only. (2) \"last merge\" has no timestamp in the run output, which holds agent records with startedAt and durationMs. Recommend a `bench.js sample <dir>` loop that the session starts in the background after `prepare`, appending `{ t, load1 }` to `$BENCH_STATE/load.jsonl` (collect reports `load: null` when the file is absent). Define makespan as the first agent `startedAt` to the end of the last agent whose label is a merge relay.",
+      "evidence": "Spec 4.3: \"makespan (first agent start to last merge) ... and the machine's load average samples\". scripts/merge-pr.js:153: `result.load = machineLoad(loadavg()[0], cores, project.loadWarnFactor)` (one sample, dry run). scripts/loop-scorecard.py:806 uses `startedAt`/`durationMs` of agent records.",
+      "reverseCost": "One revert PR of the spec edit.",
+      "wouldBeWrongIf": "A load sample taken only at preflight is acceptable to the human as the measure.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "the machine's load average samples.",
+          "replace": "the machine's load average samples (`bench.js sample <dir> [--every-s 30]` is started in the background by the session after `prepare` and appends `{ t, load1 }` lines to `$BENCH_STATE/load.jsonl` until its pid file is removed; `collect` reads it and reports `load: null` when it is absent). Makespan runs from the first agent `startedAt` to the end (`startedAt + durationMs`) of the last agent labelled as a merge relay."
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category completeness is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "scripts/merge-pr.js:153 takes one loadavg sample and only inside `if (dryRun)`; scripts/loop-scorecard.py:806-808 computes wall time from agent startedAt and durationMs. wave-loop.js:2087 labels the merge relay `merger:<id>` and :2259 relabels the deferred check on main as `main:<id>` (same in the frozen 2.4.0 copy, line 2172, and in 2.3.1, line 1729).",
+        "reason": "Both gaps are real and the sampler is a reasonable source. Two cautions on the makespan sentence. 'Labelled as a merge relay' should name the label (`merger:`) and say whether `main:` relays count: with mainCi set the last check on main runs under `main:` and is excluded, with mainCi empty the merger runs the check itself and it is included, so a comparison across that knob is biased by one check. A loop-independent source also exists that the recommendation overlooks: the fake gh's PR files carry `mergedAt` (R7 lists the field, escaped.js reads it) and `collect <dir>` already reads that state. Define what makespan is when nothing merged."
+      }
+    },
+    {
+      "id": "W4-R13",
+      "kind": "defect",
+      "task": "4.3",
+      "category": "statistics",
+      "text": "`compare` needs a t quantile table that JavaScript stdlib does not provide, and \"saying when the intervals overlap\" can disagree with a test on the difference (two overlapping 95% intervals can still have a difference interval that excludes 0). With the hand-computed test of two groups of three (2 degrees of freedom, t = 4.303) the worker must hard-code the table, and the result needs a definition. Recommend a constant table for 1 to 30 degrees of freedom in metrics.js (1.96 above 30) and no interval for fewer than 2 records. The difference gets a Welch interval (degrees of freedom rounded down), and both statements are printed: the single-config intervals overlap or not, and the difference interval includes 0 or not.",
+      "evidence": "Spec 4.3: \"the mean with a 95% interval (Wilson for rates, a t interval for times and tokens) and the difference between two configs, saying when the intervals overlap\"; \"compare two groups of three records with hand-computed intervals\".",
+      "reverseCost": "One revert PR of the spec edit.",
+      "wouldBeWrongIf": "The human wants only the visual overlap rule and no difference interval.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "a t interval for times and tokens)",
+          "replace": "a t interval for times and tokens, from a constant table of two-sided 95% t quantiles for 1 to 30 degrees of freedom in `bench/metrics.js`, 1.96 above 30, no interval for fewer than 2 records; the test pins 4.303 for 2 degrees of freedom and 2.776 for 4)"
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "saying when the intervals overlap.",
+          "replace": "with a Welch 95% interval for the difference of the means (degrees of freedom rounded down), printing both whether the two single-config intervals overlap and whether the difference interval includes 0."
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category statistics is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "Spec 4.3 text as quoted; Fixed decisions 'Intervals' covers Wilson only and 4.3 already names a t interval, so no fixed decision changes. Two-sided 95% t quantiles: 4.303 at 2 degrees of freedom, 2.776 at 4 (standard table values); Welch degrees of freedom for two groups of three with equal variances is 4, and is never below 1 for groups of at least 2, so rounding down stays inside the table.",
+        "reason": "Holds. JavaScript has no t quantile, the hand-computed test forces a table, and overlap of two intervals is not the same test as an interval on the difference, so printing both is the honest output. Unstated edges to settle in the task: both groups with zero variance (Welch degrees of freedom is 0/0), and what the difference interval is for rates, where the single-config interval is Wilson."
+      }
+    },
+    {
+      "id": "W4-R14",
+      "kind": "question",
+      "text": "The loop's preflight fails unless `permissions.allow` names each relay script at the exact path `<project.repo>/.claude/scripts/<script>`. A benchmark clone has a new repo path per `--out`, so every `prepare` needs new allow rules, and permission settings are human-only (invariant 6, so `prepare` must not write them). Spike F2 did not settle whether a mid-path wildcard (`.../bench/*/clone/...`) works in auto mode: the docs allow a `*` anywhere in a Bash rule, but on entering auto mode they drop \"some wildcarded paths, like Bash($HOME/bin/*)\", and do not say whether a mid-path `*` is one of them. Separately, the loop's own permission.js counts a rule only when the text before its first `*` names the script, so a mid-path wildcard fails the loop's check whatever Claude Code does. Both facts point the same way: use rules with the full literal script path and a trailing `*` only (narrow rules stay in effect in auto mode). Questions for the human: (a) accept a fixed `--out` (one set of rules, added once as H7, covers every run, and `prepare` refuses a different path), or add rules per run? (b) never use `mergePermission: \"prompt\"` in the bench base config, since auto mode refused the merges in Warden wave 4 and that would make the merge step differ from real use. Recommendation: (a) fixed `--out`, (b) never. `prepare` prints the exact rules but writes no settings. The mid-path question stays open (F2) but the recommendation does not depend on its answer.",
+      "evidence": "claude/lib/permission.js:100-106: \"An allow rule counts only when the text before its first `*` names the script's path\" (function `namesScript`). Spike F2 (https://code.claude.com/docs/en/permission-modes.md, \"Broad allow rules dropped on entering auto mode\"): \"Some wildcarded paths, like Bash($HOME/bin/*) or PowerShell(C:\\tools\\x.exe *)\" are dropped; \"Narrow rules like Bash(npm test) stay in effect\"; the docs say nothing on a mid-path `*`. Spec H2: \"the path exactly as `project.repo` plus `/.claude/scripts` spells it, absolute and not the link's target\"; invariant 6: \"The loop never changes a permission setting\". Spec 2.1(a): preflight fails when `permission.allowed` is false.",
+      "reverseCost": "A checklist row and one sentence; rules in ~/.claude/settings.json are removed by hand.",
+      "wouldBeWrongIf": "A live run in auto mode shows a mid-path wildcard rule is honored AND permission.js is relaxed in a loop change to count it, making per-run `--out` paths free (F2).",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "category": "permission",
+      "task": "4.3",
+      "dependsOn": [
+        "F2"
+      ],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "| H6 | after wave 4 | Run the benchmark comparisons in `docs/BENCHMARK.md` (each costs Claude Code usage) | the before/after needs controlled runs |",
+          "replace": "| H6 | after wave 4 | Run the benchmark comparisons in `docs/BENCHMARK.md` (each costs Claude Code usage) | the before/after needs controlled runs |\n| H7 | before H6 | Add the `permissions.allow` rules `prepare` prints (one `Bash(node <out>/clone/.claude/scripts/<script> *)` per relay script, for one fixed `--out`, with no `*` before the script name; add `<out>` to `sandbox.filesystem.allowWrite` if the sandbox is on), and launch the benchmark session from a shell with the environment `prepare` prints | the preflight fails without the rules (H2); permission settings are human-only |"
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "and prints the environment for the session",
+          "replace": "and prints the allow rules H7 needs (it never writes a settings file; invariant 6, and it refuses an `--out` other than the one the rules name) and the environment for the session"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category permission is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "claude/lib/permission.js:100-108 namesScript: text before the first `*` must include the script path. Fetched https://code.claude.com/docs/en/permission-modes.md today (raw text, lines 607-618): the dropped list includes 'Some wildcarded paths, like Bash($HOME/bin/*) ...' and 'Narrow rules like Bash(npm test) stay in effect'; grep of that page and of permissions.md finds no statement on a mid-path `*` in auto mode (permissions.md:189 only says a `*` can go anywhere in a rule). Spec invariant 6 and H2 as quoted; `mergePermission: \"prompt\"` exists (spec line 155). Also found: wave-loop.js:1076 `const SCRIPTS = P.loopScripts || `${REPO}/.claude/scripts``, all seven relay scripts are invoked through it, scripts/merge-pr.js:189 builds the checked command from `dirname(process.argv[1])`, and docs/OPERATING.md:375 documents `loopScripts`.",
+        "reason": "Correctly a human question (permission settings), and its evidence checks out against the code and the live docs. The human should see a third option the question omits: the existing `project.loopScripts` field. If the bench config sets it to a fixed directory (for example the `--loop` checkout's scripts), the relay commands and the preflight both name that fixed path, so one set of rules per loop checkout covers every `--out` and the fixed-`--out` restriction is not needed. Fixed `--out` has a cost the text does not state: each run's state must be collected and wiped before the next prepare. Also 'refuses an --out other than the one the rules name' needs a first-run reading (no rule exists yet: print the rules and exit non-zero)."
+      }
+    },
+    {
+      "id": "W4-R15",
+      "kind": "defect",
+      "text": "The benchmark's only barrier against talking to real GitHub is that `gh` resolves to bench/bin/gh through a prepended PATH. Spike F1 shows this is a live risk: Claude Code sources ~/.zshrc for Bash tool calls, and on this machine ~/.zshrc and ~/.zprofile prepend several directories (Python framework, nvm, ~/.local/bin, /opt/anaconda3/bin, ~/.cargo/bin) in front of whatever PATH the launching shell passed, so `<dir>/bin` is no longer first. Today `which -a gh` finds only /usr/local/bin/gh, so nothing shadows the fake, but that depends on what those directories hold (conda can ship gh) and it can change silently. F1 did not show whether BENCH_STATE and BENCH_CI_JOBS, or a PATH set at launch, reach Bash calls and Workflow relays; it only shows that an `export` inside one Bash command does not carry to the next. The gh-this-repo hookify rule is no backstop: install.sh blocks only commands that name another repository, so a bare `gh pr list` passes, and the default `github` field names this repository. Recommend: `prepare` writes `github` as a name that cannot exist on GitHub (owner containing a dot, e.g. `bench.invalid/bench`, which install.sh's pattern accepts and GitHub owner names forbid), and `bench.js doctor <dir>` exits 1 unless `command -v gh` equals `<dir>/bin/gh`, `gh pr list` answers from BENCH_STATE, and BENCH_STATE and BENCH_CI_JOBS are set, run in the launching shell and in one Bash tool call before the wave. The fake gh refuses to run when BENCH_STATE is unset. A relay cannot be probed from a Bash call, so the wave's first relay step should run the same doctor; whether relays see the environment is open (F1).",
+      "evidence": "Spec 4.3 line 329: \"prints the environment for the session (`PATH=<dir>/bin:$PATH`, `BENCH_STATE`)\". Spike F1: ~/.zprofile and ~/.zshrc prepend PATH directories; Claude Code docs: the shell sources ~/.zshrc and \"Environment variables do not persist between Bash commands\"; relay inheritance \"Not settled\". install.sh:46-57 builds the hookify pattern as a negative lookahead for `github.com[/:]<repo>` before another name, so a gh command that names no repository is not matched; .claude/loop.local.json has `\"github\": \"EdanBarrios/agent-loop\"`.",
+      "reverseCost": "One revert PR of the spec edit.",
+      "wouldBeWrongIf": "A live probe from a Bash tool call and a relay shows the launching shell's PATH, BENCH_STATE and BENCH_CI_JOBS arrive unchanged with bench/bin first, which would make the doctor a belt-and-braces check only (F1).",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "category": "safety",
+      "task": "4.3",
+      "dependsOn": [
+        "F1"
+      ],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "(`PATH=<dir>/bin:$PATH`, `BENCH_STATE`)",
+          "replace": "(`PATH=<dir>/bin:$PATH`, `BENCH_STATE`, `BENCH_CI_JOBS`), writes `github: \"bench.invalid/bench\"` (a name GitHub cannot hold; never this project's repository), and `bench.js doctor <dir>` exits 1 unless `command -v gh` is `<dir>/bin/gh`, `gh pr list` answers from `BENCH_STATE`, and both variables are set, run in the session's shell and from one Bash tool call before the wave; the fake gh refuses to run when `BENCH_STATE` is unset"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category safety is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "`which -a gh` prints only /usr/local/bin/gh. ~/.zshrc lines 1-29 and ~/.zprofile lines 4-21 prepend directories to PATH (anaconda, a Python framework, others), and the PATH of this Bash call starts with those, so a directory prepended at launch is not first. install.sh:46 accepts `^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`, so `bench.invalid/bench` passes; its patterns block only gh commands that name another repository. P.github is used only in prompt text (wave-loop.js:1135), so a dotted owner breaks nothing in the loop.",
+        "reason": "Holds: PATH order is the only barrier, it is rewritten by the shell profile on this machine, and the hookify rule does not catch a bare `gh pr list`. A name GitHub cannot hold plus a doctor that fails fast is cheap. Three fixes to the text when applying: it contradicts R11's `bench/bench` (pick one); the insertion leaves '...when BENCH_STATE is unset and the wave args', which loses the original clause that prepare prints the wave args; and requiring BENCH_CI_JOBS to be set contradicts it having a default. A stronger form of the same idea: have `prepare` write the state path into the generated `<dir>/bin/gh` shim, so the fake does not depend on the environment reaching relays (the part F1 left open)."
+      }
+    },
+    {
+      "id": "W4-R16",
+      "kind": "defect",
+      "task": "4.3",
+      "category": "tests",
+      "text": "The 4.3 prepare test is ambiguous about its source, and read as written it fails on CI. The check workflow uses the default shallow actions/checkout, so commit 844e886 is absent there, and `.skip` is forbidden. The test must build a fixture source repo with its own `baseSha`. The v24-wave-1 scenario is checked structurally (a full 40-hex `baseSha`, spec and holdout copy present). The scenario also stores the abbreviated sha, so it is written in full.",
+      "evidence": ".github/workflows/check.yml: `- uses: actions/checkout@v4` with no `fetch-depth` (depth 1), then `npm run check`. .claude/loop.local.json extraRules: \"No .skip or .only.\" Spec 4.3: \"(base `844e886`, ...)\" and \"prepare a scenario in a temp dir: the clone is at `baseSha`\".",
+      "reverseCost": "One revert PR of the spec edit.",
+      "wouldBeWrongIf": "The workflow is changed to `fetch-depth: 0` before 4.3 merges, in which case only the abbreviated sha needs fixing.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "(base `844e886`, the commit wave 1 started from;",
+          "replace": "(base `844e886f5901023a6f458bfebac07527c7d6f4a6`, the full sha of the commit wave 1 started from;"
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "a temp dir: the clone is at `baseSha`,",
+          "replace": "a temp dir from a fixture source repo the test builds (the CI checkout is shallow, so `844e886` does not exist there, and `.skip` is not allowed; the real scenario files are checked for a full 40-hex `baseSha` and for the spec and holdout copy being present): the clone is at that fixture's `baseSha`,"
+        }
+      ],
+      "decision": "accept",
+      "reason": "inside the envelope: evidence given, reversible, no cost, touches no invariant or fixed decision, category tests is not human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "~/dev/agent-loop-public/.github/workflows/check.yml: `uses: actions/checkout@v4` with no fetch-depth, then `npm ci` and `npm run check`. `git rev-parse 844e886` prints 844e886f5901023a6f458bfebac07527c7d6f4a6, identical to the sha in the edit. loop.local.json extraRules: 'No .skip or .only.'",
+        "reason": "Holds: the base commit is absent from a depth-1 checkout, so a prepare test against the real scenario fails on CI, and the full sha is correct. One wording fix: the recommendation says the v24-wave-1 scenario is checked structurally, but the edit says 'the real scenario files are checked for a full 40-hex baseSha'. With R10 the synthetic scenario is a directory of seed files with no pre-existing commit, so the 40-hex check should name v24-wave-1.json only."
+      }
+    }
+  ],
+  "asked": [
+    {
+      "id": "W4-R7",
+      "kind": "defect",
+      "task": "4.1",
+      "category": "completeness",
+      "text": "4.1 defers its surface to a grep that the spec does not contain (\"the spec review lists them from a grep; at least ...\"), and the minimum list omits `pr comment`, which the fix prompt requires. The grep gives the exact list below. Recommend writing it into 4.1, with the existing tests/fixtures/gh-*.json as golden output shapes. The `-q` expressions are only three, so the fake needs no `jq` binary. `pr create` also has to create `refs/pull/<n>/head` in the bare remote, which test-edits.js fetches when the head is missing.",
+      "evidence": "grep of claude/, scripts/ and the prompts: `gh pr comment` (wave-loop.js:1337); `gh pr merge ${n} --merge --delete-branch --match-head-commit ${sha}` (merge.js:291); `gh pr view --json commits,body,baseRefName,headRefOid` (testedits.js:214); `gh pr view --json title,state,headRefName,baseRefName,headRefOid,mergeStateStatus,mergeable` (merge.js:90); `gh pr list --state merged --limit 1000 --json number,headRefName,mergeCommit` and `...,mergedAt` (deps.js:37, escaped.js:43); `gh run watch <id> --exit-status`; `-q .mergeable`, `-q '.files[].path'`, `-q .body`; `mergeCommit.oid` (merge-pr.js:107). Fixtures: tests/fixtures/gh-pr-view-{clean,behind,conflicting,merged,unknown}.json, gh-pr-checks-*.json, gh-run-list-*.json.",
+      "reverseCost": "One revert PR of the spec edit.",
+      "wouldBeWrongIf": "A prompt or script reached by the benchmark calls gh in a form the grep missed, for example built from a variable. 4.T's test, run with the stub that exits 1 naming the subcommand, would show it.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "the spec review lists them from a grep; at least `pr create`,",
+          "replace": "the list from a grep of `claude/`, `scripts/` and the prompts: flags `--base --head --title --body --draft --state --limit --branch --workflow --commit --log-failed --exit-status --match-head-commit --delete-branch --merge/--squash/--rebase` and `-q` with only `.mergeable`, `.files[].path` and `.body` (no `jq` binary); `--json` fields `number, title, state, body, headRefName, baseRefName, headRefOid, mergeStateStatus, mergeable, mergeCommit ({ oid }), mergedAt, files, commits ({ oid, ... }), name, bucket, link, workflow, databaseId, status, conclusion`; output shapes match `tests/fixtures/gh-*.json`; `pr create` also creates `refs/pull/<n>/head` in the bare remote (`test-edits.js` fetches it); at least `pr create`, `pr comment`,"
+        }
+      ],
+      "decision": "ask",
+      "reason": "adversary disagree: The direction is right and the dangling 'the spec review lists them from a grep' must be replaced, but the claim that the grep gives the exact list is false. The spec says the fake covers 'exactly' this surface and exits 1 on anything else, so a fake built to this list fails the merger's `pr checks --watch --fail-fast` in every sync path and gives the round-2 critic no way to read the fix comments. Rework before applying: add `--watch` and `--fail-fast` to `pr checks`, a way to read comments (`pr view --comments` or the `comments` field), and plain-text output for `pr view` and `pr checks`. Also say which loop versions the list is for: the benchmark takes `--loop <checkout>`, and the list was grepped from 2.5.0 only. (Scripted scan of every `gh ...` form in claude/, scripts/ and the prompts. Found forms the 'exact list' omits: claude/workflows/wave-loop.js:1437 `gh pr checks <n> --watch --fail-fast (up to 15 minutes)` in the merger's sync-branch step (reached under syncPolicy 'conflict', which this project uses; commit 6c10da7 'Sync branch with upstream before merge' shows the path ran in wave 3); wave-loop.js:1427 critic prompt 'gh pr view <n>, gh pr view <n> --json commits,files, and PR comments if round > 1' (plain-text `pr view` and reading comments); wave-loop.js:1451 plain `gh pr checks <n>`. The items the recommendation does cite check out (merge.js:291, testedits.js:239 fetch of pull/<n>/head, fixtures tests/fixtures/gh-*.json exist).)",
+      "adversary": {
+        "verdict": "disagree",
+        "evidence": "Scripted scan of every `gh ...` form in claude/, scripts/ and the prompts. Found forms the 'exact list' omits: claude/workflows/wave-loop.js:1437 `gh pr checks <n> --watch --fail-fast (up to 15 minutes)` in the merger's sync-branch step (reached under syncPolicy 'conflict', which this project uses; commit 6c10da7 'Sync branch with upstream before merge' shows the path ran in wave 3); wave-loop.js:1427 critic prompt 'gh pr view <n>, gh pr view <n> --json commits,files, and PR comments if round > 1' (plain-text `pr view` and reading comments); wave-loop.js:1451 plain `gh pr checks <n>`. The items the recommendation does cite check out (merge.js:291, testedits.js:239 fetch of pull/<n>/head, fixtures tests/fixtures/gh-*.json exist).",
+        "reason": "The direction is right and the dangling 'the spec review lists them from a grep' must be replaced, but the claim that the grep gives the exact list is false. The spec says the fake covers 'exactly' this surface and exits 1 on anything else, so a fake built to this list fails the merger's `pr checks --watch --fail-fast` in every sync path and gives the round-2 critic no way to read the fix comments. Rework before applying: add `--watch` and `--fail-fast` to `pr checks`, a way to read comments (`pr view --comments` or the `comments` field), and plain-text output for `pr view` and `pr checks`. Also say which loop versions the list is for: the benchmark takes `--loop <checkout>`, and the list was grepped from 2.5.0 only."
+      }
+    },
+    {
+      "id": "W4-R8",
+      "kind": "defect",
+      "task": "4.3",
+      "category": "isolation",
+      "text": "\"makes the bare remote at `baseSha`\" can be read as `git clone --bare` plus a moved ref, which copies every later object. The source repo has 78 commits after the base, including the reference solution to every wave 1 task and the holdout test (c1bb4f2, f48f2db). Workers could read them with `git log --all`, `git show <sha>` or `git fetch`, so the holdout and the whole correctness measure would be contaminated. Recommend `git init --bare` then `git push <source> <baseSha>:refs/heads/main`, which sends only reachable objects. The working clone's `origin` is the bare remote, and the test checks that a post-base commit is absent. Limit to state in BENCHMARK.md: the source checkout on disk is still readable by an agent, which only the sandbox read rules (H4) can block.",
+      "evidence": "Command output: `git rev-list --count 844e886..HEAD` printed `78`; `git log` shows `c1bb4f2 1.T: wave 1 tail test across the five v2.4 modules` after the base. Spec 4.3: \"makes the bare remote at `baseSha`, a working clone ... and the holdout tests moved out of the clone (the agents never see them)\".",
+      "reverseCost": "One revert PR of the spec edit.",
+      "wouldBeWrongIf": "The human accepts a contaminated holdout and uses it only for relative comparison across configs.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "makes the bare remote at `baseSha`,",
+          "replace": "makes a bare remote holding only the history up to `baseSha` (`git init --bare`, then `git push <source> <baseSha>:refs/heads/main`, never `git clone --bare`, so no later commit, tag or `refs/pull` object is copied; the clone's `origin` is the bare remote, not `source`),"
+        },
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "the holdout files are absent from it, the gh shim answers `pr list`.",
+          "replace": "the holdout files are absent from it, a commit made after `baseSha` is not in the bare remote (`git cat-file -e` fails), the gh shim answers `pr list`."
+        }
+      ],
+      "decision": "ask",
+      "reason": "adversary disagree: The finding is correct and the fix mechanism works, so do not drop it; two things need a human before the text goes in. (1) The command in the edit names `<source>` where git expects the destination. It should read `git -C <source> push <bare> <baseSha>:refs/heads/main`; as written it tells a worker to push to the real checkout's default branch. (2) The isolation claim is wider than what the edit delivers. For any loop under test at 2.4.0 or later, the reference solutions to wave 1 sit inside the working clone through the loop links: `.claude/scripts/wave-args.js` is task 1.4's answer, `.claude/workflows/wave-loop.js` carries the bundled pause module, and `.claude/scripts/../claude/lib/` and `../tests/v24-wave1.test.ts` are one hop away. The stated limit mentions only the source checkout on disk. The human should decide whether the v24-wave-1 holdout is used only for relative comparison or the scenario is changed. (`git rev-list --count 844e886..HEAD` prints 78 and the log has c1bb4f2 and f48f2db after the base (confirmed). Scratch-repo test of the proposed command: run in the source with the bare remote as target, `git -C src push <bare> <base>:refs/heads/trunk` leaves the base present and the later commit absent (`git cat-file -e` fails), as intended. Read literally as written (`git push <source> <baseSha>:refs/heads/main`), the first operand is the destination (`git push -h`: `git push [<repository> [<refspec>...]]`), i.e. a push aimed at the source checkout's default branch; in the test it was rejected and the bare remote stayed empty. Separately: install.sh links `<loop>/scripts` to `<clone>/.claude/scripts` and `<loop>/claude/workflows` to `<clone>/.claude/workflows`; wave 1 owns `scripts/wave-args.js`, `claude/lib/pause.js`, `claude/lib/permission.js`, `claude/lib/testedits.js`, and wave-loop.js has `@bundle-start pause` at line 834.)",
+      "adversary": {
+        "verdict": "disagree",
+        "evidence": "`git rev-list --count 844e886..HEAD` prints 78 and the log has c1bb4f2 and f48f2db after the base (confirmed). Scratch-repo test of the proposed command: run in the source with the bare remote as target, `git -C src push <bare> <base>:refs/heads/trunk` leaves the base present and the later commit absent (`git cat-file -e` fails), as intended. Read literally as written (`git push <source> <baseSha>:refs/heads/main`), the first operand is the destination (`git push -h`: `git push [<repository> [<refspec>...]]`), i.e. a push aimed at the source checkout's default branch; in the test it was rejected and the bare remote stayed empty. Separately: install.sh links `<loop>/scripts` to `<clone>/.claude/scripts` and `<loop>/claude/workflows` to `<clone>/.claude/workflows`; wave 1 owns `scripts/wave-args.js`, `claude/lib/pause.js`, `claude/lib/permission.js`, `claude/lib/testedits.js`, and wave-loop.js has `@bundle-start pause` at line 834.",
+        "reason": "The finding is correct and the fix mechanism works, so do not drop it; two things need a human before the text goes in. (1) The command in the edit names `<source>` where git expects the destination. It should read `git -C <source> push <bare> <baseSha>:refs/heads/main`; as written it tells a worker to push to the real checkout's default branch. (2) The isolation claim is wider than what the edit delivers. For any loop under test at 2.4.0 or later, the reference solutions to wave 1 sit inside the working clone through the loop links: `.claude/scripts/wave-args.js` is task 1.4's answer, `.claude/workflows/wave-loop.js` carries the bundled pause module, and `.claude/scripts/../claude/lib/` and `../tests/v24-wave1.test.ts` are one hop away. The stated limit mentions only the source checkout on disk. The human should decide whether the v24-wave-1 holdout is used only for relative comparison or the scenario is changed."
+      }
+    },
+    {
+      "id": "W4-R11",
+      "kind": "defect",
+      "task": "4.3",
+      "category": "correctness",
+      "text": "A controlled comparison needs a fixed base configuration and a defined key to group records by, and the spec gives neither. The scenario has an `overrides` field and `prepare` takes `--config overrides.json`, with no merge order. The base `loop.local.json` fields (mainCi, maxBuilders, maxChains, models, syncPolicy, install, check, github) have no source. The template's defaults (mainCi \"\", maxBuilders 2) are not what this repo uses. `compare` \"groups records by config\" with no key. Recommend the scenario carries `project` (the fixed base), `--config` is merged over it field by field, and the record stores the sha-256 of the merged object as the config key.",
+      "evidence": "Spec 4.3: \"A scenario is `{ name, source, baseSha, spec, wave, holdout: [test files], overrides }`\"; \"`--config <overrides.json>`\"; \"`bench.js compare <record.json>...` groups records by config\". templates/loop.local.json has `\"mainCi\": \"\"`, `\"maxBuilders\": 2`; .claude/loop.local.json has `\"mainCi\": \"check\"`, `\"maxBuilders\": 1`.",
+      "reverseCost": "One revert PR of the spec edit.",
+      "wouldBeWrongIf": "The human always passes a complete config file as `--config`, in which case `project` is redundant but harmless.",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "dependsOn": [],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "source, baseSha, spec, wave, holdout: [test files], overrides }`",
+          "replace": "source, baseSha, spec, wave, holdout: [test files], project }` (`project` is the fixed base `loop.local.json`: `github` `bench/bench`, `mainCi`, `maxBuilders`, `maxChains`, `models`, `syncPolicy`, `install`, `check`; `--config` fields are merged over it field by field, and the sha-256 of the merged object is the config key that `collect` records and `compare` groups by)"
+        }
+      ],
+      "decision": "ask",
+      "reason": "adversary disagree: The gap is real (no base config, no merge order, no grouping key), but the key as defined is wrong for the comparison the harness exists for. Two runs with the same loop.local.json and different `--loop` checkouts (2.4.0 against 2.5.0, the before/after of H6) hash to the same key, so `compare` pools them into one group and reports no difference. The key must also cover the loop checkout (its commit or LOOP_VERSION), the scenario name and BENCH_CI_JOBS, exclude per-run paths (repo, worktrees), and be taken over a canonical key order. The edit also writes `github` as `bench/bench`, a name that can exist on GitHub and that contradicts R15's `bench.invalid/bench` in the same sentence run. The surviving phrase 'loop.local.json with the overrides' should be reworded too. Rework, then apply. (Spec 4.3: `bench.js prepare <scenario> --loop <loop checkout> --config <overrides.json> --out <dir>`; wave 4 intro 'replays one task graph from one starting commit under different loop configurations'; H6 'the before/after needs controlled runs'. The proposed key is 'the sha-256 of the merged object' (the project config only). Scratch copy with all edits applied reads, in one bullet, 'github bench/bench' (this edit) and 'writes github: \"bench.invalid/bench\"' (R15). templates/loop.local.json has mainCi \"\" and maxBuilders 2, the project file has mainCi 'check' and maxBuilders 1, as cited.)",
+      "adversary": {
+        "verdict": "disagree",
+        "evidence": "Spec 4.3: `bench.js prepare <scenario> --loop <loop checkout> --config <overrides.json> --out <dir>`; wave 4 intro 'replays one task graph from one starting commit under different loop configurations'; H6 'the before/after needs controlled runs'. The proposed key is 'the sha-256 of the merged object' (the project config only). Scratch copy with all edits applied reads, in one bullet, 'github bench/bench' (this edit) and 'writes github: \"bench.invalid/bench\"' (R15). templates/loop.local.json has mainCi \"\" and maxBuilders 2, the project file has mainCi 'check' and maxBuilders 1, as cited.",
+        "reason": "The gap is real (no base config, no merge order, no grouping key), but the key as defined is wrong for the comparison the harness exists for. Two runs with the same loop.local.json and different `--loop` checkouts (2.4.0 against 2.5.0, the before/after of H6) hash to the same key, so `compare` pools them into one group and reports no difference. The key must also cover the loop checkout (its commit or LOOP_VERSION), the scenario name and BENCH_CI_JOBS, exclude per-run paths (repo, worktrees), and be taken over a canonical key order. The edit also writes `github` as `bench/bench`, a name that can exist on GitHub and that contradicts R15's `bench.invalid/bench` in the same sentence run. The surviving phrase 'loop.local.json with the overrides' should be reworded too. Rework, then apply."
+      }
+    },
+    {
+      "id": "W4-R17",
+      "kind": "question",
+      "text": "How many runs per configuration, and which comparisons, should H6 plan and what should BENCHMARK.md say they cost? 4.T must write \"what it costs\" and the spec gives no figure. The latest scorecard puts wave 1 (6 tasks) at about 1.66M tokens, so one comparison of two configs at 3 runs each is about 10M tokens. Spike F3 found no published token or hour figure for weekly limits, so the 10M cannot be checked against a cap, and the remaining balance is readable only with /usage in Claude Code on the account; whether other sessions draw on the same weekly limit is unverified. A weekly limit was hit in Warden wave 4, so the risk is real. With 3 records per config the t interval has 2 degrees of freedom (4.303), so only large effects will separate. Recommendation: BENCHMARK.md states about 1.7M tokens per replay of wave 1 (the scorecard is the source, not an Anthropic figure), tells the human to read /usage before the pilot and again after it and to scale the plan from the measured drop, runs a pilot of 1 run per config before going to 3, and says to avoid overlapping other heavy sessions on the account.",
+      "evidence": "docs/agent-loop/2026-11-24-v24-wave-1-loop.md: \"Total tokens: 1,655,730\" (6 rows in ## Tasks). Spec Budget: \"The cost is Claude Code usage.\" H6: \"each costs Claude Code usage\". Spec 4.T line 342: \"`docs/BENCHMARK.md` says how to run a comparison and what it costs.\" Wave 3 review gate G-3.1-quota: \"a weekly limit hit Warden wave 4\". Spike F3: Anthropic publishes no token figures for Claude Code weekly limits; balance is read with /usage.",
+      "reverseCost": "A docs sentence; the usage spent on runs is not recoverable.",
+      "wouldBeWrongIf": "/usage shows the remaining weekly allowance comfortably covers 10M tokens beside the other sessions (F3).",
+      "reversible": true,
+      "costCents": 0,
+      "touches": [],
+      "category": "quota",
+      "task": "4.T",
+      "dependsOn": [
+        "F3"
+      ],
+      "edits": [
+        {
+          "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+          "find": "`docs/BENCHMARK.md` says how to run a comparison and what it costs.",
+          "replace": "`docs/BENCHMARK.md` says how to run a comparison and what it costs: about 1.7M tokens per replay of wave 1 (source: the wave 1 scorecard), a pilot of 1 run per configuration before 3, and a /usage reading before and after the pilot to scale the plan."
+        }
+      ],
+      "decision": "ask",
+      "reason": "envelope: category quota is human-only",
+      "adversary": {
+        "verdict": "agree",
+        "evidence": "docs/agent-loop/2026-11-24-v24-wave-1-loop.md line 72: 'Total tokens: 1,655,730'; its ## Tasks table has 6 data rows; the file is also in the public repo's docs/agent-loop/, so 'source: the wave 1 scorecard' resolves there. 1.66M x 2 configs x 3 runs is 9.9M. docs/agent-loop/2026-11-25-wave-3-review.json has gate G-3.1-quota. Spec Budget and H6 as quoted; 4.T says only 'what it costs'.",
+        "reason": "A genuine human question (quota), and the figure is sourced and the arithmetic right. A pilot of one run per configuration and a /usage reading before and after is the only way to scale the plan when no token figure for the weekly limit is published. Caveats for BENCHMARK.md: the scorecard total is one observation of one wave, and whether it counts the same tokens the weekly limit counts is not established, so it should be written as an estimate to be replaced by the pilot's measured drop."
+      }
+    }
+  ],
+  "spikes": [
+    {
+      "id": "F1",
+      "fact": "Does a PATH or environment variable set in the shell that launches Claude Code reach every Bash tool call and every Workflow subagent relay unchanged on this machine, or does the zsh profile re-prepend a directory with the real gh (and do BENCH_STATE and BENCH_CI_JOBS survive)?",
+      "status": "answered",
+      "answer": "Partly settled. Not fully settled.\n\nLocal probe (read-only, run 2026-11-26): ~/.zprofile and ~/.zshrc prepend several directories to PATH (Python framework bins, nvm, solana, ~/dev/reps/bin, ~/.local/bin, /opt/anaconda3/bin, ~/.cargo/bin). /etc/zprofile runs path_helper. None of these startup files sets gh or a gh shim. `which -a gh` in this shell returns one result, /usr/local/bin/gh, so no prepended directory shadows the real gh here. BENCH_STATE and BENCH_CI_JOBS are not set in this shell, so the probe could not show whether they survive. The probe ran in a plain shell, not in a Workflow subagent relay or a Claude Code Bash tool call, so it does not show what those contexts see.\n\nDocs (code.claude.com Tools reference, published 2026-11-25): Claude Code starts a non-interactive shell, sources ~/.zshrc for Zsh, and applies the aliases, functions and shell options it captures to Bash commands. Environment variables do not persist between Bash commands: an export in one command is not available in the next. The docs say to activate a virtualenv or conda environment before launching Claude Code, which suggests the launching shell's environment is inherited, but the docs do not state that explicitly. The docs say nothing about Workflow subagent relays. Consequence for the question: ~/.zshrc PATH lines do apply to Bash tool calls, and a variable set only by an export in one command will not carry to the next.\n\nNot settled: whether BENCH_STATE and BENCH_CI_JOBS, or a PATH set in the launching shell, reach every Bash tool call and every Workflow subagent relay unchanged. That needs a live probe from inside a Claude Code session and a relay, e.g. `echo $BENCH_STATE $BENCH_CI_JOBS; command -v gh` run in a Bash tool call and in a relay, with the variables exported before launch.",
+      "source": "Local: `cat ~/.zprofile ~/.zshrc /etc/zprofile`, `which -a gh`, `env | grep BENCH_`, run 2026-11-26. Docs: https://code.claude.com/docs/en/tools-reference (section \"What persists between commands\"), returned by keenable search on 2026-11-26. Not settled from docs: Workflow subagent relay env inheritance.",
+      "retrieved": "2026-11-26",
+      "error": ""
+    },
+    {
+      "id": "F2",
+      "fact": "Does Claude Code's permission system, and auto mode in particular, accept a `permissions.allow` rule with a wildcard in the middle of the path, such as `Bash(node /x/*/clone/.claude/scripts/merge-pr.js *)`, as an allow rule without asking the classifier? The loop's permission.js counts a rule only when the text before its first `*` names the script.",
+      "status": "answered",
+      "answer": "Partly settled. The docs confirm that a * in a Bash allow rule can sit in the middle, and that a matching allow rule resolves immediately without the classifier in auto mode, with exceptions. They do not settle whether a mid-path wildcard in a path survives auto mode. Confirmed: (1) \"A * in a Bash rule matches any text, including spaces\" and \"A * can go anywhere in the rule: at the start, in the middle, or at the end\" (examples: Bash(git log * main), Bash(git * main)). (2) \"Claude Code matches everything before the first * as written\", so the words before the first * are what limit the rule. (3) In auto mode, \"Actions matching your allow, ask, or deny rules resolve immediately, with these exceptions\" (protected paths, critical-path rm/rmdir, requiresUserInteraction MCP tools, commands with per-command allowed domains, Claude in Chrome actions, ask rules on command content, network-path reads). Everything else goes to the classifier. (4) On entering auto mode, these allow rules are DROPPED: blanket Bash(*), wildcarded interpreters like Bash(python*), a wrapper followed only by a wildcard like Bash(timeout *), shell rules starting with a wildcard like Bash(* --version), \"Some wildcarded paths, like Bash($HOME/bin/*) or PowerShell(C:\\tools\\x.exe *)\", package-manager run commands, Agent allow rules, and Monitor allow rules. Narrow rules like Bash(npm test) stay in effect. The docs do not say whether Bash(node /x/*/clone/... *) falls under the \"wildcarded paths\" drop; the examples given are trailing wildcards. The docs do not state that the classifier overrides allow rules in general. Not settled from the docs: how the loop's permission.js prefix check relates to Claude Code's own matching, and whether a mid-path wildcard in a path is treated as a wildcarded path for the auto-mode drop.",
+      "source": "https://code.claude.com/docs/en/permissions (sections \"Wildcard patterns\", \"Bash rule limits\", \"Allow rules\") and https://code.claude.com/docs/en/permission-modes.md (\"How the classifier evaluates actions\", \"Broad allow rules dropped on entering auto mode\"). Fetched via WebFetch; full permissions page saved at ~/.claude/projects/-Users-edan-dev-agent-loop/5e0fcc24-24f1-414b-b48a-bd670c93514d/tool-results/toolu_017EcLG2W1dc1Fop6WnXYANx.txt",
+      "retrieved": "2026-11-26",
+      "error": ""
+    },
+    {
+      "id": "F3",
+      "fact": "How much weekly Claude Code usage is left on the account, and is it enough for about 1.7M tokens per replay of wave 1 times the planned runs (about 10M for two configs at 3 runs) beside the other sessions on it?",
+      "status": "answered",
+      "answer": "Not settled from any source. Anthropic publishes no token or hour figures for Claude Code weekly limits, so the 10M-token budget cannot be checked against a published cap. The remaining balance on this account is not visible from documentation. It can only be read in the account itself with /usage in Claude Code (or the usage settings page on claude.ai), and I did not run that because it is an account read, not a documentation fact. What the official source does say: the 5-hour session limit is separate from the weekly limit; a temporary 50% weekly boost ran May 13 to September 13, 2026; from September 14, 2026 eligible plans' weekly limits are 25% higher than before the promotion. The official page does not describe a shared pool between Claude Code and other sessions. A third-party guide says Claude Code, Claude chat and Cowork share one pool, but that is unverified, so whether the other sessions draw from the same weekly limit is also unsettled. Third-party sources give Max 5x and 20x as multiples of Pro per 5-hour session, and they disagree on the weekly reset mechanics.",
+      "source": "Official: https://support.claude.com/en/articles/15910845 (fetched via WebFetch with a prompt; the page gives no token counts and directs users to /usage). Unverified third-party: https://www.morphllm.com/claude-code-usage-limits and https://allthings.how/claude-code-usage-limits-explained-pro-max-and-weekly-caps/ (found via WebSearch; not used as the basis for the answer). To read the actual remaining balance: run /usage inside Claude Code on the account.",
+      "retrieved": "2026-11-26",
+      "error": ""
+    }
+  ],
+  "gates": [
+    {
+      "id": "G-4.T-quota",
+      "what": "Claude Code usage headroom for the H6 comparisons: about 1.7M tokens per replay of wave 1, about 10M for two configs at 3 runs each, beside the wave 4 build itself (5 tasks, already under gate G-3.1-quota).",
+      "why": "Each benchmark run replays a wave with real agents; a weekly limit already stopped Warden wave 4, and the account is shared with an overnight session.",
+      "owner": "human",
+      "before": "4",
+      "leadTime": "days",
+      "status": "open",
+      "evidence": ""
+    },
+    {
+      "id": "G-4.3-account",
+      "what": "Add permissions.allow rules in ~/.claude/settings.json for each relay script at the benchmark clone's exact path: Bash(node <out>/clone/.claude/scripts/{merge-pr,wait-ci,ci-only,impact,test-edits,dep-state,isolation}.js *), for one fixed --out. Permission settings are human-only.",
+      "why": "The loop's preflight (2.1a) fails without an allow rule for the path as project.repo plus /.claude/scripts spells it; the bench clone has its own path. prepare must not write settings (invariant 6).",
+      "owner": "human",
+      "before": "4",
+      "leadTime": "minutes",
+      "status": "open",
+      "evidence": ""
+    }
+  ],
+  "specEdits": [
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "`bench/fake-gh.test.ts`",
+      "replace": "`tests/bench-fake-gh.test.ts`",
+      "recId": "W4-R1"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "`bench/ci.test.ts`",
+      "replace": "`tests/bench-ci.test.ts`",
+      "recId": "W4-R1"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "`bench/scenario.test.ts`",
+      "replace": "`tests/bench-scenario.test.ts`",
+      "recId": "W4-R1"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "`bench/metrics.test.ts`",
+      "replace": "`tests/bench-metrics.test.ts`",
+      "recId": "W4-R1"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "## Wave 4: controlled benchmark (4.3 after 4.1 and 4.2)",
+      "replace": "## Wave 4: controlled benchmark (4.1 after 4.2; 4.3 after 4.1 and 4.2)",
+      "recId": "W4-R2"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "- **4.1 Fake GitHub.** Owns",
+      "replace": "- **4.1 Fake GitHub.** Depends on 4.2 (its run records and `enqueueRun`). Owns",
+      "recId": "W4-R2"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "status, conclusion, startedAt, durationMs, logTail }`.",
+      "replace": "status, conclusion, startedAt, durationMs, logTail, branch, workflow, name }`, one file `$BENCH_STATE/runs/<id>.json` per run (`id` a positive integer, the `databaseId` of `gh run list`; written under a temporary name and renamed; `status` is `queued`, `in_progress` or `completed`; `workflow` and `name` are the `mainCi` value). `bench/ci.js` exports `enqueueRun(stateDir, { sha, branch, event })` and `listRuns(stateDir)`, which 4.1 calls.",
+      "recId": "W4-R2"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "refuses with GitHub's message when the branch conflicts;",
+      "replace": "refuses with GitHub's message when the branch conflicts, and then calls 4.2's `enqueueRun` for the new default-branch sha with event `push`, because a ref moved inside the bare remote runs no post-receive hook;",
+      "recId": "W4-R3"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "(event `pull_request` for a PR head, `push` for the default branch)",
+      "replace": "(event `push` for the default branch, `pull_request` for every other branch, decided at push time because a worker pushes before `gh pr create`; the hook only writes a `queued` record and starts a detached runner, then exits 0, because `git push` waits for post-receive)",
+      "recId": "W4-R4"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "and check in a clean clone at that sha, at most",
+      "replace": "and check (the `install`, `check` and `mainCi` values of `$BENCH_STATE/ci.json`, which `prepare` writes from `loop.local.json`; a missing file is an error, so tests and 4.T write trivial commands) in a clean clone at that sha, at most",
+      "recId": "W4-R5"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "`bench/scenarios/v24-wave-1.json`,",
+      "replace": "`bench/scenarios/v24-wave-1.json`, `bench/scenarios/v24-wave-1.holdout/**`,",
+      "recId": "W4-R9"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "holdout `tests/v24-wave1.test.ts`, wave 1's tail test)",
+      "replace": "holdout `tests/v24-wave1.test.ts`, wave 1's tail test, which does not exist at `baseSha`: a copy taken from the 1.T merge commit is committed under `bench/scenarios/v24-wave-1.holdout/`, the scenario records `holdoutTotal`, its case count, and the replayed wave keeps its tail 1.T, whose own test lands at the same path, so `collect` copies the holdout over that path in a scratch worktree of the final default branch and runs it there)",
+      "recId": "W4-R9"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "`bench/scenarios/synthetic-6.json`,",
+      "replace": "`bench/scenarios/synthetic-6.json`, `bench/scenarios/synthetic-6/**` (the seed repo, its spec and its holdout),",
+      "recId": "W4-R10"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "a synthetic six-task graph with two dependency chains.",
+      "replace": "a synthetic six-task graph with two dependency chains: a seed repo of a few files, a spec that passes `scripts/spec-lint.js` (wave-args refuses one that does not), six tasks that own distinct files, and a holdout test, all committed under `bench/scenarios/synthetic-6/`.",
+      "recId": "W4-R10"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "the machine's load average samples.",
+      "replace": "the machine's load average samples (`bench.js sample <dir> [--every-s 30]` is started in the background by the session after `prepare` and appends `{ t, load1 }` lines to `$BENCH_STATE/load.jsonl` until its pid file is removed; `collect` reads it and reports `load: null` when it is absent). Makespan runs from the first agent `startedAt` to the end (`startedAt + durationMs`) of the last agent labelled as a merge relay.",
+      "recId": "W4-R12"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "a t interval for times and tokens)",
+      "replace": "a t interval for times and tokens, from a constant table of two-sided 95% t quantiles for 1 to 30 degrees of freedom in `bench/metrics.js`, 1.96 above 30, no interval for fewer than 2 records; the test pins 4.303 for 2 degrees of freedom and 2.776 for 4)",
+      "recId": "W4-R13"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "saying when the intervals overlap.",
+      "replace": "with a Welch 95% interval for the difference of the means (degrees of freedom rounded down), printing both whether the two single-config intervals overlap and whether the difference interval includes 0.",
+      "recId": "W4-R13"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "| H6 | after wave 4 | Run the benchmark comparisons in `docs/BENCHMARK.md` (each costs Claude Code usage) | the before/after needs controlled runs |",
+      "replace": "| H6 | after wave 4 | Run the benchmark comparisons in `docs/BENCHMARK.md` (each costs Claude Code usage) | the before/after needs controlled runs |\n| H7 | before H6 | Add the `permissions.allow` rules `prepare` prints (one `Bash(node <out>/clone/.claude/scripts/<script> *)` per relay script, for one fixed `--out`, with no `*` before the script name; add `<out>` to `sandbox.filesystem.allowWrite` if the sandbox is on), and launch the benchmark session from a shell with the environment `prepare` prints | the preflight fails without the rules (H2); permission settings are human-only |",
+      "recId": "W4-R14"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "and prints the environment for the session",
+      "replace": "and prints the allow rules H7 needs (it never writes a settings file; invariant 6, and it refuses an `--out` other than the one the rules name) and the environment for the session",
+      "recId": "W4-R14"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "(`PATH=<dir>/bin:$PATH`, `BENCH_STATE`)",
+      "replace": "(`PATH=<dir>/bin:$PATH`, `BENCH_STATE`, `BENCH_CI_JOBS`), writes `github: \"bench.invalid/bench\"` (a name GitHub cannot hold; never this project's repository), and `bench.js doctor <dir>` exits 1 unless `command -v gh` is `<dir>/bin/gh`, `gh pr list` answers from `BENCH_STATE`, and both variables are set, run in the session's shell and from one Bash tool call before the wave; the fake gh refuses to run when `BENCH_STATE` is unset",
+      "recId": "W4-R15"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "(base `844e886`, the commit wave 1 started from;",
+      "replace": "(base `844e886f5901023a6f458bfebac07527c7d6f4a6`, the full sha of the commit wave 1 started from;",
+      "recId": "W4-R16"
+    },
+    {
+      "file": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+      "find": "a temp dir: the clone is at `baseSha`,",
+      "replace": "a temp dir from a fixture source repo the test builds (the CI checkout is shallow, so `844e886` does not exist there, and `.skip` is not allowed; the real scenario files are checked for a full 40-hex `baseSha` and for the spec and holdout copy being present): the clone is at that fixture's `baseSha`,",
+      "recId": "W4-R16"
+    }
+  ],
+  "needsSecondRound": false,
+  "skipped": false,
+  "skipReason": "",
+  "reviewPath": "~/dev/agent-loop/docs/agent-loop/2026-11-26-wave-4-review.json"
+}
