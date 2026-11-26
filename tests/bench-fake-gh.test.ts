@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 // @ts-expect-error plain JavaScript module with JSDoc
-import { enqueueRun, installHook, listRuns, runRun } from '../bench/ci.js';
+import { enqueueRun, listRuns, readRun, runRun } from '../bench/ci.js';
 // @ts-expect-error plain JavaScript module with JSDoc
 import { runGh } from '../bench/fake-gh.js';
 
@@ -40,7 +40,7 @@ async function waitFor<T>(fn: () => T | undefined | false, ms = 20000): Promise<
 
 type Fx = { dir: string; remote: string; work: string; state: string; gate: string };
 /** A bare remote with main (ok.txt, c.txt), a working clone on main, and local CI that waits for the gate file. */
-function setup(opts: { open?: boolean; ci?: boolean; hook?: boolean } = {}): Fx {
+function setup(opts: { open?: boolean; ci?: boolean } = {}): Fx {
   const dir = mkdtempSync(join(tmpdir(), 'bench-gh-'));
   roots.push(dir);
   const f: Fx = { dir, remote: join(dir, 'remote.git'), work: join(dir, 'work'), state: join(dir, 'state'), gate: join(dir, 'gate') };
@@ -58,8 +58,6 @@ function setup(opts: { open?: boolean; ci?: boolean; hook?: boolean } = {}): Fx 
       join(f.state, 'ci.json'),
       JSON.stringify({ install: 'true', check: `while [ ! -f ${f.gate} ]; do sleep 0.05; done; test -f ok.txt && echo check-ok || { echo "check failed: ok.txt is missing"; exit 1; }`, mainCi: 'ci' }),
     );
-    // the post-receive hook starts node on every push, which is slow: only the tests about runs and checks install it
-    if (opts.hook ?? opts.open === false) installHook(f.remote, f.state);
   }
   if (opts.open !== false) writeFileSync(f.gate, 'go');
   return f;
@@ -793,21 +791,29 @@ describe('checks and runs from the records of bench/ci.js', () => {
     expect(gh(f, ['run', 'watch']).code).toBe(1);
   });
 
-  // The one test with the real hook and runner: push records a queued run, the check waits for the gate, then the
-  // run turns green and `pr checks` follows it (red runs are covered by the hand-written records above and by bench-ci).
-  it('follows the real local CI of bench/ci.js: pending while the check waits, then green', async () => {
+  // A real run of bench/ci.js, in process (the post-receive hook and a detached runner would each start node, which
+  // takes seconds on a loaded machine): the check waits for the gate, then the run turns green, and another turns red.
+  it('follows a real run of bench/ci.js: pending while the check waits, then green, and red with its log', async () => {
     const f = setup({ open: false });
     const tip = branch(f, 'task/a', { 'a.txt': 'a\n' });
     create(f, 'task/a');
-    const run = await waitFor(() => listRuns(f.state).find((r: { sha: string }) => r.sha === tip));
-    expect(run.event).toBe('pull_request');
+    const queued = enqueueRun(f.state, { sha: tip, branch: 'task/a', event: 'pull_request', start: false });
+    const running = runRun(f.state, queued.id, { remote: f.remote });
+    await waitFor(() => readRun(f.state, queued.id).status === 'in_progress');
     const pending = gh(f, ['pr', 'checks', '1', '--json', 'bucket']);
     expect(pending.code).toBe(8);
     expect(JSON.parse(pending.out)).toEqual([{ bucket: 'pending' }]);
     writeFileSync(f.gate, 'go');
-    await waitFor(() => listRuns(f.state).every((r: { status: string }) => r.status === 'completed'), 150000);
+    await running;
     expect(gh(f, ['pr', 'checks', '1']).code).toBe(0);
-  }, 400000);
+
+    const bad = branch(f, 'task/bad', { 'ok.txt': null });
+    create(f, 'task/bad');
+    const badRun = enqueueRun(f.state, { sha: bad, branch: 'task/bad', event: 'pull_request', start: false });
+    await runRun(f.state, badRun.id, { remote: f.remote });
+    expect(gh(f, ['pr', 'checks', '2']).code).toBe(1);
+    expect(gh(f, ['run', 'view', String(badRun.id), '--log-failed']).out).toContain('check failed: ok.txt is missing');
+  }, 120000);
 });
 
 describe('jq expressions as the loop uses them', () => {
