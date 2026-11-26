@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1030 250" width="1030" height="250" role="img" aria-label="v2.4 wave 3: 5 tasks, one launch, built by the new loop. One row per task; bars show worker, critic, CI-wait and merge agents over time.">
+<title>v2.4 wave 3: 5 tasks, one launch, built by the new loop</title>
+<style>
+.bg{fill:#ffffff}
+.t{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;fill:#1f2328}
+.id{font-size:12px;font-weight:600}.ttl{font-size:12px;fill:#59636e}.ax{font-size:11px;fill:#59636e}
+.hd{font-size:14px;font-weight:600}.lg{font-size:12px}.st{font-size:11px;font-weight:600}
+.grid{stroke:#d0d7de;stroke-width:1}.band{fill:#f6f8fa}.gap{fill:#8c959f;fill-opacity:.14}
+.worker{fill:#0969da}.critic{fill:#8250df}.merger{fill:#1a7f37}.ci{fill:#8c959f}
+.ok{fill:#1a7f37}.park{fill:#bc4c00}.none{fill:#59636e;font-style:italic}
+@media (prefers-color-scheme:dark){
+.bg{fill:#0d1117}.t{fill:#f0f6fc}.ttl,.ax{fill:#9198a1}.grid{stroke:#3d444d}.band{fill:#151b23}
+.worker{fill:#4493f8}.critic{fill:#ab7df8}.merger{fill:#3fb950}.ci{fill:#656c76}
+.ok{fill:#3fb950}.park{fill:#f0883e}.none{fill:#9198a1}}
+</style>
+<rect class="bg" width="1030" height="250" rx="8"/>
+<g transform="translate(20,20)">
+<text class="t hd" x="0" y="20">v2.4 wave 3: 5 tasks, one launch, built by the new loop</text>
+<rect class="worker" x="0" y="30.0" width="14" height="12" rx="2"/>
+<text class="t lg" x="20" y="40">Worker</text>
+<rect class="critic" x="75.0" y="30.0" width="14" height="12" rx="2"/>
+<text class="t lg" x="95.0" y="40">Critic</text>
+<rect class="ci" x="150.0" y="34.0" width="14" height="4" rx="2"/>
+<text class="t lg" x="170.0" y="40">CI wait</text>
+<rect class="merger" x="232.5" y="30.0" width="14" height="12" rx="2"/>
+<text class="t lg" x="252.5" y="40">Merge</text>
+<line class="grid" x1="210.0" y1="58" x2="210.0" y2="176"/>
+<text class="t ax" x="210.0" y="192" text-anchor="middle">0 min</text>
+<line class="grid" x1="323.3" y1="58" x2="323.3" y2="176"/>
+<text class="t ax" x="323.3" y="192" text-anchor="middle">15 min</text>
+<line class="grid" x1="436.6" y1="58" x2="436.6" y2="176"/>
+<text class="t ax" x="436.6" y="192" text-anchor="middle">30 min</text>
+<line class="grid" x1="549.8" y1="58" x2="549.8" y2="176"/>
+<text class="t ax" x="549.8" y="192" text-anchor="middle">45 min</text>
+<line class="grid" x1="663.1" y1="58" x2="663.1" y2="176"/>
+<text class="t ax" x="663.1" y="192" text-anchor="middle">60 min</text>
+<line class="grid" x1="776.4" y1="58" x2="776.4" y2="176"/>
+<text class="t ax" x="776.4" y="192" text-anchor="middle">75 min</text>
+<line class="grid" x1="889.7" y1="58" x2="889.7" y2="176"/>
+<text class="t ax" x="889.7" y="192" text-anchor="middle">90 min</text>
+<rect class="band" x="0" y="64" width="990" height="20"/>
+<rect class="band" x="0" y="104" width="990" height="20"/>
+<rect class="band" x="0" y="144" width="990" height="20"/>
+<text class="t id" x="6" y="78">3.1</text>
+<text class="t ttl" x="46" y="78">Dependency state</text>
+<rect class="worker" x="211.5" y="67" width="50.3" height="12" rx="2"><title>Worker 3.1</title></rect>
+<rect class="critic" x="262.9" y="67" width="21.1" height="12" rx="2"><title>Critic 3.1</title></rect>
+<rect class="merger" x="284.1" y="67" width="2.5" height="12" rx="2"><title>Merge 3.1</title></rect>
+<rect class="ci" x="262.1" y="79" width="3.4" height="4"/>
+<text class="t st ok" x="292.6" y="78">merged</text>
+<text class="t id" x="6" y="98">3.4</text>
+<text class="t ttl" x="46" y="98">Isolation checks and rules</text>
+<rect class="worker" x="211.5" y="87" width="56.9" height="12" rx="2"><title>Worker 3.4</title></rect>
+<rect class="critic" x="269.2" y="87" width="44.2" height="12" rx="2"><title>Critic 3.4</title></rect>
+<rect class="merger" x="313.4" y="87" width="3.1" height="12" rx="2"><title>Merge 3.4</title></rect>
+<rect class="ci" x="268.6" y="99" width="3.2" height="4"/>
+<text class="t st ok" x="322.5" y="98">merged</text>
+<text class="t id" x="6" y="118">3.2</text>
+<text class="t ttl" x="46" y="118">Merge lock and tree-reuse…</text>
+<rect class="worker" x="211.6" y="107" width="83.5" height="12" rx="2"><title>Worker 3.2</title></rect>
+<rect class="critic" x="295.9" y="107" width="38.1" height="12" rx="2"><title>Critic 3.2</title></rect>
+<rect class="worker" x="334.0" y="107" width="7.8" height="12" rx="2"><title>Worker 3.2</title></rect>
+<rect class="critic" x="342.4" y="107" width="40.4" height="12" rx="2"><title>Critic 3.2</title></rect>
+<rect class="merger" x="382.8" y="107" width="1.7" height="12" rx="2"><title>Merge 3.2</title></rect>
+<rect class="ci" x="295.2" y="119" width="3.3" height="4"/>
+<rect class="ci" x="341.7" y="119" width="5.9" height="4"/>
+<text class="t st ok" x="390.5" y="118">merged</text>
+<text class="t id" x="6" y="138">3.5</text>
+<text class="t ttl" x="46" y="138">Wave-loop wiring</text>
+<rect class="worker" x="385.2" y="127" width="301.4" height="12" rx="2"><title>Worker 3.5</title></rect>
+<rect class="critic" x="688.9" y="127" width="37.6" height="12" rx="2"><title>Critic 3.5</title></rect>
+<rect class="merger" x="726.5" y="127" width="1.5" height="12" rx="2"><title>Merge 3.5</title></rect>
+<rect class="ci" x="686.6" y="139" width="5.9" height="4"/>
+<text class="t st ok" x="734.0" y="138">merged</text>
+<text class="t id" x="6" y="158">3.T</text>
+<text class="t ttl" x="46" y="158">Wave 3 tail</text>
+<rect class="worker" x="728.6" y="147" width="51.7" height="12" rx="2"><title>Worker 3.T</title></rect>
+<rect class="critic" x="846.7" y="147" width="73.3" height="12" rx="2"><title>Critic 3.T</title></rect>
+<rect class="merger" x="878.2" y="147" width="1.6" height="12" rx="2"><title>Merge 3.T</title></rect>
+<rect class="ci" x="780.3" y="159" width="6.0" height="4"/>
+<text class="t st ok" x="926.0" y="158">merged</text>
+</g>
+</svg>

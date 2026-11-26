@@ -105,6 +105,12 @@ Measured on real waves; the details and the caveats are in [RESULTS.md](RESULTS.
   6.4 hours) came from that, so `spec-review` now looks for it before the wave starts.
 - **Keep the machine quiet during a wave.** One worker took 59 minutes and 15.9M tokens beside a heavy job,
   against 26 minutes and 2.1M for a task of the same size.
+- **The loop can build itself, from a frozen copy.** v2.4 and v2.5 were specced from a red team and an outside
+  review and built by the loop on this repository (16 of 19 first-pass, no escaped defects traced). Waves 3 and 4
+  ran on a frozen v2.4.0 so nothing changed under a running wave; wave 3 needed no human input at all.
+- **Permission rules match the command, not the intent.** A relay that ran `cd <repo> && node merge-pr.js` was
+  refused even with an allow rule for `merge-pr.js`; relays now run the script alone, and the preflight checks the
+  rule before any work starts.
 
 ## Limitations
 
@@ -114,9 +120,9 @@ The full list, with evidence and the fixes in progress, is in the [red team](doc
 - GitHub only (`gh`, Actions checks, branch protection).
 - Not cheap: about 316K to 565K tokens per task on Warden, including review and relaunches.
 - Built and tuned by one person on one 8 GB Mac, against a handful of projects. The defaults reflect that.
-- The wide-wave rule rests on observed waves, not on a controlled comparison.
+- The wide-wave rule and the before/after numbers rest on observed waves. A local benchmark for controlled comparisons exists (`bench/`); the comparisons have not been run.
 - Paths in the manual assume the loop is cloned to `~/dev/agent-loop`.
 
-[Operating manual](docs/OPERATING.md) · [Results](RESULTS.md) · [Red team](docs/RED-TEAM.md) · [Scorecards](docs/warden/) · [Loop specs](docs/agent-loop-v2/)
+[Operating manual](docs/OPERATING.md) · [Results](RESULTS.md) · [Red team](docs/RED-TEAM.md) · Scorecards: [Warden](docs/warden/), [the loop itself](docs/agent-loop/) · [Loop specs](docs/agent-loop-v2/)
 
 MIT © Edan Barrios. Not affiliated with Anthropic.
