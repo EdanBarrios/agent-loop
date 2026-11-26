@@ -1,0 +1,69 @@
+{
+ "tasks": {
+  "1.2": {
+   "pr": 12,
+   "escaped": 2,
+   "fixes": [
+    {
+     "sha": "f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1",
+     "title": "fix: guard empty input",
+     "kind": "fix",
+     "files": [
+      "src/a.ts"
+     ],
+     "lines": 3
+    },
+    {
+     "sha": "f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2",
+     "title": "fix(parser): off by one",
+     "kind": "fix",
+     "files": [
+      "src/a.ts"
+     ],
+     "lines": 3
+    },
+    {
+     "sha": "0101010101010101010101010101010101010101",
+     "title": "feat: reshape the table",
+     "kind": "other",
+     "files": [
+      "src/a.ts"
+     ],
+     "lines": 3
+    }
+   ]
+  },
+  "2.1": {
+   "pr": 21,
+   "escaped": 1,
+   "fixes": [
+    {
+     "sha": "f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2",
+     "title": "fix(parser): off by one",
+     "kind": "fix",
+     "files": [
+      "src/a.ts"
+     ],
+     "lines": 3
+    }
+   ]
+  },
+  "9.9": {
+   "pr": 99,
+   "escaped": 1,
+   "fixes": [
+    {
+     "sha": "f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3",
+     "title": "Fix typo in the other repo area",
+     "kind": "fix",
+     "files": [
+      "src/a.ts"
+     ],
+     "lines": 3
+    }
+   ]
+  }
+ },
+ "scanned": 14,
+ "note": ""
+}
