@@ -255,3 +255,177 @@ describe('loop-scorecard.py: findings, integration, escaped defects', { timeout:
   });
 });
 
+
+// Loop 2.4: Wilson intervals, pooled scorecards, escaped fix commits and checklist counts.
+describe('loop-scorecard.py: intervals and pools', { timeout: 120_000 }, () => {
+  type T = { id: string; first?: 'MERGE' | 'FIX'; merged?: boolean; reopened?: boolean; started?: boolean; state?: string };
+  const agent = (i: number, label: string) => ({ type: 'workflow_agent', index: i, label, agentId: `a${i}`, state: 'done', tokens: 1000, toolCalls: 1, durationMs: 60000, model: 'claude-sonnet-5-5' });
+
+  // A result document with one task per entry. A task that started has a worker record; `first` is its round 1 verdict.
+  function runFile(tasks: T[], name = 'run.json') {
+    const dir = mkdtempSync(join(tmpdir(), 'scorecard-interval-'));
+    const result: Record<string, any> = { project: 'demo', wave: '1', gate: 'PASS', loopVersion: '2.4.0', models: {}, state: {}, tasks: {}, escalations: [], decisions: [], reality: null };
+    const agents: any[] = [];
+    for (const t of tasks) {
+      const started = t.started !== false;
+      const merged = t.merged ?? (started && !!t.first);
+      result.tasks[t.id] = {
+        task: t.id,
+        title: `Task ${t.id}`,
+        pr: started && t.first ? { number: 1, url: 'https://example.invalid/pr/1', branch: `task/${t.id}` } : null,
+        rounds: t.first ? [{ round: 1, verdict: t.first, ci: 'green', fixItems: [], notes: '', checklist: [], findings: [] }] : [],
+        merge: merged ? { outcome: 'merged', mergeSha: 'a'.repeat(40) } : null,
+        reopened: !!t.reopened,
+        merged,
+        ...(t.state ? { state: t.state } : {}),
+      };
+      if (started) agents.push(agent(agents.length + 1, `worker:${t.id}`));
+    }
+    const path = join(dir, name);
+    writeFileSync(path, JSON.stringify({ result, workflowProgress: agents }));
+    return path;
+  }
+  const many = (n: number, make: (i: number) => Partial<T> = () => ({})): T[] => Array.from({ length: n }, (_, i) => ({ id: `1.${i + 1}`, first: 'MERGE' as const, ...make(i) }));
+  function escapedFile(counts: Record<string, number>) {
+    const dir = mkdtempSync(join(tmpdir(), 'scorecard-escaped-'));
+    const tasks: Record<string, any> = {};
+    for (const [id, n] of Object.entries(counts)) {
+      tasks[id] = { pr: 1, escaped: n, fixes: Array.from({ length: n }, (_, i) => ({ sha: `${id.replace(/\D/g, '')}${i}`.padEnd(40, 'c'), title: `fix: thing ${id} ${i}`, kind: 'fix', files: ['a.ts'], lines: 1 })) };
+    }
+    const path = join(dir, 'escaped.json');
+    writeFileSync(path, JSON.stringify({ tasks, scanned: 5, note: '' }));
+    return path;
+  }
+  const workerLine = (md: string) => /- Worker first-pass MERGE: (.*)/.exec(md)![1];
+  const criticLine = (md: string) => /- Critic miss rate[^:]*: (.*)/.exec(md)![1];
+
+  it('prints Wilson intervals that match hand-computed bounds (0/6, 6/6, 20/30)', async () => {
+    const zero = await scorecard(['1', '2026-11-25', runFile(many(6, () => ({ first: 'FIX' as const, merged: false })))]);
+    expect(workerLine(zero)).toContain('0/6, 0% (0–39%, n=6)');
+    const all = await scorecard(['1', '2026-11-25', runFile(many(6))]);
+    expect(workerLine(all)).toContain('6/6, 100% (61–100%, n=6)');
+    const mixed = await scorecard(['1', '2026-11-25', runFile(many(30, (i) => ({ first: i < 20 ? ('MERGE' as const) : ('FIX' as const) })))]);
+    expect(workerLine(mixed)).toContain('20/30, 67% (49–81%, n=30)');
+  });
+
+  it('leaves out only tasks that never started; a worker with no PR is not first-pass; a fast-lane MERGE is', async () => {
+    const tasks: T[] = [
+      { id: '1.1', first: 'MERGE' },
+      { id: '1.2', started: true }, // worker ran, delivered no PR
+      { id: '1.3', started: false, merged: false }, // parked for a parked dependency
+      { id: '1.4', started: true, merged: false, state: 'paused' }, // worker failed on a usage limit
+      { id: '1.T', started: false, merged: false }, // tail not run
+    ];
+    const md = await scorecard(['1', '2026-11-25', runFile(tasks)]);
+    expect(workerLine(md)).toContain('1/2, 50% (9–91%, n=2)');
+    expect(md).toMatch(/Left out of the rates \(never started\): 3/);
+    // a fast-lane MERGE has a round 1 MERGE verdict with lane 'fast'
+    const dir = mkdtempSync(join(tmpdir(), 'scorecard-fast-'));
+    const path = runFile([{ id: '1.1', first: 'MERGE' }]);
+    const doc = JSON.parse(readFileSync(path, 'utf8'));
+    doc.result.tasks['1.1'].rounds[0].lane = 'fast';
+    const fast = join(dir, 'fast.json');
+    writeFileSync(fast, JSON.stringify(doc));
+    expect(workerLine(await scorecard(['1', '2026-11-25', fast]))).toContain('1/1, 100%');
+  });
+
+  it('fires the critic rule on 4 of 20 merged tasks with a miss (lower bound 8%) and not on 1 of 30', async () => {
+    const four = await scorecard(['1', '2026-11-25', runFile(many(20)), '--escaped-from', escapedFile({ '1.1': 1, '1.2': 1, '1.3': 1, '1.4': 1 })]);
+    expect(criticLine(four)).toContain('4/20, 20% (8–42%, n=20)');
+    expect(four).toContain('Critic up: fires (lower bound 8% is above 5%)');
+    const one = await scorecard(['1', '2026-11-25', runFile(many(30)), '--escaped-from', escapedFile({ '1.1': 1 })]);
+    expect(criticLine(one)).toContain('1/30, 3% (1–17%, n=30)');
+    expect(one).toContain('Critic up: does not fire (lower bound 1% is not above 5%)');
+  });
+
+  it('counts a task once however many fix commits it has, and prints a lower bound of 0 as 0', async () => {
+    const md = await scorecard(['1', '2026-11-25', runFile(many(6)), '--escaped-from', escapedFile({})]);
+    expect(criticLine(md)).toContain('0/6, 0% (0–39%, n=6)');
+    const twice = await scorecard(['1', '2026-11-25', runFile(many(6)), '--escaped-from', escapedFile({ '1.1': 3 })]);
+    expect(criticLine(twice)).toContain('1/6, 17% (3–56%, n=6)');
+    expect(criticLine(twice)).toContain('fix commits: 3');
+  });
+
+  it('counts a revert after MERGE as a miss, and with only --escaped <n> counts reverts only', async () => {
+    const path = runFile(many(10, (i) => ({ reopened: i === 0 })));
+    const md = await scorecard(['1', '2026-11-25', path, '--escaped', '4']);
+    expect(criticLine(md)).toContain('1/10, 10% (2–40%, n=10)');
+    expect(criticLine(md)).toContain('escaped defects: 4 (no per-task attribution, no interval)');
+    const none = await scorecard(['1', '2026-11-25', path]);
+    expect(criticLine(none)).toContain('escaped defects not counted');
+  });
+
+  it('refuses --escaped together with --escaped-from', async () => {
+    await expect(scorecard(['1', '2026-11-25', runFile(many(2)), '--escaped', '1', '--escaped-from', escapedFile({})])).rejects.toMatchObject({
+      stderr: expect.stringContaining('--escaped and --escaped-from cannot be used together'),
+    });
+  });
+
+  it('lists each fix commit of an escaped file and notes the tasks it names that are not in the runs', async () => {
+    const md = await scorecard(['1', '2026-11-25', fixture('scorecard-pool-b.json'), '--escaped-from', fixture('scorecard-pool-escaped.json')]);
+    const section = md.slice(md.indexOf('## Escaped fix commits'), md.indexOf('## Critic findings'));
+    expect(section).toContain('| f2f2f2f | 2.1 | fix(parser): off by one |');
+    expect(section).not.toContain('1.2');
+    expect(section).not.toContain('f3f3f3f');
+    expect(md).toMatch(/2 tasks of the escaped file are not in the given runs and were ignored \(1\.2, 9\.9\)/);
+    // 2.1 has one escaped fix, 2.3 was reverted: 2 of the 4 merged tasks have a miss
+    expect(criticLine(md)).toContain('2/4, 50%');
+    expect(criticLine(md)).toContain('fix commits: 1');
+  });
+
+  it('lists two fix commits of one task and each fix commit once per task', async () => {
+    const md = await scorecard(['1', '2026-11-25', fixture('scorecard-pool-a.json'), '--escaped-from', fixture('scorecard-pool-escaped.json')]);
+    const section = md.slice(md.indexOf('## Escaped fix commits'), md.indexOf('## Critic findings'));
+    expect(section).toContain('| f1f1f1f | 1.2 | fix: guard empty input |');
+    expect(section).toContain('| f2f2f2f | 1.2 | fix(parser): off by one |');
+    expect(section).not.toContain('0101010');
+    expect(section.match(/\n\| [0-9a-f]{7} \|/g)).toHaveLength(2);
+    expect(criticLine(md)).toContain('1/2, 50% (9–91%, n=2)');
+    expect(criticLine(md)).toContain('fix commits: 2');
+  });
+
+  it('pools two results into one table: rates with intervals, fix items by cause, tokens per task, no per-task section', async () => {
+    const md = await scorecard(['--pool', fixture('scorecard-pool-a.json'), fixture('scorecard-pool-b.json'), '--escaped-from', fixture('scorecard-pool-escaped.json')]);
+    expect(md).toContain('# Pooled scorecard');
+    expect(md).not.toContain('## Tasks');
+    const value = (first: string) => row(md, '## Pooled table', first)?.[1];
+    expect(value('Runs')).toBe('2');
+    expect(value('Tasks started')).toBe('7');
+    expect(value('Worker first-pass MERGE')).toBe('5/7, 71% (36–92%, n=7)');
+    expect(value('Critic miss rate')).toContain('3/6, 50% (19–81%, n=6)');
+    expect(value('Fix commits')).toBe('2');
+    expect(value('Escaped defects')).toBe('3');
+    expect(value('Reverts after MERGE')).toBe('1');
+    expect(value('Tokens')).toBe('115,000');
+    expect(value('Tokens per task')).toBe('16,429');
+    expect(row(md, '## Fix items by cause', 'defect')).toEqual(['defect', '1']);
+    expect(row(md, '## Fix items by cause', 'spec_miss')).toEqual(['spec_miss', '1']);
+    expect(md).toMatch(/1 task of the escaped file is not in the given runs and was ignored \(9\.9\)/);
+    expect(md).toContain('Worker: no move (upper bound 92% is not under 50%)');
+    expect(md).toContain('Critic up: fires (lower bound 19% is above 5%)');
+  });
+
+  it('states the decision rule in terms of intervals, with the thresholds', async () => {
+    const md = await scorecard(['1', '2026-11-25', runFile(many(6, () => ({ first: 'FIX' as const, merged: false })))]);
+    const rule = md.slice(md.indexOf('## Decision rule'));
+    expect(rule).toContain('only when the pooled interval lies wholly on one side of the threshold');
+    expect(rule).toContain('upper bound of first-pass MERGE under 50%');
+    expect(rule).toContain('lower bound of the share of merged tasks with a miss above 5%');
+    expect(rule).toContain('upper bound under 10% with only low findings');
+    expect(rule).toContain('Worker: move up (upper bound 39% is under 50%)');
+    expect(rule).not.toContain('Two waves in a row');
+  });
+
+  it('counts items failed per checklist number from a non-empty critic checklist', async () => {
+    const md = await scorecard(['--pool', fixture('scorecard-pool-a.json'), fixture('scorecard-pool-b.json')]);
+    const header = row(md, '## Checklist failures', 'Item');
+    expect(header).toEqual(['Item', 'Failed', 'Rounds checked']);
+    expect(row(md, '## Checklist failures', '1')).toEqual(['1', '0', '3']);
+    expect(row(md, '## Checklist failures', '3')).toEqual(['3', '1', '3']);
+    expect(row(md, '## Checklist failures', '7')).toEqual(['7', '1', '3']);
+    const single = await scorecard(['1', '2026-11-25', fixture('scorecard-pool-a.json')]);
+    expect(row(single, '## Checklist failures', '3')).toEqual(['3', '1', '3']);
+    const none = await scorecard(['1', '2026-11-25', fixture('scorecard-v2-decisions.json')]);
+    expect(none).not.toContain('## Checklist failures');
+  });
+});
