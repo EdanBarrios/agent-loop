@@ -105,7 +105,7 @@ describe('the real scenarios', () => {
   it('synthetic-6: the seed repo builds to the recorded baseSha, and its spec passes spec-lint with six tasks and two chains', () => {
     const sc = JSON.parse(readFileSync(join(SCENARIOS, 'synthetic-6.json'), 'utf8'));
     const built = tmp('seed');
-    const sha = buildSeedRepo(join(SCENARIOS, 'synthetic-6', 'seed'), join(built, 'seed.git'));
+    const sha = buildSeedRepo(join(SCENARIOS, 'synthetic-6', 'seed'), join(built, 'seed'));
     expect(sha).toBe(sc.baseSha);
     const spec = join(SCENARIOS, 'synthetic-6', 'seed', sc.spec);
     let out = '';

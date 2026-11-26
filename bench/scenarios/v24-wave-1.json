@@ -1,0 +1,30 @@
+{
+  "name": "v24-wave-1",
+  "source": "loop",
+  "baseSha": "844e886f5901023a6f458bfebac07527c7d6f4a6",
+  "spec": "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md",
+  "wave": "1",
+  "holdout": ["tests/v24-wave1.test.ts"],
+  "holdoutTotal": 5,
+  "holdoutCommand": "npx vitest run --reporter=json tests/v24-wave1.test.ts",
+  "project": {
+    "readFirst": [
+      "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md#End goal",
+      "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md#Invariants (v2 rules stay)",
+      "docs/agent-loop-v2/2026-11-24-agent-loop-v2-4-tasks.md#Fixed decisions"
+    ],
+    "install": "npm ci",
+    "check": "npm run check",
+    "extraRules": ["No .skip or .only.", "No network or real agent in tests."],
+    "sideFiles": "package-lock.json",
+    "mainCi": "check",
+    "maxBuilders": 2,
+    "maxChains": 3,
+    "syncPolicy": "conflict",
+    "models": {
+      "worker": { "model": "claude-sonnet-5-5", "effort": "high" },
+      "critic": { "model": "claude-fable-5-1", "effort": "high" },
+      "merger": { "model": "claude-sonnet-5-5", "effort": "low" }
+    }
+  }
+}
