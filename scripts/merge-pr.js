@@ -6,30 +6,36 @@
 // 'error', exit 4 when gh cannot read it). wave-loop runs it when a merge relay's output was lost (the relay was killed),
 // so a PR that did merge is not parked.
 // Merges one approved pull request and verifies the default branch, in this one process, and prints one JSON line:
-// { outcome: 'merged'|'refused'|'reverted'|'error'|'pending', exit, mergeSha, mainSha, ciState, failing, conflictFiles,
-//   revertPrUrl, message, logTail, ciWaitMs, mergeMs, mainCheckMs, revertMs, elapsedMs, mainCheck }
+// { outcome: 'merged'|'refused'|'locked'|'reverted'|'error'|'pending', exit, mergeSha, mainSha, ciState, failing, conflictFiles,
+//   revertPrUrl, message, logTail, ciWaitMs, mergeMs, mainCheckMs, revertMs, elapsedMs, mainCheck, lockWaitMs, treeReuse }
 // (--dry-run prints outcome 'dry-run', `wouldRun`: the write calls it did not make, and `load`: the machine-load
 // warning { load1, cores, threshold, high }, threshold = project.loadWarnFactor (default 4) x cores), and `loopVersion`:
 // the loop's package.json version, which wave-loop's preflight compares with its own, and `baseSha`: origin's HEAD, the
 // wave's base for the integration review, or null), and `permission` (v2.4): claude/lib/permission.js's prediction for
 // the command forms the workflow runs, from $HOME/.claude/settings.json and <repo>/.claude/settings{,.local}.json
 // (read only; a parser message is never printed).
-// mainCheck 'skipped:unchanged': the merged tree is the tree CI checked, so main's check is not waited for.
 // --defer-main (only with project.mainCi): merge, then return mainCheck 'deferred' without waiting for main's run; the
 // caller releases its merge lock and runs --verify-main <mergeSha>, which waits for that run and reverts once on red.
 // --verify-main stops after --timeout-min minutes (default 9) with outcome 'pending', exit 5, so it can be called again.
 // The project config is read from <repo>/.claude/loop.local.json (syncPolicy, mainCi, install, check, checkMutates,
-// worktrees, maxBuilders, trailer). The caller holds the merge lock: this script assumes it is the only merger.
+// worktrees, maxBuilders, trailer, mergeLockStaleMin, mergeLockWaitMin, reuseTreeCi).
+// The merge lock (v2.5) is taken here, not by the caller: a directory <git common dir>/agent-loop-merge.lock holding
+// owner.json { pid, host, pr, startedAt }, taken before the PR is read and held through the merge, the check on main when
+// it is not deferred, and a revert; a held lock is waited for (5 s polls, mergeLockWaitMin, default 5, at most 8), then
+// outcome 'locked', exit 2. --dry-run and --state take no lock; --verify-main takes it only for a revert.
+// mainCheck 'skipped:unchanged' now needs project.reuseTreeCi (default false) and a main CI workflow that passes the
+// scan in claude/lib/merge.js; the result carries treeReuse { allowed, reason }.
 // Exit codes: 0 merged and the default branch green (or skipped:unchanged, or deferred), 2 refused (CI not green, a
-// sync conflict, or the merge was refused), 3 reverted (one revert PR merged, default branch green again), 4 error
+// sync conflict, or the merge was refused) or locked (the merge lock is held), 3 reverted (one revert PR merged, default branch green again), 4 error
 // (including bad usage), 5 pending (--verify-main only).
 // It never pushes to the default branch, never forces, never uses --admin or --auto, and never retries a refused
 // merge another way. Reads or writes: writes-files (merges a pull request; on red opens one revert pull request).
 import { spawn } from 'node:child_process';
 import { readFileSync, writeSync } from 'node:fs';
-import { availableParallelism, cpus, homedir, loadavg, tmpdir } from 'node:os';
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { availableParallelism, cpus, homedir, hostname, loadavg, tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
-import { machineLoad, mergePr } from '../claude/lib/merge.js';
+import { LOCK_NAME, machineLoad, makeLock, mergePr } from '../claude/lib/merge.js';
 import { checkPermission, MANAGED_SETTINGS_PATHS } from '../claude/lib/permission.js';
 
 const USAGE = 'usage: node scripts/merge-pr.js <pr> --repo <path> [--worktree <path>] [--dry-run] [--defer-main] | <pr> --repo <path> --verify-main <sha> [--timeout-min <m>] | <pr> --repo <path> --state';
@@ -102,6 +108,32 @@ if (stateOnly) {
   process.exit(0);
 }
 
+// The merge lock, over the real file system. The directory is <git common dir>/agent-loop-merge.lock, so every worktree of
+// the repository shares it; git is asked for the directory only when a lock is first needed (a dry run never asks).
+async function lockPath() {
+  const r = await run('git rev-parse --git-common-dir', { cwd: repo });
+  const out = r.stdout.trim();
+  if (r.code !== 0 || !out) throw new Error(`cannot find the git common directory: ${(r.stderr || r.stdout).trim().slice(0, 200) || `exit ${r.code}`}`);
+  return resolve(repo, out, LOCK_NAME);
+}
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err.code === 'EPERM';
+  }
+}
+const lockFs = {
+  mkdir: (path) => mkdir(path),
+  writeFile: (path, text) => writeFile(path, text),
+  rename: (from, to) => rename(from, to),
+  readFile: (path) => readFile(path, 'utf8'),
+  rm: (path) => rm(path, { recursive: true, force: true }),
+  mtimeMs: async (path) => (await stat(path)).mtimeMs,
+};
+const lock = makeLock({ fs: lockFs, lockPath, pid: process.pid, host: hostname(), now: Date.now, alive: pidAlive });
+
 const result = await mergePr(
   {
     pr,
@@ -114,7 +146,7 @@ const result = await mergePr(
     tempDir: tmpdir(),
     project,
   },
-  { run, sleep: (ms) => new Promise((r) => setTimeout(r, ms)), now: Date.now },
+  { run, sleep: (ms) => new Promise((r) => setTimeout(r, ms)), now: Date.now, lock },
 );
 if (dryRun) {
   const cores = typeof availableParallelism === 'function' ? availableParallelism() : cpus().length;
