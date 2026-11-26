@@ -1,4 +1,4 @@
-# agent-loop v2.4 reliability and measurement: ordered task list (draft 3, after the wave 2 review)
+# agent-loop v2.4 reliability and measurement: ordered task list (draft 4: waves 3 and 4 added after an outside review)
 
 Date: 2026-11-24. Source: the red team in `docs/RED-TEAM.md` (findings 1, 2, 3, 5, 6, 9 and 11). Execution model: as
 v2. Waves; tasks in a wave run in parallel unless a task names a dependency; each wave ends with a tail task that runs
@@ -47,7 +47,8 @@ irreversible production steps; changing a fixed decision or invariant.
 
 - **Bootstrapping.** This loop is built by a checkout it does not change: the session runs the workflow by `scriptPath`
   from `~/dev/agent-loop` (loop 2.3.1), and this repo's `.claude/` links to that checkout. Changes here take effect for
-  other projects only after a human relinks them (H1).
+  other projects only after a human relinks them (H1). Waves 3 and 4 are built by a frozen copy of this repo at the end of wave 2
+  (v2.4.0, a detached worktree), linked into this repo only; the session runs that copy's workflow by `scriptPath`.
 - **Language and tests.** Node ESM, plain JavaScript with JSDoc, Vitest, Python 3 stdlib for scorecard tools
   (`python3 -I`). Tests use no network and no real agent. Test files are `*.test.ts` under `tests/` or `claude/lib/`.
 - **Modules.** New logic is pure functions with injected I/O in `claude/lib/*.js`, bundled into workflow files by
@@ -77,6 +78,10 @@ irreversible production steps; changing a fixed decision or invariant.
 |---|---|---|---|
 | H1 | after the last wave | Relink projects (`install.sh`) to this checkout and point `~/.claude/CLAUDE.md` at it | the loop must not change itself mid-run; Edan's machine |
 | H2 | before wave 1 | Add a `permissions.allow` rule for each script a relay runs (`merge-pr.js`, `wait-ci.js`, `ci-only.js` and, from wave 2, `impact.js` and `test-edits.js`), then confirm once by running one relay in auto mode that the classifier is not consulted, e.g. `Bash(node /path/to/repo/.claude/scripts/merge-pr.js *)` (the path exactly as `project.repo` plus `/.claude/scripts` spells it, absolute and not the link's target), in `~/.claude/settings.json` | every wave merges through that script, and Warden wave 4 was refused there; 2.1's preflight fails without it; permission settings are human-only |
+| H3 | before wave 3 | Freeze v2.4.0 (a detached worktree of this repo at the wave 2 tail's merge), relink this repo only to it, and add `permissions.allow` rules for `impact.js`, `test-edits.js` and `ci-only.js` as for H2 | waves 3 and 4 run on the new loop, so its preflight, pause, impact map and test-edits gate are tried on real work; permission settings are human-only |
+| H4 | after wave 3 | Add the `permissions.deny` read rules `isolation.js` lists, and turn on Claude Code's Bash sandbox | agents run with your privileges; the loop can only check and warn (invariant 6) |
+| H5 | when convenient | Give each wave a GitHub token limited to the one repository (a fine-grained token), in the session's environment | a shared `gh` login reaches every repository you own; creating a token is human-only |
+| H6 | after wave 4 | Run the benchmark comparisons in `docs/BENCHMARK.md` (each costs Claude Code usage) | the before/after needs controlled runs |
 
 ## Wave 1: pure modules (1.5 after 1.2; the rest in parallel)
 
@@ -209,6 +214,125 @@ irreversible production steps; changing a fixed decision or invariant.
   without `Test edits:` gets FIX; a far-out usage limit pauses the rest; the result renders in the scorecard with
   intervals and in the labelling sheet; `escaped.js` over a temp repo feeds `--escaped-from`. Done: `npm run check`
   green on main; `LOOP_VERSION` is 2.4.0.
+
+## Wave 3: close the assumptions a review named (3.3 after 3.2, 3.5 after 3.1, 3.3 and 3.4; the rest in parallel)
+
+Source: an outside architecture review of the loop (2026-11-25) named six assumptions the loop relies on but does not
+check. Each task makes one of them checked, or makes it a stated, opt-in choice. Waves 3 and 4 are built by a frozen
+copy of v2.4.0, not by loop 2.3.1 (see Bootstrapping).
+
+- **3.1 Dependency state.** Owns `claude/lib/deps.js`, `claude/lib/deps.test.ts`, `scripts/dep-state.js`. A CLI
+  `node scripts/dep-state.js --repo <path> --task <id>... [--prefix task/]` prints `{ tasks: { "<id>": { merged, pr,
+  mergeSha, onDefault, reason } } }`: the task's PR is the merged PR whose head branch starts with `<prefix><id>-`
+  (`gh pr list --state merged --limit 1000 --json number,headRefName,mergeCommit`; a task with several, such as a
+  reopen after a revert, uses the latest); `onDefault` is true when `git merge-base --is-ancestor <mergeSha>
+  origin/<default branch>` exits 0 after a `git fetch`; a task with no merged PR has `merged: false` and a `reason`.
+  A task whose latest merged PR was later reverted by a `revert/<id>` merge (2.3's revert rule) has `merged: false`,
+  reason `reverted`. Reads or writes: reads. Test: a temp repo with a fake `gh`: a merged task (true, true); no PR
+  (false); a PR merged but its merge commit not on the default branch (onDefault false); a reopen with two PRs (the
+  latest); a reverted task (false, `reverted`); `gh` failing (exit 1, nothing printed as merged).
+- **3.2 Merge lock in the merger.** Owns `claude/lib/merge.js`, `claude/lib/merge.test.ts`, `scripts/merge-pr.js`.
+  `mergePr` takes a lock before its first write and releases it on every exit path, so the guarantee no longer depends
+  on the caller: the lock is a directory `<git common dir>/agent-loop-merge.lock` made with an atomic `mkdir`,
+  holding `owner.json` `{ pid, host, pr, startedAt }`. A lock is stale when its host is this host and its pid is not
+  alive, or when it is older than `project.mergeLockStaleMin` (default 30); a stale lock is taken over and the takeover
+  logged in `message`. A held lock is waited for, polling every 5 s, up to `project.mergeLockWaitMin` (default 20); then
+  the outcome is `locked`, exit 2, with the holder in `message`. `--dry-run`, `--state` and `--verify-main` do not take
+  the lock (they make no write; a revert inside verify mode does take it). The lock operations are injected deps
+  (`lock.acquire`, `lock.release`), wired to the file system in `merge-pr.js`. The `merge.js` comment "Assumes the
+  caller holds the merge lock" is replaced by the rule. Reads or writes: writes-files (the lock). Test: two
+  concurrent `mergePr` calls on fakes run one after the other; a stale lock (dead pid) is taken over; an old lock is
+  taken over; a held lock past the wait gives `locked`; a throw inside the merge still releases; dry run, state and
+  verify make no lock call.
+- **3.3 Tree reuse needs evidence.** Owns `claude/lib/merge.js`, `claude/lib/merge.test.ts` (after 3.2 merged).
+  Depends on 3.2. Skipping the check on the default branch because the merged tree equals the PR head's tree becomes
+  opt-in: `project.reuseTreeCi` (default false; invariant 4 then holds without exception). When it is true, the skip
+  also needs the main CI workflow file (`.github/workflows/<mainCi>.yml` or `.yaml`, read at the merge commit) to show
+  no event-dependent behaviour: no `github.event_name`, `github.event.`, `github.ref`, `secrets.`, `vars.` or
+  `schedule:`, and an `on:` block whose `push` and `pull_request` triggers run the same jobs (no job-level `if:`). A
+  file that fails the scan, or cannot be read, means the check on main runs, and `message` names the reason; the
+  result gains `treeReuse: { allowed, reason }`. Test: default off runs the check on main; on with a plain workflow
+  skips; each listed pattern prevents the skip; a missing workflow file prevents the skip.
+- **3.4 Isolation checks and rules.** Owns `claude/lib/isolation.js`, `claude/lib/isolation.test.ts`,
+  `scripts/isolation.js`, `claude/hookify.block-credential-reads.local.md`, `install.sh`, `tests/install.test.ts`.
+  `node scripts/isolation.js --repo <path>` prints `{ sandbox: { enabled, source }, denyReads: { present, missing },
+  warnings }` from the same settings files as 1.1's check (user, project, project local, managed): `sandbox.enabled` is
+  read from the key the spec review's spike names; `denyReads` lists which of `Read(~/.ssh/**)`, `Read(~/.aws/**)`,
+  `Read(~/.config/gh/**)`, `Read(~/.netrc)` and `Read(**/.env*)` are present as `permissions.deny` rules. It never
+  writes a setting (invariant 6). The new hookify rule blocks Bash commands that read credentials: paths under
+  `~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.netrc`, `gh auth token`, and `security find-generic-password` or
+  `find-internet-password`. `install.sh` also writes (not links) `.claude/hookify.gh-this-repo.local.md` from the
+  project's `github` field: it blocks `gh` commands whose `--repo`/`-R` value, or whose `gh api repos/<owner>/<name>`
+  path, names another repository; with no `github` field it writes nothing and says so; the file is added to the
+  exclude list. Reads or writes: writes-files (`install.sh` only). Test: settings with and without each deny rule and
+  the sandbox key; a malformed file listed, not fatal; the credential rule's pattern on 10 sample commands (5 blocked,
+  5 allowed, such as `ssh -V` and `git push`); `install.sh` into a temp repo writes the gh rule for `owner/name`, which
+  blocks `gh pr view 1 -R other/repo` and allows `gh pr view 1 -R owner/name` and a bare `gh pr view 1`.
+- **3.5 Wave-loop wiring.** Owns `claude/workflows/wave-loop.js`, `package.json`, `claude/workflows/chain-loop.js` (its
+  `LOOP_VERSION` line only), `docs/OPERATING.md`, `tests/wave-loop-v25.test.ts`, and the exact `calls` lists in tests
+  that pin them. Depends on 3.1, 3.3 and 3.4. (a) Dependencies outside the run: before the build loop, one relay runs
+  `dep-state.js` for every dependency that is not in the run; a task whose such dependency is not `merged` and
+  `onDefault` is parked with the escalation `dependency <id> not merged on the default branch: <reason>`, and so are its
+  dependents; a relay that fails or prints no JSON parks every such task (fail closed); the log line "treated as
+  merged in an earlier run" now says which PR and merge commit proved it. (b) Settle main: a merge does not start while
+  an earlier merge's deferred check on the default branch is still running (workers and critics keep running);
+  `project.settleMain: false` restores 2.4's behaviour. A red check is reverted before the next merge starts.
+  (c) Integration gate: `project.integrationGate` is `"high"` (default), `"medium"` or `"off"`; a finding at or above
+  the level fails the machine gate with one escalation per finding, `integration: <what> (<where>)`; `"off"` keeps it
+  advisory as in 2.4. (d) Preflight runs `isolation.js` once beside the merge dry run; each warning is logged as a line
+  starting `WARNING: isolation:` and recorded in `result.isolation`; it never fails the wave. (e) `LOOP_VERSION` and
+  `package.json` become `2.5.0`; `docs/OPERATING.md` documents `mergeLockStaleMin`, `mergeLockWaitMin`, `reuseTreeCi`,
+  `settleMain`, `integrationGate`, `isolation.js`, `dep-state.js` and H4 and H5. Test: a relaunch whose missing
+  dependency `dep-state` reports merged starts it; not merged parks it and its dependent; a failed relay parks them; a
+  second merge waits for the first merge's deferred check (the call order shows it) and does not wait with
+  `settleMain: false`; one high integration finding fails the gate, and passes with `integrationGate: "off"`; isolation
+  warnings are logged and the gate unchanged.
+- **3.T Wave 3 tail.** Owns `tests/v25-e2e.test.ts`. Depends on 3.1, 3.2, 3.3, 3.4 and 3.5. Test: a stubbed wave with
+  a fake `gh` and a temp repo: two merges from two concurrent `merge-pr.js` processes are serialized by the lock; a
+  relaunch with an unmerged outside dependency parks; `reuseTreeCi` off runs the check on main; a high integration
+  finding fails the gate. Done: `npm run check` green on main; `LOOP_VERSION` is 2.5.0.
+
+## Wave 4: controlled benchmark (4.3 after 4.1 and 4.2; 4.4 after 4.3)
+
+Source: the same review. Results so far are observational (different tasks, machine load, mid-run fixes). Wave 4
+builds a harness that replays one task graph from one starting commit under different loop configurations, with no
+GitHub repository and no CI minutes, and reports makespan, tokens, merge rate, correctness and human interventions.
+Running the comparisons is a human step (H6): each costs Claude Code usage.
+
+- **4.1 Fake GitHub.** Owns `bench/fake-gh.js`, `bench/fake-gh.test.ts`, `bench/bin/gh`. A `gh` replacement backed by a
+  local bare remote and a state directory (`$BENCH_STATE`), covering exactly the subcommands, flags and `--json` fields
+  the loop's scripts, workflows and agent prompts use (the spec review lists them from a grep; at least `pr create`,
+  `pr view`, `pr list`, `pr edit`, `pr ready`, `pr diff`, `pr checks`, `pr merge`, `run list`, `run view`, `run watch`).
+  PRs are JSON files; `pr merge --merge` makes a real `git merge --no-ff` into the bare remote's default branch and
+  refuses with GitHub's message when the branch conflicts; checks and runs come from 4.2's records. An unsupported
+  subcommand or field exits 1 naming it. Reads or writes: writes-files (the state directory and the bare remote).
+  Test: create, view, list, edit, ready, diff, merge (clean and conflicting), checks with pending, green and red runs,
+  `--json` field selection and `-q` jq expressions as the loop uses them; an unknown subcommand.
+- **4.2 Local CI.** Owns `bench/ci.js`, `bench/ci.test.ts`. A `post-receive` hook installed in the bare remote records a
+  run per pushed sha (event `pull_request` for a PR head, `push` for the default branch) and runs the project's install
+  and check in a clean clone at that sha, at most `BENCH_CI_JOBS` at once (default 2), recording `{ id, sha, event,
+  status, conclusion, startedAt, durationMs, logTail }`. Reads or writes: writes-files. Test: a push records a queued
+  run that turns green or red; the concurrency cap holds; a run's log tail is kept for `run view --log-failed`.
+- **4.3 Scenarios and prepare.** Owns `bench/scenario.js`, `bench/scenario.test.ts`, `scripts/bench.js`,
+  `bench/scenarios/v24-wave-1.json`, `bench/scenarios/synthetic-6.json`. Depends on 4.1 and 4.2. A scenario is `{ name,
+  source, baseSha, spec, wave, holdout: [test files], overrides }`. `node scripts/bench.js prepare <scenario> --loop
+  <loop checkout> --config <overrides.json> --out <dir>` makes the bare remote at `baseSha`, a working clone, the loop
+  links (`install.sh`), `loop.local.json` with the overrides, and the holdout tests moved out of the clone (the agents
+  never see them), and prints the environment for the session (`PATH=<dir>/bin:$PATH`, `BENCH_STATE`) and the wave
+  args. Two scenarios: this repo's v2.4 wave 1 (base `844e886`, the commit wave 1 started from; holdout `tests/v24-wave1.test.ts`, wave 1's tail test)
+  and a synthetic six-task graph with two dependency chains. Reads or writes: writes-files. Test: prepare a scenario in
+  a temp dir: the clone is at `baseSha`, the holdout files are absent from it, the gh shim answers `pr list`.
+- **4.4 Metrics and compare.** Owns `bench/metrics.js`, `bench/metrics.test.ts`, `scripts/bench.js` (the `collect` and
+  `compare` subcommands, after 4.3 merged). Depends on 4.3. `bench.js collect <dir> <run output.json>...` prints one
+  record: makespan (first agent start to last merge), agent minutes, tokens per role, tasks merged of tasks, fix rounds,
+  escalations (human interventions), reverts, the holdout tests' pass count when run on the final default branch, and
+  the machine's load average samples. `bench.js compare <record.json>...` groups records by config and prints, per
+  metric, the mean with a 95% interval (Wilson for rates, a t interval for times and tokens) and the difference between
+  two configs, saying when the intervals overlap. Test: collect on a fixture run and state; compare two groups of three
+  records with hand-computed intervals.
+- **4.T Wave 4 tail.** Owns `tests/bench-e2e.test.ts`, `docs/BENCHMARK.md`. Depends on 4.1 to 4.4. Test: prepare the
+  synthetic scenario, drive a stubbed wave through the fake `gh` and local CI (no real agent), collect and compare two
+  configs. `docs/BENCHMARK.md` says how to run a comparison and what it costs. Done: `npm run check` green on main.
 
 ## Later (not in this spec)
 
