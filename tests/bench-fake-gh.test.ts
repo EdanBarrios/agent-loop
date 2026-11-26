@@ -1,16 +1,19 @@
-import { execFile, execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 // @ts-expect-error plain JavaScript module with JSDoc
-import { enqueueRun, installHook, listRuns } from '../bench/ci.js';
+import { enqueueRun, installHook, listRuns, runRun } from '../bench/ci.js';
+// @ts-expect-error plain JavaScript module with JSDoc
+import { runGh } from '../bench/fake-gh.js';
 
 // Fake GitHub for the benchmark: bench/bin/gh answers the subcommands the loop uses from a bare remote and a state
 // directory ($BENCH_STATE), and the runs come from the local CI of bench/ci.js. Real git, no network, no agent.
 const root = join(import.meta.dirname, '..');
 const SHIM = join(root, 'bench', 'bin', 'gh');
 const roots: string[] = [];
+vi.setConfig({ testTimeout: 60000 });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const fixture = (name: string) => JSON.parse(readFileSync(join(root, 'tests', 'fixtures', name), 'utf8'));
 
@@ -37,7 +40,7 @@ async function waitFor<T>(fn: () => T | undefined | false, ms = 20000): Promise<
 
 type Fx = { dir: string; remote: string; work: string; state: string; gate: string };
 /** A bare remote with main (ok.txt, c.txt), a working clone on main, and local CI that waits for the gate file. */
-function setup(opts: { open?: boolean; ci?: boolean } = {}): Fx {
+function setup(opts: { open?: boolean; ci?: boolean; hook?: boolean } = {}): Fx {
   const dir = mkdtempSync(join(tmpdir(), 'bench-gh-'));
   roots.push(dir);
   const f: Fx = { dir, remote: join(dir, 'remote.git'), work: join(dir, 'work'), state: join(dir, 'state'), gate: join(dir, 'gate') };
@@ -55,7 +58,8 @@ function setup(opts: { open?: boolean; ci?: boolean } = {}): Fx {
       join(f.state, 'ci.json'),
       JSON.stringify({ install: 'true', check: `while [ ! -f ${f.gate} ]; do sleep 0.05; done; test -f ok.txt && echo check-ok || { echo "check failed: ok.txt is missing"; exit 1; }`, mainCi: 'ci' }),
     );
-    installHook(f.remote, f.state);
+    // the post-receive hook starts node on every push, which is slow: only the tests about runs and checks install it
+    if (opts.hook ?? opts.open === false) installHook(f.remote, f.state);
   }
   if (opts.open !== false) writeFileSync(f.gate, 'go');
   return f;
@@ -77,28 +81,19 @@ function branch(f: Fx, name: string, files: Record<string, string | null>, messa
 const mainTip = (f: Fx) => git(f.remote, 'rev-parse', 'refs/heads/main');
 
 type R = { code: number | null; out: string; err: string };
-function gh(f: Fx, args: string[], o: { cwd?: string; input?: string; env?: Record<string, string | undefined> } = {}): R {
-  const r = spawnSync(SHIM, args, {
-    cwd: o.cwd ?? f.work, input: o.input, encoding: 'utf8', env: cleanEnv({ BENCH_STATE: f.state, ...(o.env ?? {}) }),
-  });
-  return { code: r.status, out: r.stdout ?? '', err: r.stderr ?? '' };
-}
-function ghAsync(f: Fx, args: string[]): Promise<R> {
-  return new Promise((done) => {
-    execFile(SHIM, args, { cwd: f.work, encoding: 'utf8', env: cleanEnv({ BENCH_STATE: f.state, BENCH_POLL_MS: '100' }) }, (e, out, err) => {
-      done({ code: e ? ((e as { code?: number }).code ?? 1) : 0, out, err });
-    });
-  });
+/**
+ * Runs the fake gh in process (starting node costs seconds on a loaded machine, and the runner a merge starts is another
+ * node, so a merge only records its push run); the shim and the real runner are tested apart.
+ */
+function gh(f: Fx, args: string[], o: { cwd?: string; input?: string; env?: Record<string, string | undefined>; sleep?: (ms: number) => void } = {}): R {
+  const r = runGh(args, { cwd: o.cwd ?? f.work, stdin: () => o.input ?? '', env: { BENCH_STATE: f.state, ...(o.env ?? {}) }, sleep: o.sleep, startRuns: false });
+  return { code: r.code, out: r.stdout, err: r.stderr };
 }
 const json = (r: R) => {
   expect(r.err).toBe('');
   expect(r.code).toBe(0);
   return JSON.parse(r.out);
 };
-async function settle(f: Fx) {
-  writeFileSync(f.gate, 'go');
-  await waitFor(() => listRuns(f.state).every((r: { status: string }) => r.status === 'completed'));
-}
 function create(f: Fx, head: string, title = `title of ${head}`, extra: string[] = []) {
   return gh(f, ['pr', 'create', '--base', 'main', '--head', head, '--title', title, '--body', `body of ${head}`, ...extra]);
 }
@@ -114,6 +109,9 @@ describe('refusals', () => {
     const unset = spawnSync(SHIM, ['pr', 'list'], { cwd: f.work, encoding: 'utf8', env: cleanEnv() });
     expect(unset.status).toBe(1);
     expect(unset.stderr).toContain('BENCH_STATE');
+    const shim = spawnSync(SHIM, ['pr', 'list', '--json', 'number'], { cwd: f.work, encoding: 'utf8', env: cleanEnv({ BENCH_STATE: f.state }) });
+    expect(shim.status).toBe(0);
+    expect(shim.stdout).toBe('[]\n');
     const gone = gh(f, ['pr', 'list'], { env: { BENCH_STATE: join(f.dir, 'nowhere') } });
     expect(gone.code).toBe(1);
     expect(gone.err).toContain('BENCH_STATE');
@@ -487,7 +485,9 @@ describe('pr merge', () => {
     const list = json(gh(f, ['run', 'list', '--branch', 'main', '--workflow', 'ci', '--commit', merged, '--json', 'databaseId,status,conclusion']));
     expect(list).toHaveLength(1);
     expect(list[0].databaseId).toBe(runs[0].id);
-    await settle(f);
+    expect(list[0]).toMatchObject({ status: 'queued', conclusion: '' });
+    // the record is runnable: bench/ci.js clones the bare remote at the merge sha and runs the check there
+    await runRun(f.state, runs[0].id, { remote: f.remote });
     expect(json(gh(f, ['run', 'list', '--branch', 'main', '--workflow', 'ci', '--commit', merged, '--json', 'databaseId,status,conclusion']))[0]).toMatchObject({ status: 'completed', conclusion: 'success' });
   });
 
@@ -501,7 +501,6 @@ describe('pr merge', () => {
     expect(again.code).toBe(1);
     expect(again.err).toMatch(/already merged/);
     expect(mainTip(f)).toBe(tip);
-    await settle(f);
   });
 
   it('refuses with GitHub\'s message when the branch conflicts, and changes nothing', async () => {
@@ -521,7 +520,6 @@ describe('pr merge', () => {
     expect(git(f.remote, 'for-each-ref', 'refs/heads/task/y')).not.toBe('');
     expect(json(gh(f, ['pr', 'view', '2', '--json', 'state'])).state).toBe('OPEN');
     expect(json(gh(f, ['pr', 'view', '2', '--json', 'mergeable,mergeStateStatus']))).toEqual({ mergeStateStatus: 'DIRTY', mergeable: 'CONFLICTING' });
-    await settle(f);
   });
 
   it('refuses a stale --match-head-commit, a draft, a missing strategy and ci.json missing, and changes nothing', async () => {
@@ -541,7 +539,6 @@ describe('pr merge', () => {
     const draft = gh(f, ['pr', 'merge', '2', '--merge']);
     expect(draft.code).toBe(1);
     expect(draft.err).toMatch(/draft/);
-    await settle(f);
 
     const g = setup({ ci: false });
     branch(g, 'task/a', { 'a.txt': 'a\n' });
@@ -597,33 +594,45 @@ describe('pr merge', () => {
     expect(git(f.remote, 'show', 'main:r2.txt')).toBe('r2');
     expect(git(f.remote, 'show', 'main:m.txt')).toBe('m');
     expect(json(gh(f, ['pr', 'view', '3', '--json', 'mergeCommit'])).mergeCommit.oid).toBe(mainTip(f));
-    await settle(f);
   });
 });
 
-describe('checks and runs', () => {
-  it('reports pending, then green: exit 8 and 0, the fixture shapes, and the plain table', async () => {
-    const f = setup({ open: false });
+describe('checks and runs from the records of bench/ci.js', () => {
+  type Run = { id: number; sha: string; status: string; conclusion: string | null };
+  /** Writes a run record the way bench/ci.js would, with no runner: tests set the state they need. */
+  function record(f: Fx, sha: string, patch: Record<string, unknown> = {}): Run {
+    const run = enqueueRun(f.state, { sha, branch: String(patch.branch ?? 'task/a'), event: (patch.event as string) ?? 'pull_request', start: false });
+    return setRun(f, run.id, patch);
+  }
+  function setRun(f: Fx, id: number, patch: Record<string, unknown>): Run {
+    const path = join(f.state, 'runs', `${id}.json`);
+    const next = { ...JSON.parse(readFileSync(path, 'utf8')), ...patch };
+    writeFileSync(path, JSON.stringify(next));
+    return next;
+  }
+  const done = (conclusion: string, extra: Record<string, unknown> = {}) => ({ status: 'completed', conclusion, durationMs: 62000, ...extra });
+
+  it('reports pending, then green, then red: exit 8, 0 and 1, the fixture shapes, and the plain table', () => {
+    const f = setup();
     const tip = branch(f, 'task/a', { 'a.txt': 'a\n' });
     create(f, 'task/a');
-    const run = await waitFor(() => listRuns(f.state).find((r: { sha: string }) => r.sha === tip));
-    expect(run.event).toBe('pull_request');
+    const run = record(f, tip, { status: 'in_progress' });
 
     const pending = gh(f, ['pr', 'checks', '1', '--json', 'name,state,bucket,link,workflow']);
     expect(pending.code).toBe(8);
     const rows = JSON.parse(pending.out);
     const fx = fixture('gh-pr-checks-pending.json');
     expect(Object.keys(rows[0])).toEqual(Object.keys(fx[0]));
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ bucket: 'pending', name: 'ci', workflow: 'ci' });
-    expect(['QUEUED', 'IN_PROGRESS', 'PENDING']).toContain(rows[0].state);
-    expect(rows[0].link).toMatch(/^https:\/\/\S+\/actions\/runs\/\d+/);
+    expect(rows).toEqual([{ bucket: 'pending', link: `https://bench.invalid/bench/actions/runs/${run.id}/job/${run.id}`, name: 'ci', state: 'IN_PROGRESS', workflow: 'ci' }]);
+    expect(rows[0].state).toBe(fx[0].state);
     const plainPending = gh(f, ['pr', 'checks', '1']);
     expect(plainPending.code).toBe(8);
-    expect(plainPending.out.trim().split('\t').slice(0, 2)).toEqual(['ci', 'pending']);
+    expect(plainPending.out.trim().split('\t').slice(0, 3)).toEqual(['ci', 'pending', '']);
+    expect(gh(f, ['pr', 'checks', '1', '--json', 'state']).out).toBe('[{"state":"IN_PROGRESS"}]\n');
+    setRun(f, run.id, { status: 'queued' });
+    expect(JSON.parse(gh(f, ['pr', 'checks', '1', '--json', 'state,bucket']).out)).toEqual([{ bucket: 'pending', state: 'QUEUED' }]);
 
-    writeFileSync(f.gate, 'go');
-    await waitFor(() => listRuns(f.state).every((r: { status: string }) => r.status === 'completed'));
+    setRun(f, run.id, done('success'));
     const green = gh(f, ['pr', 'checks', '1', '--json', 'name,state,bucket,link,workflow']);
     expect(green.code).toBe(0);
     const g = JSON.parse(green.out);
@@ -632,146 +641,173 @@ describe('checks and runs', () => {
     expect(g[0]).toMatchObject({ bucket: gfx[0].bucket, state: gfx[0].state, name: 'ci', workflow: 'ci' });
     const plain = gh(f, ['pr', 'checks', '1']);
     expect(plain.code).toBe(0);
-    const cols = plain.out.trim().split('\t');
-    expect(cols.slice(0, 2)).toEqual(['ci', 'pass']);
-    expect(cols[2]).toMatch(/^\d+(h|m|s)/);
-    expect(cols[3]).toMatch(/^https:\/\//);
-  }, 40000);
+    expect(plain.out.trim().split('\t').slice(0, 3)).toEqual(['ci', 'pass', '1m2s']);
+    expect(plain.out.trim().split('\t')[3]).toMatch(/^https:\/\//);
 
-  it('reports red: exit 1, bucket fail and state FAILURE as in the fixture', async () => {
-    const f = setup();
-    branch(f, 'task/bad', { 'ok.txt': null });
+    const bad = branch(f, 'task/bad', { 'b.txt': 'b\n' });
     create(f, 'task/bad');
-    await waitFor(() => listRuns(f.state).length === 1 && listRuns(f.state).every((r: { status: string }) => r.status === 'completed'));
-    const red = gh(f, ['pr', 'checks', '1', '--json', 'name,state,bucket,link,workflow']);
+    record(f, bad, { branch: 'task/bad', ...done('failure') });
+    const red = gh(f, ['pr', 'checks', '2', '--json', 'name,state,bucket,link,workflow']);
     expect(red.code).toBe(1);
-    const rows = JSON.parse(red.out);
-    const fx = fixture('gh-pr-checks-red.json');
-    expect(rows[0]).toMatchObject({ bucket: fx[0].bucket, state: fx[0].state, name: 'ci' });
-    expect(gh(f, ['pr', 'checks', '1']).code).toBe(1);
-    expect(gh(f, ['pr', 'checks', '1']).out.split('\t')[1]).toBe('fail');
-  }, 40000);
+    const fxr = fixture('gh-pr-checks-red.json');
+    expect(JSON.parse(red.out)[0]).toMatchObject({ bucket: fxr[0].bucket, state: fxr[0].state, name: 'ci' });
+    expect(gh(f, ['pr', 'checks', '2']).out.split('\t')[1]).toBe('fail');
+    const cancelled = branch(f, 'task/c', { 'c2.txt': 'c\n' });
+    create(f, 'task/c');
+    record(f, cancelled, { branch: 'task/c', ...done('cancelled') });
+    expect(gh(f, ['pr', 'checks', '3', '--json', 'bucket,state']).code).toBe(1);
+    expect(JSON.parse(gh(f, ['pr', 'checks', '3', '--json', 'bucket,state']).out)).toEqual([{ bucket: 'cancel', state: 'CANCELLED' }]);
+  });
 
-  it('says no checks reported when no run matches the head, and the latest run of a sha decides', async () => {
-    const f = setup({ ci: false });
-    branch(f, 'task/a', { 'a.txt': 'a\n' });
+  it('says no checks reported when no run matches the head, and the latest run of a sha decides', () => {
+    const f = setup();
+    const tip = branch(f, 'task/a', { 'a.txt': 'a\n' });
     create(f, 'task/a');
     const none = gh(f, ['pr', 'checks', '1']);
     expect(none.code).toBe(1);
     expect(none.err).toContain("no checks reported on the 'task/a' branch");
     expect(none.out).toBe('');
+    record(f, 'a'.repeat(40), done('success'));
+    expect(gh(f, ['pr', 'checks', '1']).code).toBe(1);
 
-    const g = setup();
-    const tip = branch(g, 'task/a', { 'a.txt': 'a\n' });
-    create(g, 'task/a');
-    await waitFor(() => listRuns(g.state).every((r: { status: string }) => r.status === 'completed') && listRuns(g.state).length === 1);
-    expect(gh(g, ['pr', 'checks', '1']).code).toBe(0);
-    enqueueRun(g.state, { sha: tip, branch: 'task/a', event: 'pull_request', start: false });
-    const rerun = gh(g, ['pr', 'checks', '1', '--json', 'bucket']);
+    record(f, tip, done('success'));
+    expect(gh(f, ['pr', 'checks', '1']).code).toBe(0);
+    record(f, tip, { status: 'queued' });
+    const rerun = gh(f, ['pr', 'checks', '1', '--json', 'bucket']);
     expect(rerun.code).toBe(8);
     expect(JSON.parse(rerun.out)).toEqual([{ bucket: 'pending' }]);
-  }, 40000);
+  });
 
-  it('--watch waits until no check is pending and prints the final table; --fail-fast returns on a failure', async () => {
-    const f = setup({ open: false });
-    branch(f, 'task/a', { 'a.txt': 'a\n' });
-    create(f, 'task/a');
-    const watching = ghAsync(f, ['pr', 'checks', '1', '--watch', '--fail-fast']);
-    await sleep(600);
-    writeFileSync(f.gate, 'go');
-    const r = await watching;
-    expect(r.code).toBe(0);
-    expect(r.out).toMatch(/^ci\tpass\t/m);
-
-    const g = setup({ open: false });
-    branch(g, 'task/bad', { 'ok.txt': null });
-    create(g, 'task/bad');
-    const failing = ghAsync(g, ['pr', 'checks', '1', '--watch', '--fail-fast']);
-    await sleep(300);
-    writeFileSync(g.gate, 'go');
-    const red = await failing;
-    expect(red.code).toBe(1);
-    expect(red.out).toMatch(/^ci\tfail\t/m);
-    await settle(g);
-  }, 40000);
-
-  it('lists runs as in the fixtures: in progress with an empty conclusion, success, failure; and filters them', async () => {
-    const f = setup({ open: false });
+  it('--watch waits until no check is pending and prints the final table', () => {
+    const f = setup();
     const tip = branch(f, 'task/a', { 'a.txt': 'a\n' });
-    const run = await waitFor(() => listRuns(f.state).find((r: { sha: string }) => r.sha === tip));
+    create(f, 'task/a');
+    const run = record(f, tip, { status: 'in_progress' });
+    const sleeps: number[] = [];
+    const r = gh(f, ['pr', 'checks', '1', '--watch', '--fail-fast'], {
+      env: { BENCH_POLL_MS: '250' },
+      sleep: (ms) => {
+        sleeps.push(ms);
+        if (sleeps.length === 2) setRun(f, run.id, done('success'));
+      },
+    });
+    expect(sleeps).toEqual([250, 250]);
+    expect(r.code).toBe(0);
+    expect(r.out).toMatch(/^ci\tpass\t1m2s\t/);
+    expect(r.out.trim().split('\n')).toHaveLength(1);
+  });
+
+  it('--watch --fail-fast returns on the first failure while another check is still pending', () => {
+    const f = setup();
+    const tip = branch(f, 'task/a', { 'a.txt': 'a\n' });
+    create(f, 'task/a');
+    record(f, tip, { status: 'in_progress' });
+    record(f, tip, { name: 'lint', workflow: 'lint', ...done('failure') });
+    const sleeps: number[] = [];
+    const fast = gh(f, ['pr', 'checks', '1', '--watch', '--fail-fast'], { sleep: (ms) => void sleeps.push(ms) });
+    expect(sleeps).toEqual([]);
+    expect(fast.code).toBe(1);
+    expect(fast.out).toMatch(/^lint\tfail\t/m);
+    expect(fast.out).toMatch(/^ci\tpending\t/m);
+    const slow = gh(f, ['pr', 'checks', '1', '--watch'], {
+      env: { BENCH_POLL_MS: '5' },
+      sleep: () => {
+        const ci = listRuns(f.state).find((r: { name: string }) => r.name === 'ci');
+        setRun(f, ci.id, done('success'));
+      },
+    });
+    expect(slow.code).toBe(1);
+    expect(slow.out).toMatch(/^ci\tpass\t/m);
+  });
+
+  it('lists runs as in the fixtures: in progress with an empty conclusion, success, failure; and filters them', () => {
+    const f = setup();
+    const a = record(f, 'a'.repeat(40), { branch: 'task/a', status: 'in_progress' });
     const fields = 'conclusion,databaseId,status';
     const open = json(gh(f, ['run', 'list', '--branch', 'task/a', '--json', fields]));
     const fx = fixture('gh-run-list-in-progress.json');
     expect(Object.keys(open[0])).toEqual(Object.keys(fx[0]));
-    expect(open[0].conclusion).toBe('');
-    expect(['queued', 'in_progress']).toContain(open[0].status);
-    expect(open[0].databaseId).toBe(run.id);
+    expect(open).toEqual([{ conclusion: '', databaseId: a.id, status: 'in_progress' }]);
     expect(Number.isInteger(open[0].databaseId)).toBe(true);
 
-    writeFileSync(f.gate, 'go');
-    await waitFor(() => listRuns(f.state).every((r: { status: string }) => r.status === 'completed'));
-    const ok = json(gh(f, ['run', 'list', '--branch', 'task/a', '--workflow', 'ci', '--commit', tip, '--json', fields]));
-    expect(ok).toEqual([{ conclusion: 'success', databaseId: run.id, status: 'completed' }]);
+    setRun(f, a.id, done('success'));
+    const ok = json(gh(f, ['run', 'list', '--branch', 'task/a', '--workflow', 'ci', '--commit', 'a'.repeat(40), '--json', fields]));
+    expect(ok).toEqual([{ conclusion: 'success', databaseId: a.id, status: 'completed' }]);
     expect(Object.keys(ok[0])).toEqual(Object.keys(fixture('gh-run-list-success.json')[0]));
 
-    const bad = branch(f, 'task/bad', { 'ok.txt': null });
-    await waitFor(() => listRuns(f.state).find((r: { sha: string; status: string }) => r.sha === bad && r.status === 'completed'));
-    expect(json(gh(f, ['run', 'list', '--commit', bad, '--json', fields]))[0]).toMatchObject({ conclusion: fixture('gh-run-list-failure.json')[0].conclusion, status: 'completed' });
-    expect(json(gh(f, ['run', 'list', '--branch', 'main', '--json', 'databaseId']))).toEqual([]);
+    const b = record(f, 'b'.repeat(40), { branch: 'main', event: 'push', ...done('failure') });
+    expect(json(gh(f, ['run', 'list', '--commit', 'b'.repeat(40), '--json', fields]))).toEqual([{ conclusion: 'failure', databaseId: b.id, status: 'completed' }]);
+    expect(Object.keys(json(gh(f, ['run', 'list', '--commit', 'b'.repeat(40), '--json', fields]))[0])).toEqual(Object.keys(fixture('gh-run-list-failure.json')[0]));
+    expect(json(gh(f, ['run', 'list', '--branch', 'main', '--json', 'databaseId']))).toEqual([{ databaseId: b.id }]);
     expect(json(gh(f, ['run', 'list', '--workflow', 'other', '--json', 'databaseId']))).toEqual([]);
-    expect(json(gh(f, ['run', 'list', '--limit', '1', '--json', 'databaseId']))).toHaveLength(1);
-    const newest = json(gh(f, ['run', 'list', '--json', 'databaseId'])).map((r: { databaseId: number }) => r.databaseId);
-    expect(newest).toEqual([...newest].sort((a, b) => b - a));
-    const plain = gh(f, ['run', 'list', '--commit', tip]).out.trim().split('\t');
-    expect(plain.slice(0, 2)).toEqual(['completed', 'success']);
-    expect(plain).toContain('ci');
-    expect(plain).toContain('task/a');
-    expect(plain).toContain('pull_request');
-    expect(plain).toContain(String(run.id));
-  }, 40000);
+    expect(json(gh(f, ['run', 'list', '--workflow', 'ci.yml', '--json', 'databaseId']))).toHaveLength(2);
+    expect(json(gh(f, ['run', 'list', '--limit', '1', '--json', 'databaseId']))).toEqual([{ databaseId: b.id }]);
+    expect(json(gh(f, ['run', 'list', '--json', 'databaseId'])).map((r: { databaseId: number }) => r.databaseId)).toEqual([b.id, a.id]);
+    const plain = gh(f, ['run', 'list', '--branch', 'task/a']).out.trim().split('\t');
+    expect(plain[0]).toBe('completed');
+    expect(plain[1]).toBe('success');
+    expect(plain.slice(3, 7)).toEqual(['ci', 'task/a', 'pull_request', String(a.id)]);
+    expect(plain[7]).toBe('1m2s');
+    expect(gh(f, ['run', 'list', '--branch', 'nowhere']).err).toMatch(/No runs found/);
+  });
 
-  it('prints the failed log of a red run, nothing for a green one, and refuses one still running', async () => {
-    const f = setup({ open: false });
-    const bad = branch(f, 'task/bad', { 'ok.txt': null });
-    const good = branch(f, 'task/good', { 'g.txt': 'g\n' });
-    const byBad = await waitFor(() => listRuns(f.state).find((r: { sha: string }) => r.sha === bad));
-    const running = gh(f, ['run', 'view', String(byBad.id), '--log-failed']);
-    expect(running.code).toBe(1);
-    expect(running.err).toMatch(/in progress|not completed|still/i);
-    await settle(f);
-    const badRun = listRuns(f.state).find((r: { sha: string }) => r.sha === bad);
-    const goodRun = listRuns(f.state).find((r: { sha: string }) => r.sha === good);
-    const log = gh(f, ['run', 'view', String(badRun.id), '--log-failed']);
+  it('prints the failed log of a red run, nothing for a green one, and refuses one still running', () => {
+    const f = setup();
+    const running = record(f, 'a'.repeat(40), { status: 'in_progress' });
+    const bad = record(f, 'b'.repeat(40), { branch: 'task/bad', ...done('failure', { logTail: '$ npm test\n1 failed\ncheck failed: ok.txt is missing\nexit 1\n' }) });
+    const good = record(f, 'c'.repeat(40), { branch: 'task/good', ...done('success', { logTail: '$ npm test\nok\n' }) });
+    const early = gh(f, ['run', 'view', String(running.id), '--log-failed']);
+    expect(early.code).toBe(1);
+    expect(early.err).toMatch(/still in progress/);
+    const log = gh(f, ['run', 'view', String(bad.id), '--log-failed']);
     expect(log.code).toBe(0);
-    expect(log.out).toContain('check failed: ok.txt is missing');
-    const ok = gh(f, ['run', 'view', String(goodRun.id), '--log-failed']);
-    expect(ok.code).toBe(0);
-    expect(ok.out).toBe('');
-    const view = gh(f, ['run', 'view', String(badRun.id)]);
+    expect(log.out).toBe('$ npm test\n1 failed\ncheck failed: ok.txt is missing\nexit 1\n');
+    expect(gh(f, ['run', 'view', String(good.id), '--log-failed']).out).toBe('');
+    const view = gh(f, ['run', 'view', String(bad.id)]);
     expect(view.code).toBe(0);
-    expect(view.out).toContain(String(badRun.id));
+    expect(view.out).toContain(String(bad.id));
     expect(view.out).toContain('task/bad');
-    expect(json(gh(f, ['run', 'view', String(badRun.id), '--json', 'databaseId,status,conclusion']))).toEqual({ conclusion: 'failure', databaseId: badRun.id, status: 'completed' });
+    expect(json(gh(f, ['run', 'view', String(bad.id), '--json', 'databaseId,status,conclusion']))).toEqual({ conclusion: 'failure', databaseId: bad.id, status: 'completed' });
     expect(gh(f, ['run', 'view', '--log-failed']).code).toBe(1);
-    expect(gh(f, ['run', 'view', '99999', '--log-failed']).code).toBe(1);
-  }, 40000);
+    const missing = gh(f, ['run', 'view', '99999', '--log-failed']);
+    expect(missing.code).toBe(1);
+    expect(missing.err).toContain('99999');
+  });
 
-  it('run watch waits for the run, and --exit-status turns a failure into exit 1', async () => {
+  it('run watch waits for the run, and --exit-status turns a failure into exit 1', () => {
+    const f = setup();
+    const run = record(f, 'a'.repeat(40), { status: 'in_progress' });
+    let slept = 0;
+    const ok = gh(f, ['run', 'watch', String(run.id), '--exit-status'], {
+      sleep: () => {
+        slept++;
+        setRun(f, run.id, done('success'));
+      },
+    });
+    expect(slept).toBe(1);
+    expect(ok.code).toBe(0);
+    const bad = record(f, 'b'.repeat(40), done('failure'));
+    expect(gh(f, ['run', 'watch', String(bad.id), '--exit-status']).code).toBe(1);
+    expect(gh(f, ['run', 'watch', String(bad.id)]).code).toBe(0);
+    expect(gh(f, ['run', 'watch', '99999']).code).toBe(1);
+    expect(gh(f, ['run', 'watch']).code).toBe(1);
+  });
+
+  // The one test with the real hook and runner: push records a queued run, the check waits for the gate, then the
+  // run turns green and `pr checks` follows it (red runs are covered by the hand-written records above and by bench-ci).
+  it('follows the real local CI of bench/ci.js: pending while the check waits, then green', async () => {
     const f = setup({ open: false });
-    const tip = branch(f, 'task/good', { 'g.txt': 'g\n' });
+    const tip = branch(f, 'task/a', { 'a.txt': 'a\n' });
+    create(f, 'task/a');
     const run = await waitFor(() => listRuns(f.state).find((r: { sha: string }) => r.sha === tip));
-    const watching = ghAsync(f, ['run', 'watch', String(run.id), '--exit-status']);
-    await sleep(500);
+    expect(run.event).toBe('pull_request');
+    const pending = gh(f, ['pr', 'checks', '1', '--json', 'bucket']);
+    expect(pending.code).toBe(8);
+    expect(JSON.parse(pending.out)).toEqual([{ bucket: 'pending' }]);
     writeFileSync(f.gate, 'go');
-    const done = await watching;
-    expect(done.code).toBe(0);
-
-    const bad = branch(f, 'task/bad', { 'ok.txt': null });
-    const badRun = await waitFor(() => listRuns(f.state).find((r: { sha: string; status: string }) => r.sha === bad && r.status === 'completed'));
-    expect((await ghAsync(f, ['run', 'watch', String(badRun.id), '--exit-status'])).code).toBe(1);
-    expect((await ghAsync(f, ['run', 'watch', String(badRun.id)])).code).toBe(0);
-    expect((await ghAsync(f, ['run', 'watch', '99999'])).code).toBe(1);
-  }, 40000);
+    await waitFor(() => listRuns(f.state).every((r: { status: string }) => r.status === 'completed'), 150000);
+    expect(gh(f, ['pr', 'checks', '1']).code).toBe(0);
+  }, 400000);
 });
 
 describe('jq expressions as the loop uses them', () => {

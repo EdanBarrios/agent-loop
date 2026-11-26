@@ -1,0 +1,4 @@
+#!/bin/sh
+# agent-loop bench: the fake gh (bench/fake-gh.js). Put this directory first on PATH, with BENCH_STATE set.
+dir=$(cd "$(dirname "$0")" && pwd)
+exec node "$dir/../fake-gh.js" "$@"
