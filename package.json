@@ -1,6 +1,6 @@
 {
   "name": "agent-loop",
-  "version": "2.3.1",
+  "version": "2.4.0",
   "description": "Build a codebase with parallel Claude Code agents: a worker per task, a separate critic per PR, CI-gated merges and a scorecard per wave.",
   "license": "MIT",
   "repository": {

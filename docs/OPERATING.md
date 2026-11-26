@@ -73,11 +73,19 @@ when a wave reports another `loopVersion` than its own.
 Build the args from the spec instead of by hand:
 
 ```
-node ~/dev/agent-loop/scripts/wave-args.js --repo <repo> --wave <id> [--tail <task id>] [--notes <text>] > args.json
+node ~/dev/agent-loop/scripts/wave-args.js --repo <repo> --wave <id> [--tail <task id>] [--notes <text>] [--scorecards <dir>] > args.json
 ```
 
 It lints the spec, reads `.claude/loop.local.json` as `project`, copies each task of the wave verbatim (text, owned
 paths, same-wave dependencies, lane, a `task/<id>-<slug>` branch) and takes the wave's `.T` task as the tail.
+
+**Read the token estimate before launching a wave.** With `--scorecards <dir>` (the directory holding the project's
+`*-loop.md` scorecards, for example `~/dev/agent-loop/docs/<project>/`) it adds `budget: { tasks, tokensPerTask,
+estimate, basis }` to the args and prints `wave-args: estimated <n>M tokens for <k> tasks (median of <files>)` on
+stderr: the median tokens per task of the newest three usable scorecards times the wave's task count, tail included.
+A wave cannot spend tokens it is certain to waste, so compare the estimate with what is left of the usage window
+before you start; a wave that will hit the limit is better started after the reset. Without the flag, or with no
+usable scorecard, `budget` is `null` and nothing is printed.
 
 By hand: read `.claude/loop.local.json` in the repo and pass it whole as `args.project`:
 
@@ -89,6 +97,30 @@ Each task: `{ id, title, branch, deps: [ids], text, owns, notes }`, with `text` 
 verbatim from the spec. `tail` has the same shape or is `null`. A parked task is relaunched by
 passing only the parked tasks again; a task whose draft PR should be continued after an escalation
 was answered gets `resume: { prNumber, prUrl, worktree, items: [what to do], notes }`.
+
+Preflight and the permission rule (H2, 2.4.0): before any worker starts, the preflight dry run of `merge-pr.js` also
+reports `permission`, its prediction of whether the permission system will let the merge relay run the merge
+commands (it only reads `~/.claude/settings.json` and the project's `.claude/settings.json` and
+`settings.local.json`, plus the managed settings file). When `permission.allowed` is false the wave fails in preflight
+with one escalation that names the rule to add, `Bash(node <scripts dir>/merge-pr.js *)` (the path exactly as
+`project.repo` plus `/.claude/scripts` spells it, absolute and not the link's target), and lists the broad rules that
+exist but do not count (`Bash`, `Bash(*)`, `Bash(node *)`: auto mode drops them). Adding the rule is human checklist
+item H2 and a permission setting, so the loop never does it; add one rule for each script a relay runs (`merge-pr.js`,
+`wait-ci.js`, `ci-only.js`, and from wave 2 `impact.js` and `test-edits.js`), then confirm once by running one relay in auto mode
+that the classifier is not consulted. A matching deny rule fails the preflight in every mode. A dry run with no
+`permission` field (a `merge-pr.js` older than 2.4.0) logs a note and the wave continues.
+
+A wave that stops on a usage limit (2.4.0): an agent failure that reads as a limit resetting far out ("too far out to wait
+for"), or a bare `null` from an agent that a probe (one relay running `true`) confirms, pauses the wave. No new task
+chain starts and agents already running finish and merge. Tasks that did not run, and the task whose agent failed, come
+back as `paused` (state and result entry, no rounds); a task that depends on one is `paused`, not parked, and so is the
+tail. A task parked for another reason stays parked with its own escalation. The wave raises one escalation,
+`wave paused: usage limit, resets <time>`, where `<time>` is copied from the failure message (`unknown` when it has none). The
+result gains `paused: { resetsAt, resetText, tasks }` and `gate: "PAUSED"`; the key is absent from any other result.
+`resetsAt` is always `null` there: the workflow has no clock, so compute it from `resetText` with a clock and wait for it.
+The machine gate, the reality gate and the integration review do not run. A short limit (one that resets soon) does not
+pause: the task parks as before, and the critic's own swap to the fallback model still comes first. After the reset, relaunch
+the `paused` tasks as you relaunch parked ones (below). `chain-loop` stops on any gate other than `PASS`, so `PAUSED` stops a chain.
 
 Relaunches (2.3.1):
 - A dependency that is not in the relaunch counts as merged in an earlier run of the wave and is logged once; it is not
@@ -104,7 +136,8 @@ Relaunches (2.3.1):
   result says `mainCheck: "unverified"`). Anything else escalates as before. Warden 3.3 (PR #45) had merged when its
   relay was killed and was parked anyway.
 
-The result is `{ project, wave, gate, models, state, tasks, escalations, reality, decisions, timings, loopVersion, findings, integration }`.
+The result is `{ project, wave, gate, models, state, tasks, escalations, reality, decisions, timings, loopVersion, findings, integration }`
+(`gate` is `PASS`, `FAIL`, `BLOCKED` or `PAUSED`; a paused wave adds `paused`).
 Save it as JSON in the session scratchpad, then write the scorecard:
 
 ```
@@ -175,6 +208,9 @@ Loop-cause items are fixed in the workflow script, not by a model change.
 | `syncPolicy` | `always` (merge main into the branch before every merge) or `conflict` (only when GitHub reports a conflict; needs branch protection without the up-to-date rule and `mainCi`) |
 | `loadWarnFactor` | the preflight warns when the 1-minute load average is above this many times the core count (default 4) |
 | `quickCheck` | a shell command with `{files}` (typecheck, lint, related tests) that workers run instead of the full check, through the slot wrapper; CI runs the full check. Empty by default: workers run `check` |
+| `mergePermission` | unset by default: a preflight whose dry run reports that no allow rule covers the merge relay's command fails the wave (H2, above). `"prompt"` logs a warning and continues for a missing allow rule or an ask rule, for projects whose session answers permission prompts; a deny rule fails the preflight either way |
+| `ciChunkMin` | minutes one CI relay call waits (default 1.5, well under the Bash tool's 120 s default timeout). A value that is not a number above 0 uses the default; a value above 9 is lowered to 9. Longer calls use fewer relay agents but a Haiku relay that forgets `timeout=600000` is moved to the background, so the default stays 1.5 until one wave run with `ciChunkMin: 8` shows no relay moved to the background |
+| `testGlobs` | the globs that say which paths are test files (default `["**/*.test.*", "**/*.spec.*", "test/**", "tests/**"]`), matched against repo-relative POSIX paths. Read from `.claude/loop.local.json` by the v2.4 scripts that need to tell a test from other code (`test-edits.js`, `impact.js`); a missing field gives the default |
 | `loopScripts` | directory holding `wait-ci.js` and `merge-pr.js` (default `<repo>/.claude/scripts`, which `install.sh` links) |
 | `merger` | unset by default (merge through `scripts/merge-pr.js`); `"agent"` restores the v2 merger agent as a rollback |
 | `models.relay` | the model of the command relays (CI wait, merge script, preflight, PR facts); default Haiku/low since 2.2.1. `models.merger` only sets the v2 merger agent |

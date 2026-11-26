@@ -37,6 +37,11 @@
 // git diff <wave base sha>..origin/main (the base is the default branch's head recorded by the preflight dry run) and
 // returns findings as result.integration; it never edits and never changes the gate. project.integrationReview: false
 // turns it off.
+// v2.4: (a) the preflight dry run reports `permission` (scripts/merge-pr.js); a merge command with no allow rule fails the
+// wave with one escalation naming the rule to add (H2), unless project.mergePermission is 'prompt' (a deny rule always
+// fails). (b) A usage limit that resets far out pauses the wave (see "Pause" below): result.gate 'PAUSED', result.paused
+// { resetsAt, resetText, tasks } (resetsAt is null: this script has no clock), tasks come back as state 'paused'.
+// (c) project.ciChunkMin sets the minutes of one CI relay call (default 1.5).
 
 export const meta = {
   name: 'wave-loop',
@@ -817,6 +822,170 @@ function fastLaneEligible(input) {
   };
 }
 // @bundle-end lane
+// @bundle-start pause
+// generated from claude/lib/pause.js by scripts/bundle-workflows.js: do not edit
+// Usage-limit classification (v2.4 task 1.3). Pure: the clock is passed in, because the workflow has no clock.
+// Bundled into workflow files, so this file has no import and no top-level name that wave-loop.js declares.
+// Reads or writes: reads.
+
+const USAGE_LIMIT_PATTERN = /usage limit|limit reached|rate.?limit|quota|\b429\b|weekly limit/i;
+const FAR_OUT_MS = 30 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const MONTH_NAMES = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+const CLOCK = '(\\d{1,2})(?::(\\d{2}))?\\s*(am|pm)\\s*\\(([^()]+)\\)';
+const RESET_DATE = new RegExp(`resets\\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\.?\\s+(\\d{1,2}),?(?:\\s+at)?\\s+${CLOCK}`, 'i');
+const RESET_TIME = new RegExp(`resets(?:\\s+at)?\\s+${CLOCK}`, 'i');
+const RESET_RELATIVE = /resets\s+in\s+(?:(\d+)\s*h(?:ours?|rs?)?\b)?\s*(?:(\d+)\s*m(?:in(?:ute)?s?)?\b)?/i;
+
+/**
+ * Offset of an IANA zone from UTC at an instant, in ms. Throws RangeError for a zone the runtime rejects.
+ * @param {string} zone
+ * @param {number} ms
+ * @returns {number}
+ */
+function zoneOffsetMs(zone, ms) {
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: zone, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric',
+  });
+  /** @type {Record<string, number>} */
+  const p = {};
+  for (const part of fmt.formatToParts(new Date(ms))) if (part.type !== 'literal') p[part.type] = Number(part.value);
+  return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - Math.floor(ms / 1000) * 1000;
+}
+
+/**
+ * Epoch ms of a wall-clock time in a zone, or null when the zone is rejected or the date does not exist.
+ * @param {string} zone
+ * @param {number} year
+ * @param {number} month 0-based
+ * @param {number} day
+ * @param {number} hour 0-23
+ * @param {number} minute
+ * @returns {number | null}
+ */
+function zonedTime(zone, year, month, day, hour, minute) {
+  const asUtc = new Date(Date.UTC(year, month, day, hour, minute));
+  if (asUtc.getUTCMonth() !== month || asUtc.getUTCDate() !== day) return null;
+  try {
+    const guess = asUtc.getTime();
+    const first = guess - zoneOffsetMs(zone, guess);
+    return guess - zoneOffsetMs(zone, first);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Year, month (0-based) and day of an instant on the wall clock of a zone.
+ * @param {string} zone
+ * @param {number} ms
+ * @returns {{ year: number, month: number, day: number } | null}
+ */
+function zonedDate(zone, ms) {
+  try {
+    const d = new Date(ms + zoneOffsetMs(zone, ms));
+    return { year: d.getUTCFullYear(), month: d.getUTCMonth(), day: d.getUTCDate() };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 12-hour clock to 0-23, or null when out of range.
+ * @param {string} h
+ * @param {string | undefined} m
+ * @param {string} ampm
+ * @returns {{ hour: number, minute: number } | null}
+ */
+function to24(h, m, ampm) {
+  const hour12 = Number(h);
+  const minute = m === undefined ? 0 : Number(m);
+  if (hour12 < 1 || hour12 > 12 || minute > 59) return null;
+  return { hour: (hour12 % 12) + (ampm.toLowerCase() === 'pm' ? 12 : 0), minute };
+}
+
+/**
+ * Reset time named in a failure text, as epoch ms, or null.
+ * @param {string} text
+ * @param {number | null} nowMs
+ * @returns {number | null}
+ */
+function parseResetsAt(text, nowMs) {
+  if (nowMs === null || !Number.isFinite(nowMs)) return null;
+  const dated = RESET_DATE.exec(text);
+  if (dated) {
+    const clock = to24(dated[3], dated[4], dated[5]);
+    if (!clock) return null;
+    const month = MONTH_NAMES.indexOf(dated[1].toLowerCase());
+    const day = Number(dated[2]);
+    const zone = dated[6].trim();
+    const thisYear = new Date(nowMs).getUTCFullYear();
+    let best = null;
+    for (const year of [thisYear - 1, thisYear, thisYear + 1]) {
+      const at = zonedTime(zone, year, month, day, clock.hour, clock.minute);
+      if (at !== null && at >= nowMs && (best === null || at < best)) best = at;
+    }
+    return best;
+  }
+  const timed = RESET_TIME.exec(text);
+  if (timed) {
+    const clock = to24(timed[1], timed[2], timed[3]);
+    if (!clock) return null;
+    const zone = timed[4].trim();
+    const today = zonedDate(zone, nowMs);
+    if (!today) return null;
+    const first = zonedTime(zone, today.year, today.month, today.day, clock.hour, clock.minute);
+    if (first === null) return null;
+    if (first >= nowMs) return first;
+    const tomorrow = zonedDate(zone, nowMs + DAY_MS);
+    return tomorrow ? zonedTime(zone, tomorrow.year, tomorrow.month, tomorrow.day, clock.hour, clock.minute) : null;
+  }
+  const relative = RESET_RELATIVE.exec(text);
+  if (relative && (relative[1] !== undefined || relative[2] !== undefined)) {
+    return nowMs + (Number(relative[1] || 0) * 60 + Number(relative[2] || 0)) * 60 * 1000;
+  }
+  return null;
+}
+
+/**
+ * Classify a failure as a usage limit or something else, and read when the limit resets.
+ * `nowMs` may be null (the workflow has no clock): then `resetsAt` is null and `farOut` comes only from the text
+ * `too far out`. A non-limit failure gives `resetsAt` null and `farOut` false.
+ * @param {unknown} errorOrText an Error, or text
+ * @param {number | null} nowMs
+ * @returns {{ kind: 'usage_limit' | 'other', resetsAt: number | null, farOut: boolean }}
+ */
+function classifyFailure(errorOrText, nowMs) {
+  const e = /** @type {any} */ (errorOrText);
+  const text = e === null || e === undefined ? '' : typeof e === 'object' && typeof e.message === 'string' ? e.message : String(e);
+  if (!USAGE_LIMIT_PATTERN.test(text)) return { kind: 'other', resetsAt: null, farOut: false };
+  const resetsAt = parseResetsAt(text, nowMs === undefined ? null : nowMs);
+  const far = /too far out/i.test(text) || (resetsAt !== null && nowMs !== null && resetsAt - nowMs > FAR_OUT_MS);
+  return { kind: 'usage_limit', resetsAt, farOut: far };
+}
+
+/**
+ * Which tasks a usage-limit pause stops. Tasks not started and tasks whose agent failed on the limit are paused; tasks
+ * parked for any other reason stay parked; merged, reverted and still-running tasks are in neither (a running task's
+ * result is recorded when it finishes). Order follows `tasks`.
+ * @param {{ tasks: string[], state: Record<string, 'merged' | 'reverted' | 'parked' | 'running'>, failedOnLimit: string[] }} input
+ *   `tasks` are the ids including the tail; a missing id in `state` means not started
+ * @returns {{ paused: string[], parked: string[] }}
+ */
+function pausePlan({ tasks, state, failedOnLimit }) {
+  const failed = new Set(failedOnLimit || []);
+  /** @type {string[]} */
+  const paused = [];
+  /** @type {string[]} */
+  const parked = [];
+  for (const id of tasks) {
+    const s = state && Object.prototype.hasOwnProperty.call(state, id) ? state[id] : undefined;
+    if (s === undefined) paused.push(id);
+    else if (s === 'parked') (failed.has(id) ? paused : parked).push(id);
+  }
+  return { paused, parked };
+}
+// @bundle-end pause
 
 // Full model ids, so the scorecard baseline cannot drift (verified on the Workflow runtime 2026-11-01).
 const DEFAULT_MODELS = {
@@ -831,7 +1000,7 @@ const REALITY_MODEL = { model: 'claude-haiku-5-5', effort: 'low', ...((P.models 
 const CRITIC_FALLBACK = { model: 'opus', effort: 'high' }
 
 const NAME = P.name
-const LOOP_VERSION = '2.3.1'
+const LOOP_VERSION = '2.4.0'
 const REPO = P.repo
 const WT = P.worktrees
 const SPEC = P.spec
@@ -902,7 +1071,14 @@ const FAST_LANE = P.fastLane || {}
 const FAST_LANE_ON = FAST_LANE.enabled === true && typeof FAST_LANE.testCountCommand === 'string' && FAST_LANE.testCountCommand.trim() !== ''
 const FAST_LANE_CAP = Number.isInteger(FAST_LANE.maxPerWave) && FAST_LANE.maxPerWave >= 0 ? FAST_LANE.maxPerWave : DEFAULT_MAX_PER_WAVE
 const CI_RELAY_MAX_MIN = 9 // one foreground relay call (Bash max 10 min) must be able to finish; 'pending' handling covers slower CI
-const CI_CHUNK_MIN = 1.5 // one relay call waits at most this long: well under the Bash tool's 120 s default timeout
+// One relay call waits at most this long. The default 1.5 is well under the Bash tool's 120 s default timeout. v2.4:
+// project.ciChunkMin sets it (a value that is not a number above 0 uses the default; above CI_RELAY_MAX_MIN it is lowered
+// to it). The default moves to 8 only after one wave run with ciChunkMin 8 shows no relay moved to the background.
+const CI_CHUNK_DEFAULT_MIN = 1.5
+const CI_CHUNK_MIN = typeof P.ciChunkMin === 'number' && Number.isFinite(P.ciChunkMin) && P.ciChunkMin > 0 ? Math.min(P.ciChunkMin, CI_RELAY_MAX_MIN) : CI_CHUNK_DEFAULT_MIN
+// v2.4: project.mergePermission 'prompt' lets the wave start when the merge command has no allow rule (or an ask rule) and
+// the session answers its prompts. It never waives a deny rule: that one is enforced in every mode.
+const MERGE_PERMISSION_PROMPT = P.mergePermission === 'prompt'
 const CI_MISSING_MIN = 2 // wait-ci.js reports 'missing' after 2 minutes without a real check (CI_MISSING_MS in claude/lib/ci.js)
 const CI_FIX_WAIT_MIN = 5 // on a FIX verdict the workflow waits at most this long for a CI result still running
 const CI_TIMEOUT_NOTE = 'the 20-minute wait-ci.js timeout'
@@ -1230,13 +1406,73 @@ ${verifySteps}
 Finally remove the task worktree: cd ${REPO} && git worktree remove --force ${w.worktree || wtPath(t)} && git worktree prune && git branch -D ${w.branch} (ignore errors). Leave ${REPO} on main. Do not edit source files.`
 }
 
+// ---- Pause (v2.4): a usage limit that resets far out stops the wave instead of parking every task. ----
+// classifyFailure (bundled from claude/lib/pause.js) reads an agent failure. The workflow has no clock, so it is called with
+// nowMs null: a failure counts as far out only when its text says "too far out", and resetsAt stays null (the session
+// computes it from resetText). A far-out limit thrown by any agent, or a bare null that a probe confirms (see
+// probeAfterNull), sets pauseInfo: no new task chain starts, agents already running finish, and the end of the wave
+// turns the tasks that did not run into paused ones (pausePlan). The critic's own swap to CRITIC_FALLBACK still comes first.
+let pauseInfo = null // { resetText, failed: [task ids whose chain stopped on the limit] }
+function wavePausedError() {
+  const e = new Error('wave paused: usage limit')
+  e.wavePaused = true
+  return e
+}
+function pauseWave(resetText, why) {
+  if (!pauseInfo) {
+    pauseInfo = { resetText: resetText || null, failed: [] }
+    log(`wave paused: usage limit (${why}); no new task starts, running tasks finish${resetText ? `; resets ${resetText}` : ''}`)
+  } else if (!pauseInfo.resetText && resetText) {
+    pauseInfo.resetText = resetText
+  }
+  return wavePausedError()
+}
+// The reset time as the failure message spells it: "resets Nov 19 at 12pm (America/Los_Angeles), too far out to wait for"
+// gives "Nov 19 at 12pm (America/Los_Angeles)". null when the message has no "resets" part.
+function resetTextOf(e) {
+  const text = e && typeof e === 'object' && typeof e.message === 'string' ? e.message : String(e == null ? '' : e)
+  const m = /\bresets\s+(.+?)(?=\s*(?:,\s*too far out|:\s|\s·\s|\n|$))/i.exec(text)
+  return m && m[1].trim() ? m[1].trim().slice(0, 120) : null
+}
+function isFarOutLimit(e) {
+  const c = classifyFailure(e, null)
+  return c.kind === 'usage_limit' && c.farOut
+}
+// Every agent call except the critic's goes through here: a far-out usage limit is classified before any other handling.
+async function ask(prompt, opts) {
+  try {
+    return await agent(prompt, opts)
+  } catch (e) {
+    if (e && e.wavePaused) throw e
+    if (isFarOutLimit(e)) throw pauseWave(resetTextOf(e), `${opts.label} failed`)
+    throw e
+  }
+}
+// A bare null from an agent (the runtime's answer when a subagent dies on a terminal API error) is followed by one probe: a
+// relay that runs `true`. A probe that also returns null, or throws a usage-limit error, pauses the wave (resetText null,
+// or the text of the probe's own error); a probe that succeeds leaves the null to be handled as before.
+async function probeAfterNull(label) {
+  let r
+  try {
+    r = await agent(relayPrompt('true'), { label: `probe:${label}`, phase: 'Build', schema: RELAY_SCHEMA, ...RELAY_MODEL })
+  } catch (e) {
+    if (e && e.wavePaused) throw e
+    if (isUsageLimit(e)) throw pauseWave(resetTextOf(e), `${label} returned nothing and the probe hit a usage limit`)
+    log(`${label} returned nothing; the probe failed (${e && e.message ? e.message : e}), so it is handled as a plain failure`)
+    return
+  }
+  if (r === null || r === undefined) throw pauseWave(null, `${label} returned nothing and so did the probe`)
+  log(`${label} returned nothing; the probe ran, so it is not a usage limit`)
+}
+
 // The critic role: a call that throws a usage-limit error, or returns null (the runtime's answer when the subagent dies
 // on a terminal API error such as a usage limit), is retried once on CRITIC_FALLBACK, and the swap is recorded in
-// models.critic, so every later critic call (any task, any round) starts on the fallback. A null or usage limit on the
-// fallback itself is not retried. Any other error propagates.
+// models.critic, so every later critic call (any task, any round) starts on the fallback. The swap comes first (v2.4): the
+// wave pauses only when the fallback call also fails on a far-out limit or returns null. A short limit on the fallback is not
+// retried and returns null, as before. Any other error propagates.
 let criticModel = MODELS.critic
 function isUsageLimit(e) {
-  return /usage limit|limit reached|rate.?limit|quota|\b429\b/i.test(e && e.message ? e.message : String(e))
+  return classifyFailure(e, null).kind === 'usage_limit'
 }
 function swapCritic(used, reason) {
   if (criticModel === used) {
@@ -1244,28 +1480,40 @@ function swapCritic(used, reason) {
     log(`critic ${reason === 'usage_limit' ? 'hit a usage limit' : 'returned nothing'} on ${used.model}; swapped to ${CRITIC_FALLBACK.model}/${CRITIC_FALLBACK.effort}`)
   }
 }
+// A failure of the fallback call (or of a first call already on the fallback model): pause on a far-out limit, else null.
+function criticFallbackFailed(e, where) {
+  if (isFarOutLimit(e)) return pauseWave(resetTextOf(e), `the critic fallback ${where}`)
+  log(`critic ${where} hit a usage limit on the fallback model too; not retried again`)
+  return null
+}
 async function callCritic(prompt, opts) {
   const used = criticModel
   let reason = null
   try {
     const r = await agent(prompt, { ...opts, ...used })
     if (r !== null && r !== undefined) return r
-    if (used.model === CRITIC_FALLBACK.model) return r
+    if (used.model === CRITIC_FALLBACK.model) throw pauseWave(null, 'the critic returned nothing on the fallback model')
     reason = 'agent_returned_nothing'
   } catch (e) {
+    if (e && e.wavePaused) throw e
     if (!isUsageLimit(e)) throw e
     if (used.model === CRITIC_FALLBACK.model) {
-      log(`critic hit a usage limit on the fallback model ${used.model} too; not retried again`)
+      const p = criticFallbackFailed(e, 'call')
+      if (p) throw p
       return null
     }
     reason = 'usage_limit'
   }
   swapCritic(used, reason)
   try {
-    return await agent(prompt, { ...opts, model: criticModel.model, effort: criticModel.effort })
+    const r2 = await agent(prompt, { ...opts, model: criticModel.model, effort: criticModel.effort })
+    if (r2 === null || r2 === undefined) throw pauseWave(null, 'the critic returned nothing on the fallback model')
+    return r2
   } catch (e2) {
+    if (e2 && e2.wavePaused) throw e2
     if (!isUsageLimit(e2)) throw e2
-    log(`critic retry on ${criticModel.model} hit a usage limit too`)
+    const p = criticFallbackFailed(e2, 'retry')
+    if (p) throw p
     return null
   }
 }
@@ -1340,8 +1588,11 @@ Otherwise return status "ran", exitCode as the command's exit code, and stdout a
 }
 
 async function relay(command, label, phaseName) {
-  const r = await agent(relayPrompt(command), { label, phase: phaseName, schema: RELAY_SCHEMA, ...RELAY_MODEL })
-  if (!r) return { status: 'none' }
+  const r = await ask(relayPrompt(command), { label, phase: phaseName, schema: RELAY_SCHEMA, ...RELAY_MODEL })
+  if (!r) {
+    await probeAfterNull(label)
+    return { status: 'none' }
+  }
   if (r.status === 'blocked') return { status: 'blocked', note: r.note || '' }
   return { status: 'ran', exitCode: Number.isInteger(r.exitCode) ? r.exitCode : null, stdout: String(r.stdout == null ? '' : r.stdout), note: r.note || '' }
 }
@@ -1378,7 +1629,8 @@ function addTiming(id, key, ms) {
 // Every worker call goes through here: the worker's own timing of its local check (localCheckMs, an integer it measured
 // with date +%s) is copied into timings[taskId], summed over rounds. slotWaitMs has no source (slot.sh reports no wait).
 async function callWorker(t, prompt, opts) {
-  const w = await agent(prompt, opts)
+  const w = await ask(prompt, opts)
+  if (!w) await probeAfterNull(opts.label)
   if (w && Number.isInteger(w.localCheckMs) && w.localCheckMs >= 0) addTiming(t.id, 'localCheckMs', w.localCheckMs)
   return w
 }
@@ -1453,7 +1705,9 @@ If the permission system denies a command, or a command cannot be run, return st
 }
 
 async function gatherFacts(t, w, tag, ph) {
-  const r = await agent(factsPrompt(t, w), { label: `facts:${t.id} ${roundLabel(tag)}`, phase: ph.review, schema: FACTS_SCHEMA, ...RELAY_MODEL })
+  const factsLabel = `facts:${t.id} ${roundLabel(tag)}`
+  const r = await ask(factsPrompt(t, w), { label: factsLabel, phase: ph.review, schema: FACTS_SCHEMA, ...RELAY_MODEL })
+  if (!r) await probeAfterNull(factsLabel)
   if (!r || r.status !== 'ran' || !Array.isArray(r.changedFiles)) return null
   return {
     changedFiles: r.changedFiles,
@@ -1619,7 +1873,8 @@ async function mergeStep(t, w, rr, ph, reopen) {
   const st = taskState(t)
   const label = `merger:${t.id}${reopen ? ' reopen' : ''}`
   if (MERGER_AGENT) {
-    const m = await withMergeLock(() => agent(mergerPrompt(t, w, rr.critic || {}), { label, phase: ph.merge, schema: MERGER_SCHEMA, ...MODELS.merger }))
+    const m = await withMergeLock(() => ask(mergerPrompt(t, w, rr.critic || {}), { label, phase: ph.merge, schema: MERGER_SCHEMA, ...MODELS.merger }))
+    if (!m) await probeAfterNull(label)
     r.merge = m
     if (!m) return { kind: 'failed', what: 'merger agent returned nothing', question: 'Check the PR state by hand and relaunch.' }
     if (m.outcome === 'failed') return { kind: 'failed', what: 'merge failed', question: m.details }
@@ -1863,8 +2118,8 @@ async function runTask(t, ph) {
 let waveBase = null
 async function preflightMerge() {
   const command = `node ${SCRIPTS}/merge-pr.js 0 --repo ${REPO} --dry-run`
-  const fail = (why) => {
-    escalate('preflight', `preflight failed: ${why}`, `Run ${command} by hand. The scripts live in ${SCRIPTS} (project.loopScripts; link the loop's scripts directory there). A block is Edan's permission settings, not something the loop retries another way. Or set project.merger to "agent" to use the v2 merger agent.`)
+  const fail = (why, question) => {
+    escalate('preflight', `preflight failed: ${why}`, question || `Run ${command} by hand. The scripts live in ${SCRIPTS} (project.loopScripts; link the loop's scripts directory there). A block is Edan's permission settings, not something the loop retries another way. Or set project.merger to "agent" to use the v2 merger agent.`)
     return false
   }
   let rr = null
@@ -1884,6 +2139,32 @@ async function preflightMerge() {
   if (line.loopVersion !== LOOP_VERSION) {
     return fail(`this wave-loop script is loop ${LOOP_VERSION}, but the loop scripts in ${SCRIPTS} report ${line.loopVersion ? `loop ${line.loopVersion}` : 'no version'}. The session resolved another copy of the loop: 'wave-loop' comes from the .claude/workflows of the directory the session started in. Start the session in the project repo (or relink that copy), then run the wave again`)
   }
+  // v2.4 (H2): the dry run predicts whether the permission system will refuse the merge relay's commands. The loop never
+  // changes a permission setting; it names the rule a human adds. A deny rule fails the wave in either mode.
+  if (line.permission && typeof line.permission === 'object' && !Array.isArray(line.permission)) {
+    const perm = line.permission
+    if (perm.allowed !== true) {
+      const rule = `Bash(node ${SCRIPTS}/merge-pr.js *)`
+      const broad = Array.isArray(perm.broad) ? perm.broad.map(String) : []
+      const broadText = broad.length ? ` These broad rules exist but do not count, because auto mode drops them: ${broad.join(', ')}.` : ''
+      if (perm.denied) {
+        return fail(
+          `a deny rule refuses the merge relay's command: ${perm.denied}`,
+          `A deny rule is enforced in every mode, so project.mergePermission does not waive it, and the loop does not route around it. Remove the deny rule (a human step) or merge by hand, then relaunch the wave.${broadText}`,
+        )
+      }
+      const why = perm.ask ? `an ask rule makes the merge relay's command prompt, and a relay cannot answer a prompt: ${perm.ask}` : `no permissions.allow rule covers the merge relay's command (${SCRIPTS}/merge-pr.js)`
+      if (!MERGE_PERMISSION_PROMPT) {
+        return fail(
+          why,
+          `H2, a human step: add ${rule} to permissions.allow in ~/.claude/settings.json (the loop never changes a permission setting), confirm once by running one relay in auto mode that the classifier is not consulted, then relaunch the wave. Or set project.mergePermission to "prompt" if you will answer the permission prompts yourself.${broadText}`,
+        )
+      }
+      log(`WARNING: project.mergePermission is "prompt" and ${why}; the wave starts anyway, and a merge relay that is refused parks its task. To avoid that, add ${rule} to permissions.allow (H2).`)
+    }
+  } else {
+    log('note: the merge dry run reported no permission field (an older merge-pr.js), so the permission check was skipped')
+  }
   warnLoad(line.load)
   waveBase = SHA_RE.test(String(line.baseSha || '')) ? line.baseSha : null
   if (waveBase) log(`wave base: ${waveBase}`)
@@ -1895,7 +2176,16 @@ function warnLoad(load) {
   if (!load || load.high !== true) return
   log(`WARNING: the machine's 1-minute load average is ${load.load1}, above ${load.threshold} (${load.cores} cores). Other heavy jobs are running; the wave runs anyway but slower. Stop them, or let them finish, before the next wave.`)
 }
-if (!MERGER_AGENT && !(await preflightMerge())) {
+let preflightPassed = true
+if (!MERGER_AGENT) {
+  try {
+    preflightPassed = await preflightMerge()
+  } catch (e) {
+    // A far-out usage limit in the preflight relay: no worker has started, so every task comes back as paused below.
+    if (!(e && e.wavePaused)) throw e
+  }
+}
+if (!pauseInfo && !preflightPassed) {
   log(`Wave ${WAVE} FAILED in preflight: ${escalations[escalations.length - 1].what}`)
   return { project: NAME, wave: WAVE, gate: 'FAIL', models: MODELS, state: {}, tasks: {}, escalations, reality: null, decisions: [], timings: {}, loopVersion: LOOP_VERSION }
 }
@@ -1917,6 +2207,12 @@ const PH = { build: 'Build', review: 'Review', merge: 'Merge' }
 while (true) {
   const pending = TASKS.filter((t) => state[t.id] === 'pending')
   if (!pending.length && !running.size) break
+  if (pauseInfo) {
+    // Paused: nothing new starts; agents already running finish. What did not run is settled by pausePlan below.
+    if (!running.size) break
+    await Promise.race(running.values())
+    continue
+  }
   for (const t of pending) {
     if (running.size >= MAX_CHAINS) break
     if (runDeps(t).some((d) => state[d] === 'parked')) {
@@ -1933,9 +2229,15 @@ while (true) {
         state[t.id] = r.merged ? 'merged' : 'parked'
         running.delete(t.id)
       },
-      () => {
-        state[t.id] = 'parked'
+      (err) => {
         running.delete(t.id)
+        if (err && err.wavePaused) {
+          // The chain stopped on the usage limit: it is paused (one escalation for the wave, below), not parked.
+          state[t.id] = 'paused'
+          pauseInfo.failed.push(t.id)
+          return
+        }
+        state[t.id] = 'parked'
         escalate(t.id, 'task chain threw', 'See the workflow transcript.')
       },
     )
@@ -1957,15 +2259,48 @@ log(`parallel tasks: ${parallelOutcome}`)
 let tail = null
 if (TAIL) {
   phase('Tail')
-  if (TASKS.every((t) => state[t.id] === 'merged')) {
-    tail = await runTask(TAIL, { build: 'Tail', review: 'Tail', merge: 'Tail' })
-    state[TAIL.id] = tail.merged ? 'merged' : 'parked'
+  if (pauseInfo) {
+    log(`${TAIL.id}: not started, the wave is paused`)
+  } else if (TASKS.every((t) => state[t.id] === 'merged')) {
+    try {
+      tail = await runTask(TAIL, { build: 'Tail', review: 'Tail', merge: 'Tail' })
+      state[TAIL.id] = tail.merged ? 'merged' : 'parked'
+    } catch (e) {
+      if (!(e && e.wavePaused)) throw e
+      state[TAIL.id] = 'paused'
+      pauseInfo.failed.push(TAIL.id)
+    }
   } else {
     results[TAIL.id] = { task: TAIL.id, title: TAIL.title, pr: null, rounds: [], merge: null, reopened: false, merged: false }
     state[TAIL.id] = 'parked'
     escalate(TAIL.id, 'tail not run', `parallel tasks not all merged: ${parallelOutcome}`)
   }
 }
+
+// A paused wave: pausePlan settles each task. A task whose agent failed on the limit and a task that never started are
+// paused (this covers a task whose dependency is paused, and the tail, with no escalation of their own); a task parked for
+// another reason stays parked with its own escalation; a parked task whose merge was reverted is passed as 'reverted'.
+// Each paused task gets a result entry with no rounds, and the wave raises one escalation.
+function settlePause() {
+  const ids = TASKS.map((t) => t.id).concat(TAIL ? [TAIL.id] : [])
+  const planState = {}
+  for (const id of ids) {
+    const s = state[id]
+    if (s === 'merged' || s === 'running') planState[id] = s
+    else if (s === 'parked') planState[id] = results[id] && results[id].merge && results[id].merge.outcome === 'reverted' ? 'reverted' : 'parked'
+  }
+  const plan = pausePlan({ tasks: ids, state: planState, failedOnLimit: pauseInfo.failed })
+  const titles = {}
+  for (const t of TASKS) titles[t.id] = t.title
+  if (TAIL) titles[TAIL.id] = TAIL.title
+  for (const id of plan.paused) {
+    state[id] = 'paused'
+    results[id] = { task: id, title: titles[id], pr: (results[id] && results[id].pr) || null, rounds: [], merge: null, reopened: false, merged: false }
+  }
+  escalate('wave', `wave paused: usage limit, resets ${pauseInfo.resetText || 'unknown'}`, `Wait for the limit to reset, then relaunch the wave with the paused tasks (${plan.paused.join(', ') || 'none'}), as for parked tasks. Tasks already merged are not re-run.`)
+  return plan.paused
+}
+const pausedTasks = pauseInfo ? settlePause() : []
 
 // Integration review (v2.3): the critic reviews one PR at a time, so nothing looked at the wave as a whole (wave 2 of
 // Warden: duplicated helpers across tasks, a connection without TLS, an import too slow at real data sizes). One
@@ -2022,13 +2357,15 @@ async function integrationReview(merged) {
     return { ran: false, baseSha: waveBase, findings: [], summary: '', error: String(e && e.message ? e.message : e) }
   }
 }
-const integration = await integrationReview(Object.values(results).filter((r) => r.merged))
+const integration = pauseInfo
+  ? INTEGRATION_ON ? { ran: false, baseSha: waveBase, findings: [], summary: '', skipped: 'wave paused' } : null
+  : await integrationReview(Object.values(results).filter((r) => r.merged))
 
 const everyMerged = Object.values(state).every((s) => s === 'merged')
 const last = TAIL ? tail : Object.values(results).slice(-1)[0]
 const checkGreen = !!(last && last.merge && last.merge.checkOnMainExitCode === 0)
 let gate = everyMerged && checkGreen && escalations.length === 0
-log(gate ? `Wave ${WAVE} machine gate: PASS` : `Wave ${WAVE} machine gate: FAIL`)
+log(pauseInfo ? `Wave ${WAVE} PAUSED: the machine gate, the reality gate and the integration review did not run` : gate ? `Wave ${WAVE} machine gate: PASS` : `Wave ${WAVE} machine gate: FAIL`)
 
 // Reality gate: after the machine gate, a read-only check against the real system. Block gaps (and a check that does
 // not run cleanly, which runReality reports as ok: false) fail the wave; warn gaps are only returned.
@@ -2046,7 +2383,7 @@ async function execReality(command, timeoutSec) {
 }
 let reality = null
 let realityModel = null
-if (REALITY_CHECK) {
+if (REALITY_CHECK && !pauseInfo) {
   phase('Reality')
   realityModel = REALITY_MODEL
   const res = await runReality(REALITY_CHECK, execReality)
@@ -2085,4 +2422,20 @@ for (const r of Object.values(results)) {
     for (const f of rd.findings || []) findings.push({ task: r.task, round: rd.round, ...f })
   }
 }
-return { project: NAME, wave: WAVE, gate: gate ? 'PASS' : 'FAIL', models, state, tasks: results, escalations, reality, decisions, timings, loopVersion: LOOP_VERSION, findings, integration }
+return {
+  project: NAME,
+  wave: WAVE,
+  gate: pauseInfo ? 'PAUSED' : gate ? 'PASS' : 'FAIL',
+  models,
+  state,
+  tasks: results,
+  escalations,
+  reality,
+  decisions,
+  timings,
+  loopVersion: LOOP_VERSION,
+  findings,
+  integration,
+  // resetsAt stays null: the workflow has no clock, so the session computes it from resetText (v2.4).
+  ...(pauseInfo ? { paused: { resetsAt: null, resetText: pauseInfo.resetText, tasks: pausedTasks } } : {}),
+}

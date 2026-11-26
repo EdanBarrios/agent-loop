@@ -162,7 +162,10 @@ describe('bundling', () => {
     const mine = names(lib);
     expect(mine.length).toBeGreaterThan(0);
     const workflow = readFileSync(join(here, '..', 'workflows', 'wave-loop.js'), 'utf8');
-    const theirs = new Set(names(workflow));
+    // The bundled region is this lib's own copy inside the workflow, so only the names outside it can clash.
+    const outside = workflow.replace(/^\/\/ @bundle-start pause$[\s\S]*?^\/\/ @bundle-end pause$/m, '');
+    expect(outside.length).toBeLessThan(workflow.length);
+    const theirs = new Set(names(outside));
     expect(mine.filter((n) => theirs.has(n))).toEqual([]);
   });
 });
