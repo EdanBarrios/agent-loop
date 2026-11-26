@@ -1,0 +1,26 @@
+{
+  "name": "synthetic-6",
+  "source": "seed:synthetic-6/seed",
+  "baseSha": "c1fbd21634865cc81bd152796acd3821c4413602",
+  "spec": "docs/spec.md",
+  "wave": "1",
+  "holdoutDir": "synthetic-6/holdout",
+  "holdout": ["tests/holdout.test.js"],
+  "holdoutTotal": 8,
+  "holdoutCommand": "node --test --test-reporter=tap tests/holdout.test.js",
+  "project": {
+    "readFirst": ["docs/spec.md#End goal", "docs/spec.md#Invariants", "docs/spec.md#Fixed decisions"],
+    "install": "true",
+    "check": "npm run check",
+    "extraRules": ["No .skip or .only.", "No network in tests."],
+    "mainCi": "check",
+    "maxBuilders": 2,
+    "maxChains": 3,
+    "syncPolicy": "conflict",
+    "models": {
+      "worker": { "model": "claude-sonnet-5-5", "effort": "high" },
+      "critic": { "model": "claude-fable-5-1", "effort": "high" },
+      "merger": { "model": "claude-sonnet-5-5", "effort": "low" }
+    }
+  }
+}
