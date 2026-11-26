@@ -83,6 +83,8 @@ const criticStop = { ...criticMerge, verdict: 'STOP', stopSection: 'Fixed decisi
 
 // What a relay returns: the command's stdout (one JSON line, as the scripts print) and its exit code.
 const ran = (line: unknown, exitCode = 0) => ({ status: 'ran', exitCode, stdout: `${JSON.stringify(line)}\n` });
+// The answer of the dep-state relay (2.5.0): each id has a merged PR whose merge commit is on the default branch.
+const depsMerged = (...ids: string[]) => ran({ tasks: Object.fromEntries(ids.map((id, i) => [id, { merged: true, pr: 40 + i, mergeSha: `c0ffee${i}`, onDefault: true, reason: null }])) });
 const ciOf = (state: string, over: Json = {}) => ran({ state, failing: [], logTail: '', polls: 2, elapsedMs: 60000, ...over });
 const mergeLine = (over: Json = {}) => ({
   outcome: 'merged',
@@ -120,7 +122,7 @@ const happy = { 'worker:9.1': w1, 'ci:9.1 r1': green, 'critic:9.1 r1': criticMer
 describe('2.1 script mode: CI and merge are commands run by relay agents', () => {
   it('runs preflight, worker, the CI relay beside the critic, then one merge relay, and records the v1 merge shape', async () => {
     const { out, calls, prompts, escalations } = await runWave(happy);
-    expect(calls).toEqual(['preflight:merge', 'worker:9.1', 'ci:9.1 r1', 'test-edits:9.1 r1', 'critic:9.1 r1', 'merger:9.1']);
+    expect(calls).toEqual(['preflight:merge', 'preflight:isolation', 'worker:9.1', 'ci:9.1 r1', 'test-edits:9.1 r1', 'critic:9.1 r1', 'merger:9.1']);
     expect(out.gate).toBe('PASS');
     expect(escalations).toEqual([]);
     const t = out.tasks['9.1'];
@@ -198,7 +200,7 @@ describe('2.1 the wave 6 regression: pending CI is never a FIX', () => {
         return criticMerge;
       },
     });
-    expect(calls).toEqual(['preflight:merge', 'worker:9.1', 'ci:9.1 r1', 'test-edits:9.1 r1', 'critic:9.1 r1', 'merger:9.1']);
+    expect(calls).toEqual(['preflight:merge', 'preflight:isolation', 'worker:9.1', 'ci:9.1 r1', 'test-edits:9.1 r1', 'critic:9.1 r1', 'merger:9.1']);
     expect(calls.some((c) => c.includes('fix'))).toBe(false);
     expect(out.gate).toBe('PASS');
     expect(escalations).toEqual([]);
@@ -206,7 +208,7 @@ describe('2.1 the wave 6 regression: pending CI is never a FIX', () => {
 
   it('CI still pending after the wait-ci timeout escalates, naming the timeout; no FIX round and no merge', async () => {
     const { out, calls, escalations } = await runWave({ ...happy, ...pendingChunks('ci:9.1 r1', 6) });
-    expect(calls).toEqual(['preflight:merge', 'worker:9.1', 'ci:9.1 r1', 'test-edits:9.1 r1', 'ci:9.1 r1 c2', 'critic:9.1 r1', ...chunkLabels('ci:9.1 r1', 6).slice(2)]);
+    expect(calls).toEqual(['preflight:merge', 'preflight:isolation', 'worker:9.1', 'ci:9.1 r1', 'test-edits:9.1 r1', 'ci:9.1 r1 c2', 'critic:9.1 r1', ...chunkLabels('ci:9.1 r1', 6).slice(2)]);
     expect(out.gate).toBe('FAIL');
     expect(escalations).toHaveLength(1);
     expect(escalations[0].what).toMatch(/pending/i);
@@ -215,7 +217,7 @@ describe('2.1 the wave 6 regression: pending CI is never a FIX', () => {
 
   it('MERGE with CI missing escalates and never merges or fixes', async () => {
     const { calls, escalations } = await runWave({ ...happy, 'ci:9.1 r1': ciOf('missing'), 'ci:9.1 r1 c2': ciOf('missing') });
-    expect(calls).toEqual(['preflight:merge', 'worker:9.1', 'ci:9.1 r1', 'test-edits:9.1 r1', 'ci:9.1 r1 c2', 'critic:9.1 r1']);
+    expect(calls).toEqual(['preflight:merge', 'preflight:isolation', 'worker:9.1', 'ci:9.1 r1', 'test-edits:9.1 r1', 'ci:9.1 r1 c2', 'critic:9.1 r1']);
     expect(escalations).toHaveLength(1);
     expect(escalations[0].what).toMatch(/no CI|missing/i);
   });
@@ -260,7 +262,7 @@ describe('2.1 relay results are parsed in code', () => {
         'merger:9.1 state': stateLine('MERGED'),
         'main:9.1': mergeRan({ mergeSha: 'm9', mainSha: 'm9', mainCheck: 'green' }),
       });
-      expect(calls).toEqual(['preflight:merge', 'worker:9.1', 'ci:9.1 r1', 'test-edits:9.1 r1', 'critic:9.1 r1', 'merger:9.1', 'merger:9.1 state', 'main:9.1']);
+      expect(calls).toEqual(['preflight:merge', 'preflight:isolation', 'worker:9.1', 'ci:9.1 r1', 'test-edits:9.1 r1', 'critic:9.1 r1', 'merger:9.1', 'merger:9.1 state', 'main:9.1']);
       expect(prompts['merger:9.1 state'][0]).toContain('/tmp/sim/.claude/scripts/merge-pr.js 7 --repo /tmp/sim --state');
       expect(prompts['main:9.1'][0]).toContain('--verify-main m9');
       expect(escalations).toEqual([]);
@@ -351,7 +353,7 @@ describe('2.1 combining the critic and CI', () => {
   it('on STOP the workflow does not wait for CI', async () => {
     const never = new Promise(() => {});
     const { out, calls, escalations } = await runWave({ ...happy, 'ci:9.1 r1': () => never, 'critic:9.1 r1': criticStop });
-    expect(calls).toEqual(['preflight:merge', 'worker:9.1', 'ci:9.1 r1', 'test-edits:9.1 r1', 'critic:9.1 r1']);
+    expect(calls).toEqual(['preflight:merge', 'preflight:isolation', 'worker:9.1', 'ci:9.1 r1', 'test-edits:9.1 r1', 'critic:9.1 r1']);
     expect(out.gate).toBe('FAIL');
     expect(escalations.map((e) => e.what)).toEqual(['critic STOP']);
   });
@@ -438,7 +440,7 @@ describe('2.1 a relay that answers blocked', () => {
   it('a preflight result with no JSON line is run once more; a good second answer lets the wave go on', async () => {
     const flake = { status: 'ran', exitCode: 4, stdout: 'no JSON line here' };
     const { out, calls, escalations } = await runWave({ ...happy, 'preflight:merge': flake, 'preflight:merge retry': preflightOk });
-    expect(calls).toEqual(['preflight:merge', 'preflight:merge retry', 'worker:9.1', 'ci:9.1 r1', 'test-edits:9.1 r1', 'critic:9.1 r1', 'merger:9.1']);
+    expect(calls).toEqual(['preflight:merge', 'preflight:merge retry', 'preflight:isolation', 'worker:9.1', 'ci:9.1 r1', 'test-edits:9.1 r1', 'critic:9.1 r1', 'merger:9.1']);
     expect(out.gate).toBe('PASS');
     expect(escalations).toEqual([]);
   });
@@ -517,7 +519,7 @@ describe('2.1 exit codes of merge-pr.js', () => {
       'critic:9.1 reopen': criticMerge,
       'merger:9.1 reopen': mergeRan({ mergeSha: 'm2', mainSha: 'm2' }),
     });
-    expect(calls).toEqual(['preflight:merge', 'worker:9.1', 'ci:9.1 r1', 'test-edits:9.1 r1', 'critic:9.1 r1', 'merger:9.1', 'worker:9.1 reopen', 'ci:9.1 reopen', 'test-edits:9.1 reopen', 'critic:9.1 reopen', 'merger:9.1 reopen']);
+    expect(calls).toEqual(['preflight:merge', 'preflight:isolation', 'worker:9.1', 'ci:9.1 r1', 'test-edits:9.1 r1', 'critic:9.1 r1', 'merger:9.1', 'worker:9.1 reopen', 'ci:9.1 reopen', 'test-edits:9.1 reopen', 'critic:9.1 reopen', 'merger:9.1 reopen']);
     expect(prompts['worker:9.1 reopen'][0]).toContain('FAIL tests/a.test.ts');
     expect(out.tasks['9.1'].reopened).toBe(true);
     expect(out.tasks['9.1'].merged).toBe(true);
@@ -621,7 +623,7 @@ describe('2.1 fast lane: a Lane: fast task skips the critic', () => {
   it('an eligible task makes zero critic calls and goes to the merge relay after the CI result', async () => {
     const { out, calls, prompts, escalations } = await runWave(fastAnswers('9.1', 7), { project: FAST, tasks: [fastTask('9.1')] });
     expect(calls.filter((c) => c.startsWith('critic:'))).toEqual([]);
-    expect(calls).toEqual(['preflight:merge', 'impact:9.1', 'worker:9.1', 'ci:9.1 r1', 'facts:9.1 r1', 'test-edits:9.1 r1', 'merger:9.1']);
+    expect(calls).toEqual(['preflight:merge', 'preflight:isolation', 'impact:9.1', 'worker:9.1', 'ci:9.1 r1', 'facts:9.1 r1', 'test-edits:9.1 r1', 'merger:9.1']);
     expect(out.gate).toBe('PASS');
     expect(escalations).toEqual([]);
     expect(out.tasks['9.1'].rounds[0]).toMatchObject({ verdict: 'MERGE', ci: 'green', lane: 'fast' });
@@ -632,7 +634,7 @@ describe('2.1 fast lane: a Lane: fast task skips the critic', () => {
 
   it('a task whose files fall outside Owns gets the critic after the CI result', async () => {
     const { out, calls } = await runWave(fastAnswers('9.1', 7, { 'facts:9.1 r1': facts({ changedFiles: ['docs/notes/a.md', 'src/other.ts'] }) }), { project: FAST, tasks: [fastTask('9.1')] });
-    expect(calls).toEqual(['preflight:merge', 'impact:9.1', 'worker:9.1', 'ci:9.1 r1', 'facts:9.1 r1', 'test-edits:9.1 r1', 'critic:9.1 r1', 'merger:9.1']);
+    expect(calls).toEqual(['preflight:merge', 'preflight:isolation', 'impact:9.1', 'worker:9.1', 'ci:9.1 r1', 'facts:9.1 r1', 'test-edits:9.1 r1', 'critic:9.1 r1', 'merger:9.1']);
     expect(out.gate).toBe('PASS');
     expect(out.tasks['9.1'].rounds[0].lane).toBeUndefined();
   });
@@ -673,12 +675,12 @@ describe('2.1 fast lane: a Lane: fast task skips the critic', () => {
 
   it('a Lane: fast task starts the critic at once when fastLane is not enabled', async () => {
     const { calls } = await runWave({ ...happy }, { project: { fastLane: { enabled: false } }, tasks: [fastTask('9.1')] });
-    expect(calls).toEqual(['preflight:merge', 'impact:9.1', 'worker:9.1', 'ci:9.1 r1', 'test-edits:9.1 r1', 'critic:9.1 r1', 'merger:9.1']);
+    expect(calls).toEqual(['preflight:merge', 'preflight:isolation', 'impact:9.1', 'worker:9.1', 'ci:9.1 r1', 'test-edits:9.1 r1', 'critic:9.1 r1', 'merger:9.1']);
   });
 
   it('without a testCountCommand the task is not eligible, so the critic starts at once and no facts relay runs', async () => {
     const { calls } = await runWave({ ...happy }, { project: { fastLane: { enabled: true } }, tasks: [fastTask('9.1')] });
-    expect(calls).toEqual(['preflight:merge', 'impact:9.1', 'worker:9.1', 'ci:9.1 r1', 'test-edits:9.1 r1', 'critic:9.1 r1', 'merger:9.1']);
+    expect(calls).toEqual(['preflight:merge', 'preflight:isolation', 'impact:9.1', 'worker:9.1', 'ci:9.1 r1', 'test-edits:9.1 r1', 'critic:9.1 r1', 'merger:9.1']);
   });
 
   it('a test count that fell, or a facts relay that failed, falls back to the critic', async () => {
@@ -691,7 +693,7 @@ describe('2.1 fast lane: a Lane: fast task skips the critic', () => {
 
   it('a normal task never uses the fast lane even when it is enabled', async () => {
     const { calls } = await runWave({ ...happy }, { project: FAST });
-    expect(calls).toEqual(['preflight:merge', 'worker:9.1', 'ci:9.1 r1', 'test-edits:9.1 r1', 'critic:9.1 r1', 'merger:9.1']);
+    expect(calls).toEqual(['preflight:merge', 'preflight:isolation', 'worker:9.1', 'ci:9.1 r1', 'test-edits:9.1 r1', 'critic:9.1 r1', 'merger:9.1']);
   });
 });
 
@@ -752,10 +754,10 @@ describe('relay timeouts: chunked CI wait and the foreground-timeout prompt', ()
 describe('2.3.1 relaunches', () => {
   it('a dependency that is not in this run counts as merged earlier: the task starts and never deadlocks', async () => {
     const { out, calls, escalations } = await runWave(
-      { 'worker:9.2': w2, 'ci:9.2 r1': green, 'critic:9.2 r1': criticMerge, 'merger:9.2': mergeRan() },
+      { 'deps:outside': depsMerged('9.1', '3.3'), 'worker:9.2': w2, 'ci:9.2 r1': green, 'critic:9.2 r1': criticMerge, 'merger:9.2': mergeRan() },
       { tasks: [task('9.2', { deps: ['9.1', '3.3'] })] },
     );
-    expect(calls).toEqual(['preflight:merge', 'worker:9.2', 'ci:9.2 r1', 'test-edits:9.2 r1', 'critic:9.2 r1', 'merger:9.2']);
+    expect(calls).toEqual(['preflight:merge', 'preflight:isolation', 'deps:outside', 'worker:9.2', 'ci:9.2 r1', 'test-edits:9.2 r1', 'critic:9.2 r1', 'merger:9.2']);
     expect(escalations).toEqual([]);
     expect(out.gate).toBe('PASS');
     expect(out.state['9.2']).toBe('merged');
@@ -763,7 +765,7 @@ describe('2.3.1 relaunches', () => {
 
   it('a dependency inside the run still orders the tasks, and its parking still parks the dependant', async () => {
     const { out, calls, escalations } = await runWave(
-      { 'worker:9.1': w1, 'ci:9.1 r1': green, 'critic:9.1 r1': criticStop },
+      { 'deps:outside': depsMerged('3.3'), 'worker:9.1': w1, 'ci:9.1 r1': green, 'critic:9.1 r1': criticStop },
       { tasks: [task('9.1'), task('9.2', { deps: ['9.1', '3.3'] })] },
     );
     expect(calls).not.toContain('worker:9.2');

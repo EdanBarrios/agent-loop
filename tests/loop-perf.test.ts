@@ -88,7 +88,7 @@ describe('perf 1: machine load warning at wave start', () => {
 
   it('logs nothing when the load is fine or not reported', async () => {
     for (const load of [{ load1: 3, cores: 8, threshold: 32, high: false }, undefined]) {
-      const { logs } = await runWave({ 'preflight:merge': preflight(load), 'worker:9.1': opened('9.1', 7), 'ci:9.1 r1': green, 'critic:9.1 r1': criticMerge, 'merger:9.1': mergeRan() });
+      const { logs } = await runWave({ 'preflight:merge': preflight(load), 'worker:9.1': opened('9.1', 7), 'ci:9.1 r1': green, 'critic:9.1 r1': criticMerge, 'merger:9.1': mergeRan() }, { project: { integrationGate: 'off' } });
       expect(logs.some((l) => l.startsWith('WARNING'))).toBe(false);
     }
   });
@@ -115,7 +115,7 @@ describe('perf 3: the check on main', () => {
 
   it('deferred: a --verify-main relay watches main after the merge relay, and its green result merges the task', async () => {
     const { out, calls, prompts } = await runWave({ ...base, 'merger:9.1': mergeRan(deferredLine), 'main:9.1': mergeRan({ mainCheck: 'green', mainCheckMs: 400000, ciWaitMs: 0, mergeMs: 0 }) });
-    expect(calls).toEqual(['preflight:merge', 'worker:9.1', 'ci:9.1 r1', 'test-edits:9.1 r1', 'critic:9.1 r1', 'merger:9.1', 'main:9.1']);
+    expect(calls).toEqual(['preflight:merge', 'preflight:isolation', 'worker:9.1', 'ci:9.1 r1', 'test-edits:9.1 r1', 'critic:9.1 r1', 'merger:9.1', 'main:9.1']);
     expect(prompts['main:9.1'][0]).toContain('/tmp/sim/.claude/scripts/merge-pr.js 7 --repo /tmp/sim --verify-main m1 --timeout-min 9');
     expect(out.gate).toBe('PASS');
     expect(out.tasks['9.1'].merge).toMatchObject({ outcome: 'merged', mergeSha: 'm1', checkOnMainExitCode: 0 });
@@ -145,9 +145,10 @@ describe('perf 3: the check on main', () => {
           return mergeRan({ mainCheck: 'green' });
         },
       },
-      { tasks: [task('9.1'), task('9.2')] },
+      { tasks: [task('9.1'), task('9.2')], project: { settleMain: false } },
     );
     // If the watch held the merge lock, merger:9.2 could never run and main:9.1 would never finish.
+    // With settleMain false (the 2.4 behaviour this case tests); under settleMain the second merge waits for the watch.
     expect(order).toEqual(['merger:9.2', 'main:9.1 done']);
     expect(calls).toContain('main:9.1');
     expect(out.gate).toBe('PASS');
@@ -220,7 +221,7 @@ describe('perf 6: no second critic round after a MERGE when only CI-only changes
 
   it('skips the critic in round 2, logs it, records it, and merges on the round-1 MERGE', async () => {
     const { out, calls, prompts, logs } = await runWave({ ...redThenFix, 'delta:9.1 r2': ran({ ciOnly: true, since: REVIEWED, head: 'cd'.repeat(20), reason: '1 formatting-only commit (12 files)', commits: 1, files: [] }) });
-    expect(calls).toEqual(['preflight:merge', 'worker:9.1', 'ci:9.1 r1', 'test-edits:9.1 r1', 'critic:9.1 r1', 'worker:9.1 fix1', 'ci:9.1 r2', 'delta:9.1 r2', 'merger:9.1']);
+    expect(calls).toEqual(['preflight:merge', 'preflight:isolation', 'worker:9.1', 'ci:9.1 r1', 'test-edits:9.1 r1', 'critic:9.1 r1', 'worker:9.1 fix1', 'ci:9.1 r2', 'delta:9.1 r2', 'merger:9.1']);
     expect(prompts['delta:9.1 r2'][0]).toContain(`/tmp/sim/.claude/scripts/ci-only.js 7 --repo /tmp/sim --since ${REVIEWED}`);
     expect(logs).toContain('9.1 critic round 2: skipped (CI-only change)');
     expect(out.tasks['9.1'].rounds[1]).toMatchObject({ round: 2, verdict: 'MERGE', ci: 'green', criticSkipped: 'ci-only' });
