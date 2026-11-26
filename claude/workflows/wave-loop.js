@@ -1177,7 +1177,11 @@ const CRITIC_SCHEMA = {
       type: 'array',
       items: {
         type: 'object',
-        properties: { item: { type: 'integer' }, pass: { type: 'boolean' }, evidence: { type: 'string' } },
+        properties: {
+          item: { type: 'integer', description: 'the checklist number (1 to 9); one entry per checklist item, n/a items included' },
+          pass: { type: 'boolean' },
+          evidence: { type: 'string', description: 'a quote from the diff, a file:line or a command output; the word n/a for an item that does not apply' },
+        },
         required: ['item', 'pass', 'evidence'],
       },
     },
@@ -1261,7 +1265,22 @@ function wtPath(t) {
   return `${WT}/${t.id}`
 }
 
-function workerPrompt(t) {
+// v2.4: the worker's own test list and the Test edits: section the workflow's test-edits gate reads in the PR body.
+const TEST_EDITS_RULE = 'Test edits: if you remove or change an assertion in a test file after your test-first commit, add a line that starts with `Test edits:` to the PR body, then one line per removed or changed assertion (the file, the old and the new assertion, and why the change is right). The critic treats an unjustified removal or change as a FIX item, and the workflow blocks the merge when the PR body has no such line. Leave the section out when you edited no assertion.'
+const IMPACT_LIST_MAX = 40
+
+function impactSection(t, tests) {
+  if (!Array.isArray(tests) || tests.length === 0) return ''
+  const how = (x) => (x.via === null ? 'imports an owned file' : x.via === 'name' ? 'names an owned file in a string' : `through ${x.via}`)
+  const lines = tests.slice(0, IMPACT_LIST_MAX).map((x) => `- ${x.path} (${how(x)}; owner ${x.owner === null ? 'none' : x.owner})`)
+  if (tests.length > IMPACT_LIST_MAX) lines.push(`- and ${tests.length - IMPACT_LIST_MAX} more (run the project's whole test suite for the files you own)`)
+  return `Existing tests that import or name the files you own (the impact map, read before you started; the owner is the task whose Owns line lists the test):
+${lines.join('\n')}
+Run these test files before you open the PR. When a change of yours breaks a test that another task owns (an owner other than ${t.id} in this list), do not edit it: stop (status: blocked) and ask, naming the test and its owner. That is the ownership rule above, now with the list; a broken test with no owner follows that rule as before.`
+}
+
+function workerPrompt(t, impact) {
+  const impactBlock = impactSection(t, impact)
   return `You are a worker on the ${NAME} repository. ${COMMON_RULES}
 Task ${t.id}: ${t.title}.
 Task text (verbatim from the spec): ${t.text}
@@ -1269,7 +1288,7 @@ You own only: ${t.owns}. ${OWN_RULE}
 Task notes: ${t.notes || 'none'}
 ${WORKER_NOTES}
 ${AUTONOMY}
-
+${impactBlock ? `\n${impactBlock}\n` : ''}
 Worktree: cd ${REPO} && git fetch origin && git worktree add ${wtPath(t)} -b ${t.branch} origin/main. Then work ONLY inside ${wtPath(t)} (cd there; run ${INSTALL_CMD} there first). Never run git checkout in ${REPO}.
 Order: (1) write the acceptance test exactly as specified and commit it first, confirming it fails for the right reason before the implementation exists; (2) implement; (3) ${
     QUICK_CHECK
@@ -1277,6 +1296,7 @@ Order: (1) write the acceptance test exactly as specified and commit it first, c
       : `run ${CHECK_CMD} once in the worktree and keep the output (the slot wrapper waits for a free check slot on this machine, so the command can take up to 15 minutes: run it with the Bash tool's maximum timeout, and if the tool moves it to the background, wait for its completion notification and read its output file; never run a second copy; ${CHECK_WAIT});`
   } (4) commit in small steps; (5) ${SYNC_STEP} (6) git push -u origin ${t.branch} and open a PR with gh pr create titled "${t.id}: ${t.title}" whose body lists files changed, the exact test command and its output tail, a "Decisions" list for every default you took where the spec left a detail open, and open questions.
 Where the spec leaves a detail open, take the conventional default and list it under Decisions. Stop (status: blocked) if two readings of the spec would lead to materially different work or if a choice falls outside the envelope; then list the question and still open the PR as a draft with what you have.
+${TEST_EDITS_RULE}
 Return the structured result with worktree set to ${wtPath(t)}. Leave the branch pushed and the worktree in place; do not merge.`
 }
 
@@ -1338,11 +1358,11 @@ async function finishIfUnfinished(t, w, ph, tag) {
 // v2.3: wave 2 of Warden shipped a database connection without TLS that no checklist item asked about.
 const SECURITY_ITEM = `Security, when the task's owned paths or its diff touch the network, a database, environment variables, auth or secrets: TLS on every connection (no sslmode=disable, no http:// to a remote host, no turned-off certificate checks); least-privilege roles (no service, admin or owner role where a narrower one serves); no secret in a log line, error message or URL; SQL is parameterized (no values put into SQL text by string building); an allowlist is checked before any fetch of a URL that comes from data or input. Each violation is a FIX item. Record n/a when the task touches none of these.`
 
-function criticChecklist() {
-  const core = [
+function criticItems() {
+  return [
     `The acceptance test exists and its commit precedes the implementation commits. Verify "fails on main" by checking that the paths or behaviour the test exercises do not exist at the PR's merge-base (git cat-file -e origin/main:<path>, or reasoning from the diff). Every test that asserts a rejection, refusal, quarantine or error also has a positive control in the same file: the same function, called the same way, accepting the unaltered valid input. A negative-only test passes for the wrong reason when arguments are swapped or a path does not exist (a 50-case mutation test in another project passed this way); a missing control fails this item.`,
     `Only owned paths changed (plus ${SIDE_FILES_SHORT} and merge commits from origin/main), apart from the files listed under "${OUTSIDE_EDITS}" in the PR body when the project's rules (in its read-first files) allow such edits. Check each listed edit: it is mechanical (it only follows the task's own change, such as a renamed key or call, a new required argument, an updated expected string or a regenerated block), it is within the project's limit, and it removes or weakens no assertion (no deleted or loosened expect, no deleted test case, no widened tolerance). A listed edit that fails any of these, or any other changed file outside the owned paths, fails this item.`,
-    `No test touches the network or a paid API; no .skip, .only, or disabled test, and no lowered test count.`,
+    `No test touches the network or a paid API; no .skip, .only, or disabled test, and no lowered test count. Also: an assertion removed or changed after the test-first commit is a FIX item unless the PR body's \`Test edits:\` section justifies each one and the justification holds (the workflow's report is under "Test edits after the test-first commit" below).`,
     `No street address, real person, secret${FORBIDDEN ? ' or project-confidential string' : ''} anywhere in the diff.`,
     `CI result supplied by the workflow; n/a. The workflow waits for CI in code and combines it with your verdict. Record n/a with pass.`,
     `The task's own acceptance criteria and every fixed decision it touches are met exactly as the spec states (names, counts, columns, enums, the Done line). Treat a deviation from the spec as a FIX item.`,
@@ -1352,7 +1372,9 @@ function criticChecklist() {
     `Every entry in the PR body's \`Decisions:\` block (lines of the form id | choice | reason | reversible) is inside the decision envelope as the 'Decision envelope' section of ${SPEC} defines it: reversible by one revert PR or one config edit, within the cost cap, no project invariant or fixed decision touched, not in a human-only category. A decision outside the envelope is a FIX item. Record n/a when the PR took no decisions.`,
     SECURITY_ITEM,
   ]
-  return core.map((s, i) => `${i + 1}. ${s}`).join('\n')
+}
+function criticChecklist() {
+  return criticItems().map((s, i) => `${i + 1}. ${s}`).join('\n')
 }
 
 // v2.3.1: a relaunched task carries the session's answers in t.resume (items, notes). The worker gets them as fix items;
@@ -1369,13 +1391,22 @@ ${list}${r.notes ? `${list ? '\n' : ''}Notes: ${r.notes}` : ''}
 An answer that lets the task edit a path it does not own still needs a record in a read-first file (for example CONTRACT.md); without that record, the outside edit fails checklist item 2 as before.`
 }
 
-function criticPrompt(t, w, round) {
+const TEST_EDITS_HEAD = 'Test edits after the test-first commit'
+function testEditsText(report) {
+  if (report === 'unavailable') {
+    return `${TEST_EDITS_HEAD}: the report is not available (its relay failed): run git diff over the test files yourself, from the first commit of the PR that adds or changes a test file to the PR head, and apply checklist item 3 to what you find.`
+  }
+  return `${TEST_EDITS_HEAD} (scripts/test-edits.js, run by the workflow: assertionsRemoved and assertionsChanged count the assertion lines of test files removed or changed since the first commit of the PR that touched a test; bodySection is true when the PR body has a line starting with \`Test edits:\`):
+${JSON.stringify(report)}`
+}
+
+function criticPrompt(t, w, round, testEdits) {
   return `You are the critic for the ${NAME} repository. ${COMMON_RULES}
 Review PR #${w.prNumber} (${w.prUrl || ''}, branch ${w.branch}) for task ${t.id}: ${t.title}, review round ${round}.
 Task text: ${t.text}
 Owned paths for this task: ${t.owns}. Task notes given to the worker: ${t.notes || 'none'}${sessionAnswers(t)}
 Work from ${REPO} on main without checking anything out: gh pr diff ${w.prNumber}, gh pr view ${w.prNumber}, gh pr view ${w.prNumber} --json commits,files, and PR comments if round > 1. Read the spec sections the task names and compare the diff against them line by line. Do not run ${CHECK} locally and do not edit any file or branch.
-Apply the checklist in order and record pass/fail with evidence for each item; record "n/a" with pass when an item does not apply to this task:
+${testEdits === undefined || testEdits === null ? '' : testEditsText(testEdits) + '\n'}Apply the checklist in order and record pass/fail with evidence for each item; record "n/a" with pass when an item does not apply to this task:
 ${criticChecklist()}
 Verdict: MERGE if every applicable item passes. FIX lists numbered items each with the check that proves it and a cause (defect, spec_miss or loop); be complete in one pass, the worker gets at most ${FIX_ROUNDS} rounds. STOP only if the spec itself is wrong or contradictory; name the section.
 Findings: record every problem you see in findings, whatever the verdict, each with a severity, what is wrong, and where (file:line). high: it would break, leak or corrupt something in use; every high finding is also a FIX item, so a high finding means the verdict is not MERGE. medium: a real problem a later task can fix. low: a nit. Medium and low findings go in findings only and do not change the verdict. An empty list means you saw no problem. notes is a short summary for the record; never put a problem only in notes, because nothing reads notes for problems. Do not watch or wait for CI and do not look at its status: the workflow waits for CI itself and combines the result with your verdict.`
@@ -1579,18 +1610,20 @@ function relayPrompt(command) {
   return `You are a relay for the ${NAME} repository. You run exactly one shell command and report what it printed. You do not interpret, summarise, repair or retry anything.
 FIRST RULE: the Bash tool call that runs the command MUST include the parameter timeout=600000. Without it the command is moved to the background after 120 seconds and the task fails. Do not set run_in_background.
 If you see "moved to the background" anyway: do not end your turn and do not run the command again. Read the output file the tool reported with the Read tool, again and again (at most 30 reads), until it contains the JSON line the command prints, and return that.
-Run exactly this command with the Bash tool from ${REPO} (cd there first):
+Run exactly this command with the Bash tool, as the whole command and alone: change no directory before it, join nothing to it with && or ;, and put nothing in front of it. It names the repository itself (--repo), and a permission rule matches only a command that stands alone, so a compound command is sent to a classifier that refuses it:
 ${command}
 It can take many minutes. Never end your turn while the command is still running. Never run a second copy of the command.
-Run no other command except cd. Do not edit any file, branch or setting. If the command fails, report that; do not retry it and do not try another way.
+Run no other command. Do not edit any file, branch or setting. If the command fails, report that; do not retry it and do not try another way.
 If the permission system denies the command, or the tool refuses to run it, return status "blocked" with the denial text in note, and stop.
 Otherwise return status "ran", exitCode as the command's exit code, and stdout as exactly what the command printed on stdout (verbatim: nothing added, removed, reordered or summarised).`
 }
 
-async function relay(command, label, phaseName) {
+// opts.probe false: a null answer is not followed by the probe (the impact and test-edits relays, whose callers carry on
+// without their answer; the next agent call finds a usage limit if there is one).
+async function relay(command, label, phaseName, opts) {
   const r = await ask(relayPrompt(command), { label, phase: phaseName, schema: RELAY_SCHEMA, ...RELAY_MODEL })
   if (!r) {
-    await probeAfterNull(label)
+    if (!opts || opts.probe !== false) await probeAfterNull(label)
     return { status: 'none' }
   }
   if (r.status === 'blocked') return { status: 'blocked', note: r.note || '' }
@@ -1635,9 +1668,143 @@ async function callWorker(t, prompt, opts) {
   return w
 }
 
+// ---- v2.4: the impact relay (before the worker) and the test-edits relay and gate (each critic round). ----
+// Both run one script through a relay, alone, and never stop a task: a relay that fails or returns nothing is logged and the
+// prompt goes on without its part. They are not followed by the probe on a null answer (see relay()).
+function shellWord(p) {
+  return /^[\w./@%+=:,-]+$/.test(p) ? p : `'${p.replace(/'/g, `'\\''`)}'`
+}
+// The owned paths to give impact.js: backticked paths, array entries, or path-like words (with a "/" or a ".") of a plain
+// Owns text; a word such as "y" names no file and runs no relay.
+function impactOwns(owns) {
+  const ticked = Array.isArray(owns) || (typeof owns === 'string' && /`[^`]+`/.test(owns))
+  return parseOwns(owns).filter((p) => ticked || /[/.]/.test(p))
+}
+async function impactTests(t, ph) {
+  const paths = impactOwns(t.owns)
+  if (!paths.length) return null
+  const spec = SPEC ? ` --spec ${shellWord(SPEC.startsWith('/') ? SPEC : `${REPO}/${SPEC}`)}` : ''
+  const command = `node ${SCRIPTS}/impact.js --repo ${REPO} --owns ${paths.map(shellWord).join(' ')}${spec}`
+  const rr = await relay(command, `impact:${t.id}`, ph.build, { probe: false })
+  const none = (why) => {
+    log(`${t.id}: impact relay ${why}; the worker prompt has no test list`)
+    return null
+  }
+  if (rr.status === 'blocked') return none(`blocked (${tailOf(rr.note, 200)})`)
+  if (rr.status === 'none') return none('returned nothing')
+  const line = parseJsonLine(rr.stdout)
+  if (!line || !Array.isArray(line.tests)) return none('printed no JSON line')
+  if ((rr.exitCode !== null && rr.exitCode !== 0) || /^(error|usage):/.test(String(line.note || ''))) return none(`failed (${tailOf(line.note, 200) || `exit ${rr.exitCode}`})`)
+  const tests = line.tests
+    .filter((x) => x && typeof x.path === 'string' && x.path !== '')
+    .map((x) => ({ path: x.path, via: typeof x.via === 'string' ? x.via : null, owner: typeof x.owner === 'string' ? x.owner : null }))
+  if (!tests.length) log(`${t.id}: impact relay found no existing test that imports or names the owned files`)
+  return tests
+}
+
+const TEST_EDITS_ITEM = 'restore the assertion or justify it under Test edits:'
+const LIST_MAX = 20
+// The report as the critic prompt and the round record carry it: counts, and the first lines of the first files.
+function slimReport(line) {
+  const files = Array.isArray(line.files) ? line.files : []
+  return {
+    testFirstCommit: typeof line.testFirstCommit === 'string' ? line.testFirstCommit : null,
+    files: files.slice(0, LIST_MAX).map((f) => ({
+      path: String(f && f.path),
+      removed: (Array.isArray(f && f.removed) ? f.removed : []).slice(0, LIST_MAX),
+      changed: (Array.isArray(f && f.changed) ? f.changed : []).slice(0, LIST_MAX),
+    })),
+    ...(files.length > LIST_MAX ? { filesOmitted: files.length - LIST_MAX } : {}),
+    assertionsRemoved: line.assertionsRemoved,
+    assertionsChanged: line.assertionsChanged,
+    bodySection: line.bodySection === true,
+    note: typeof line.note === 'string' ? line.note : null,
+  }
+}
+// The test-edits report of the PR head, or 'unavailable' (logged). A relay that printed no JSON line is run once more; one that
+// is blocked, returned nothing or printed a failure line is not.
+async function testEditsReport(t, w, tag, ph) {
+  const command = `node ${SCRIPTS}/test-edits.js ${w.prNumber} --repo ${REPO}`
+  const base = `test-edits:${t.id} ${roundLabel(tag)}`
+  const st = taskState(t)
+  const unavailable = (why) => {
+    log(`${base} unavailable: ${why}; the critic reads the test diff itself`)
+    st.lastTestEdits = 'unavailable'
+    return 'unavailable'
+  }
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const rr = await relay(command, attempt ? `${base} retry` : base, ph.review, { probe: false })
+    if (rr.status === 'blocked') return unavailable(`the relay was blocked (${tailOf(rr.note, 200)})`)
+    if (rr.status === 'none') return unavailable('the relay returned nothing')
+    const line = parseJsonLine(rr.stdout)
+    if (!line) continue
+    const counts = Number.isInteger(line.assertionsRemoved) && Number.isInteger(line.assertionsChanged)
+    if ((rr.exitCode !== null && rr.exitCode !== 0) || /^(error|usage):/.test(String(line.note || '')) || !counts) return unavailable(`the script failed (${tailOf(line.note, 200) || `exit ${rr.exitCode}`})`)
+    const report = slimReport(line)
+    st.lastTestEdits = report
+    return report
+  }
+  return unavailable('the script printed no JSON line twice')
+}
+// True when assertions were removed or changed after the test-first commit and the PR body has no Test edits: line.
+function testEditsBlocks(report) {
+  return !!report && typeof report === 'object' && report.bodySection !== true && report.assertionsRemoved + report.assertionsChanged > 0
+}
+// A MERGE becomes FIX, and a FIX gets the item, whatever else the critic said; a STOP stays a STOP (the spec itself is wrong).
+function gateTestEdits(t, critic, report) {
+  if (!critic || (critic.verdict !== 'MERGE' && critic.verdict !== 'FIX') || !testEditsBlocks(report)) return critic
+  const items = Array.isArray(critic.fixItems) ? critic.fixItems : []
+  const n = items.reduce((m, i) => Math.max(m, Number(i && i.n) || 0), 0) + 1
+  const item = {
+    n,
+    what: TEST_EDITS_ITEM,
+    provedBy: `scripts/test-edits.js reports ${report.assertionsRemoved} assertion(s) removed and ${report.assertionsChanged} changed after the test-first commit${report.testFirstCommit ? ` ${report.testFirstCommit}` : ''}, and the PR body has no line starting with "Test edits:" (justify each one there, one line per assertion, with gh pr edit, or restore it)`,
+    cause: 'defect',
+  }
+  if (critic.verdict === 'MERGE') log(`${t.id}: critic said MERGE but ${report.assertionsRemoved + report.assertionsChanged} assertion(s) were removed or changed with no Test edits: section; turned into FIX`)
+  return {
+    ...critic,
+    verdict: 'FIX',
+    fixItems: items.some((i) => i && i.what === TEST_EDITS_ITEM) ? items : [...items, item],
+    notes: `${critic.verdict === 'MERGE' ? 'MERGE turned into FIX by the workflow: ' : ''}assertions were removed or changed after the test-first commit with no Test edits: section in the PR body. ${critic.notes || ''}`.trim(),
+  }
+}
+
+// The checklist numbers the critic's result has no entry for. The critic's own checklist always has criticItems().length items.
+function missingChecklist(list) {
+  const have = new Set((Array.isArray(list) ? list : []).map((e) => Number(e && e.item)))
+  return criticItems().map((_, i) => i + 1).filter((n) => !have.has(n))
+}
+// A checklist that misses a number gets one more call on the same model (never the swap to CRITIC_FALLBACK) with the missing
+// numbers named; a second miss is kept as is and logged. An empty checklist is not retried (the caller records it).
+async function completeChecklist(t, tag, prompt, opts, critic) {
+  if (!critic || !Array.isArray(critic.checklist) || critic.checklist.length === 0) return critic
+  const names = (list) => `item${list.length > 1 ? 's' : ''} ${list.join(', ')}`
+  const first = missingChecklist(critic.checklist)
+  if (!first.length) return critic
+  const where = `${t.id} critic round ${tag}`
+  log(`${where}: checklist has no entry for ${names(first)}; asking once more on the same model`)
+  const extra = `\n\nYour previous result had no checklist entry for ${names(first)}. Review again and return the whole result, with one checklist entry for each of items 1 to ${criticItems().length} (evidence a quote from the diff, a file:line or a command output; the word n/a, with pass, for an item that does not apply).`
+  let again
+  try {
+    again = await ask(prompt + extra, { ...opts, label: `${opts.label} retry`, model: criticModel.model, effort: criticModel.effort })
+  } catch (e) {
+    if (e && e.wavePaused) throw e
+    log(`${where}: the extra critic call failed (${e && e.message ? e.message : e}); the checklist is recorded as is`)
+    return critic
+  }
+  if (!again) {
+    log(`${where}: the extra critic call returned nothing; the checklist is recorded as is`)
+    return critic
+  }
+  const second = missingChecklist(again.checklist)
+  if (second.length) log(`${where}: checklist: still no entry for ${names(second)} after the second call; recorded as is`)
+  return again
+}
+
 const taskStates = {}
 function taskState(t) {
-  return taskStates[t.id] || (taskStates[t.id] = { criticUsed: false, fastFixUsed: false, laneCounted: false, conflictFixes: 0 })
+  return taskStates[t.id] || (taskStates[t.id] = { criticUsed: false, fastFixUsed: false, laneCounted: false, conflictFixes: 0, lastTestEdits: null })
 }
 let fastLaneUsed = 0 // fast-lane tasks found eligible in this wave; incremented in the same step as the eligibility call
 
@@ -1742,8 +1909,20 @@ async function ciOnlySince(t, w, tag, ph, since) {
 // Returns { action: 'merge'|'fix'|'stop'|'nocritic'|'escalate', critic, ci, fixItems, notes, what, question }.
 async function reviewRound(t, w, tag, ph, approved) {
   const st = taskState(t)
-  const rec = (critic, ci, extra) => results[t.id].rounds.push({ ...roundRecord(tag, critic, ci), ...(extra || {}) })
-  const criticCall = async () => routeHighFindings(t, await callCritic(criticPrompt(t, w, tag), { label: `critic:${t.id} ${roundLabel(tag)}`, phase: ph.review, schema: CRITIC_SCHEMA }))
+  let testEdits = null // the test-edits report of this round, 'unavailable', or null when no report was asked for
+  let checklistEmpty = false
+  const rec = (critic, ci, extra) => results[t.id].rounds.push({ ...roundRecord(tag, critic, ci), ...(testEdits === null ? {} : { testEdits }), ...(checklistEmpty ? { checklistEmpty: true } : {}), ...(extra || {}) })
+  // The critic (with its completeness check), then the high-findings route. An empty checklist is recorded, not retried.
+  const criticCall = async () => {
+    const prompt = criticPrompt(t, w, tag, testEdits)
+    const opts = { label: `critic:${t.id} ${roundLabel(tag)}`, phase: ph.review, schema: CRITIC_SCHEMA }
+    const c = await completeChecklist(t, tag, prompt, opts, await callCritic(prompt, opts))
+    if (c && (!Array.isArray(c.checklist) || c.checklist.length === 0)) {
+      checklistEmpty = true
+      log(`note: ${t.id} critic round ${tag} returned an empty checklist; its verdict stands, nothing was checked per item`)
+    }
+    return routeHighFindings(t, c)
+  }
   let critic = null
   let ci = null
   let ciP = null
@@ -1777,8 +1956,12 @@ async function reviewRound(t, w, tag, ph, approved) {
       rec(null, ci, { lane: 'fast' })
       return { action: 'escalate', ...ciEscalation(d, ci) }
     }
-    const facts = await factsP
-    if (facts) {
+    const [facts, report] = await Promise.all([factsP, testEditsReport(t, w, tag, ph)])
+    testEdits = report
+    const editsBlock = testEditsBlocks(report)
+    if (facts && editsBlock) {
+      log(`${t.id}: not fast lane, the critic reviews it: ${report.assertionsRemoved + report.assertionsChanged} assertion(s) removed or changed after the test-first commit and the PR body has no Test edits: section`)
+    } else if (facts) {
       const lane = fastLaneEligible({
         task: { id: t.id, lane: t.lane, owns: t.owns },
         changedFiles: facts.changedFiles,
@@ -1811,12 +1994,17 @@ async function reviewRound(t, w, tag, ph, approved) {
       if (delta) {
         skipped = { criticSkipped: 'ci-only', ciOnlyReason: String(delta.reason || '') }
         critic = { ...approved, notes: `critic round ${tag} skipped: CI-only change since ${approved.prHeadSha} (${delta.reason || 'no reason given'}). ${approved.notes || ''}`.trim() }
+        testEdits = st.lastTestEdits // the report of the round this one follows (CI-only changes since then, so no new relay)
         log(`${t.id} critic round ${tag}: skipped (CI-only change)`)
       }
     }
-    if (!critic) critic = await criticCall()
+    if (!critic) {
+      testEdits = await testEditsReport(t, w, tag, ph)
+      critic = await criticCall()
+    }
   }
   st.criticUsed = true
+  critic = gateTestEdits(t, critic, testEdits)
 
   if (!critic) {
     rec(null, null)
@@ -2056,7 +2244,8 @@ async function runTask(t, ph) {
     worker = await callWorker(t, fixPrompt(t, prev, synthetic, 'resume'), { label: `worker:${t.id} resume`, phase: ph.build, schema: WORKER_SCHEMA, ...MODELS.worker })
     if (worker) worker = { ...worker, prNumber: worker.prNumber || prev.prNumber, prUrl: worker.prUrl || prev.prUrl, branch: worker.branch || prev.branch, worktree: worker.worktree || prev.worktree }
   } else {
-    worker = await callWorker(t, workerPrompt(t), { label: `worker:${t.id}`, phase: ph.build, schema: WORKER_SCHEMA, ...MODELS.worker })
+    const impact = await impactTests(t, ph)
+    worker = await callWorker(t, workerPrompt(t, impact), { label: `worker:${t.id}`, phase: ph.build, schema: WORKER_SCHEMA, ...MODELS.worker })
   }
   if (!worker) {
     escalate(t.id, 'worker agent returned nothing', 'Relaunch the wave.')

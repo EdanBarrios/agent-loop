@@ -2,7 +2,10 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+
+// Each CLI case starts node and git on a temp repo; a loaded machine needs more than the default 5 seconds.
+vi.setConfig({ testTimeout: 30000 });
 // @ts-expect-error plain JavaScript module with JSDoc
 import { impactMap, parseAliases, parseImports, parseOwners, resolveSpecifier } from './impact.js';
 
@@ -172,6 +175,66 @@ describe('scripts/impact.js on a temp repo', () => {
     const missing = runCli(['--repo', repo, '--owns', 'src/core.ts', '--spec', join(scratch, 'nope.md')]);
     expect(missing.code).toBe(1);
     expect(JSON.parse(missing.stdout).tests).toEqual([]);
+  });
+});
+
+// Task 2.2: tests that no import shows, because they read an owned file with readFileSync or run it with execFile, are
+// listed with via "name": a test file with a quoted string that holds an owned file's repo-relative path or its basename.
+describe('scripts/impact.js lists tests that name an owned file in a string (via "name")', () => {
+  const NAMED: Record<string, string> = {
+    'src/named.ts': 'export const named = 1;\n',
+    'scripts/tool.py': 'print(1)\n',
+    'src/imported.ts': 'export const imported = 1;\n',
+    'tests/name-path.test.ts': "const text = readFileSync(join(root, 'src/named.ts'), 'utf8');\n",
+    'tests/name-parts.test.ts': "const text = readFileSync(join(root, 'src', 'named.ts'), 'utf8');\n",
+    'tests/name-template.test.ts': 'const text = readFileSync(`${dir}/named.ts`, "utf8");\n',
+    'tests/name-py.test.ts': "await execFile('python3', ['-I', join(root, 'scripts', 'tool.py')]);\n",
+    'tests/name-import-and-string.test.ts': "import { imported } from '../src/imported';\nconst again = 'imported.ts';\nconsole.log(imported, again);\n",
+    'tests/name-near-miss.test.ts': "const a = 'src/unnamed.ts';\nconst b = 'named.tsx';\nconst c = 'my-tool.py2';\nconst d = 'src/named';\n",
+    'tests/name-unquoted.test.ts': '// named.ts is only mentioned in a comment\nconst x = 1;\n',
+    'tests/name-other.test.ts': "const a = 'src/other.ts';\n",
+  };
+  const repo = makeRepo({ ...FIXTURE, ...NAMED });
+  const specPath = join(scratch, 'spec-named.md');
+  writeFileSync(specPath, ['## Wave 2', '', '- **2.7 Names.** Owns `src/named.ts`, `tests/name-py.test.ts`. Test: x.', ''].join('\n'));
+
+  function named(owns: string[], extra: string[] = []) {
+    const r = runCli(['--repo', repo, '--owns', ...owns, ...extra]);
+    expect(r.code).toBe(0);
+    return JSON.parse(r.stdout).tests as Array<{ path: string; via: string | null; owner: string | null }>;
+  }
+
+  it('lists a test with a quoted string holding the owned path, its parts joined, or its basename', () => {
+    const got = Object.fromEntries(named(['src/named.ts', 'scripts/tool.py']).map((t) => [t.path, t.via]));
+    expect(got).toEqual({
+      'tests/name-path.test.ts': 'name',
+      'tests/name-parts.test.ts': 'name',
+      'tests/name-template.test.ts': 'name',
+      'tests/name-py.test.ts': 'name',
+    });
+  });
+
+  it('does not list near misses, a name outside a string, or a test that names an unowned file', () => {
+    const paths = named(['src/named.ts', 'scripts/tool.py']).map((t) => t.path);
+    for (const p of ['tests/name-near-miss.test.ts', 'tests/name-unquoted.test.ts', 'tests/name-other.test.ts']) expect(paths).not.toContain(p);
+  });
+
+  it('keeps the import result for a test that also names the file: via stays the import, not "name"', () => {
+    const got = Object.fromEntries(named(['src/imported.ts']).map((t) => [t.path, t.via]));
+    expect(got).toEqual({ 'tests/name-import-and-string.test.ts': null });
+  });
+
+  it('keeps the other fields: path, via, owner, sorted by path, owner from --spec', () => {
+    const tests = named(['src/named.ts', 'scripts/tool.py'], ['--spec', specPath]);
+    expect(tests.every((t) => Object.keys(t).sort().join() === 'owner,path,via')).toBe(true);
+    const paths = tests.map((t) => t.path);
+    expect(paths).toEqual([...paths].sort());
+    expect(Object.fromEntries(tests.map((t) => [t.path, t.owner]))).toMatchObject({ 'tests/name-py.test.ts': '2.7', 'tests/name-path.test.ts': null });
+  });
+
+  it('an owned directory names every tracked file under it, and a file that does not exist names nothing', () => {
+    expect(named(['src/missing-file.ts']).map((t) => t.path)).toEqual([]);
+    expect(named(['scripts']).map((t) => t.path)).toEqual(['tests/name-py.test.ts']);
   });
 });
 

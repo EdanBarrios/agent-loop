@@ -115,7 +115,7 @@ describe('perf 3: the check on main', () => {
 
   it('deferred: a --verify-main relay watches main after the merge relay, and its green result merges the task', async () => {
     const { out, calls, prompts } = await runWave({ ...base, 'merger:9.1': mergeRan(deferredLine), 'main:9.1': mergeRan({ mainCheck: 'green', mainCheckMs: 400000, ciWaitMs: 0, mergeMs: 0 }) });
-    expect(calls).toEqual(['preflight:merge', 'worker:9.1', 'ci:9.1 r1', 'critic:9.1 r1', 'merger:9.1', 'main:9.1']);
+    expect(calls).toEqual(['preflight:merge', 'worker:9.1', 'ci:9.1 r1', 'test-edits:9.1 r1', 'critic:9.1 r1', 'merger:9.1', 'main:9.1']);
     expect(prompts['main:9.1'][0]).toContain('/tmp/sim/.claude/scripts/merge-pr.js 7 --repo /tmp/sim --verify-main m1 --timeout-min 9');
     expect(out.gate).toBe('PASS');
     expect(out.tasks['9.1'].merge).toMatchObject({ outcome: 'merged', mergeSha: 'm1', checkOnMainExitCode: 0 });
@@ -220,7 +220,7 @@ describe('perf 6: no second critic round after a MERGE when only CI-only changes
 
   it('skips the critic in round 2, logs it, records it, and merges on the round-1 MERGE', async () => {
     const { out, calls, prompts, logs } = await runWave({ ...redThenFix, 'delta:9.1 r2': ran({ ciOnly: true, since: REVIEWED, head: 'cd'.repeat(20), reason: '1 formatting-only commit (12 files)', commits: 1, files: [] }) });
-    expect(calls).toEqual(['preflight:merge', 'worker:9.1', 'ci:9.1 r1', 'critic:9.1 r1', 'worker:9.1 fix1', 'ci:9.1 r2', 'delta:9.1 r2', 'merger:9.1']);
+    expect(calls).toEqual(['preflight:merge', 'worker:9.1', 'ci:9.1 r1', 'test-edits:9.1 r1', 'critic:9.1 r1', 'worker:9.1 fix1', 'ci:9.1 r2', 'delta:9.1 r2', 'merger:9.1']);
     expect(prompts['delta:9.1 r2'][0]).toContain(`/tmp/sim/.claude/scripts/ci-only.js 7 --repo /tmp/sim --since ${REVIEWED}`);
     expect(logs).toContain('9.1 critic round 2: skipped (CI-only change)');
     expect(out.tasks['9.1'].rounds[1]).toMatchObject({ round: 2, verdict: 'MERGE', ci: 'green', criticSkipped: 'ci-only' });
