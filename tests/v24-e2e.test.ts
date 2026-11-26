@@ -28,7 +28,7 @@ type Opts = { label: string; model?: string; effort?: string };
 type Answer = unknown | ((opts: Opts, prompt: string) => unknown | Promise<unknown>);
 
 const scratch = mkdtempSync(join(tmpdir(), 'v24-e2e-'));
-afterAll(() => { if (!process.env.KEEP) rmSync(scratch, { recursive: true, force: true }); else console.log('SCRATCH', scratch) });
+afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
 // ---------------------------------------------------------------------------------------------------------------------
 // The stubbed wave
