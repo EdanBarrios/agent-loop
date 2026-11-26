@@ -23,9 +23,9 @@
 // Environment: BENCH_STATE, BENCH_REMOTE (optional), BENCH_POLL_MS (poll interval of --watch, default 1000).
 // Reads or writes: writes-files (the state directory and the bare remote).
 import { spawnSync } from 'node:child_process';
-import { existsSync, linkSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { enqueueRun, listRuns, loadCiConfig, readRun } from './ci.js';
 
 const REPO = 'bench.invalid/bench';
@@ -815,7 +815,16 @@ function readStdin() {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+// Real paths on both sides: a symlinked directory (macOS /tmp and /var) makes the logical argv[1] differ from import.meta.url.
+function isMain() {
+  try {
+    return Boolean(process.argv[1]) && realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isMain()) {
   const r = runGh(process.argv.slice(2), { stdin: readStdin });
   process.stdout.write(r.stdout);
   process.stderr.write(r.stderr);

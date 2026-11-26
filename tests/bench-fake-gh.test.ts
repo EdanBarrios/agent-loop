@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
@@ -113,6 +113,26 @@ describe('refusals', () => {
     const gone = gh(f, ['pr', 'list'], { env: { BENCH_STATE: join(f.dir, 'nowhere') } });
     expect(gone.code).toBe(1);
     expect(gone.err).toContain('BENCH_STATE');
+  });
+
+  it('runs through a symlinked directory and a symlinked file, not as a silent no-op', () => {
+    const f = setup();
+    const linkDir = join(f.dir, 'linked-bench');
+    symlinkSync(join(root, 'bench'), linkDir);
+    const viaDir = join(linkDir, 'bin', 'gh');
+    const binLink = join(f.dir, 'linked-bin');
+    symlinkSync(join(root, 'bench', 'bin'), binLink);
+    const viaBin = join(binLink, 'gh');
+    const fileLink = join(f.dir, 'gh');
+    symlinkSync(SHIM, fileLink);
+    for (const shim of [viaDir, viaBin, fileLink]) {
+      const ok = spawnSync(shim, ['pr', 'list', '--json', 'number'], { cwd: f.work, encoding: 'utf8', env: cleanEnv({ BENCH_STATE: f.state }) });
+      expect(ok.status).toBe(0);
+      expect(ok.stdout).toBe('[]\n');
+      const unset = spawnSync(shim, ['pr', 'list'], { cwd: f.work, encoding: 'utf8', env: cleanEnv() });
+      expect(unset.status).toBe(1);
+      expect(unset.stderr).toContain('BENCH_STATE');
+    }
   });
 
   it('exits 1 naming an unknown subcommand, an unsupported flag and an unsupported --json field', () => {
