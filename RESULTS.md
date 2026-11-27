@@ -72,7 +72,7 @@ never changed under a running wave.
 | [1](docs/agent-loop/2026-11-24-v24-wave-1-loop.md) | permission preflight, usage-limit classification, test-edit report, test-impact map, token estimate | 2.3.1 | 6 | 6/6 | 1 | 1 | 1 | 1.66M |
 | [2](docs/agent-loop/2026-11-25-v24-wave-2-loop.md) | wiring for wave 1, escaped-defect tracer, pooled scorecard with intervals, critic labelling sheet | 2.3.1 | 6 | 6/6 | 3 | 3 | 9 | 2.35M |
 | [3](docs/agent-loop/2026-11-26-v24-wave-3-loop.md) | the outside review's six assumptions: dependency state, merge lock, settle main, opt-in CI tree reuse, isolation rules, integration gate (v2.5.0) | 2.4.0 | 5 | 4/5 | 1 | 0 | 0 | 2.46M |
-| 4 | benchmark harness: fake `gh`, local CI, scenarios, metrics and compare | 2.4.0 | 4 | 2/3 so far | see below | 0 | 0 | not yet scored |
+| [4](docs/agent-loop/2026-11-26-v24-wave-4-loop.md) | benchmark harness: fake `gh`, local CI, scenarios, metrics and compare | 2.4.0 | 4 | 2/4 | 2 | 0 (1 merged by hand, see below) | 0 | not recorded |
 
 Pooled over waves 1 to 3 (5 runs, `loop-scorecard.py --pool`): worker first-pass MERGE 16/19, 84% (95% Wilson
 interval 62–94%); critic misses 0/13 merged tasks (0–23%), counting reverts and, new in 2.4, escaped defects: a fix
@@ -88,9 +88,11 @@ at all: one launch, no worker question, no refused merge, about 95 minutes for 5
 ![Timeline of v2.4 wave 3](docs/img/v24-wave-3-timeline.svg)
 
 Wave 4 merged 4.1 to 4.3 on its first launch (4.1 after one FIX round). Its tail was interrupted twice by the
-machine, not the loop: macOS's program check (`syspolicyd`) stalled every new process until a restart, and the tail's
-end-to-end test, which starts many short-lived processes, could not finish locally while it passed on CI in 44
-seconds. Its scorecard will follow once the tail merges.
+machine: macOS's program check (`syspolicyd`) stalled every new process until a restart. The critic then found that
+the tail's own end-to-end test made it worse, because its CI watch could hang with no timeout and its detached CI
+runners outlived a failed run. Those were fixed in a second round, and the session merged the tail by hand when the
+merge script itself stalled at launch. The [wave 4 scorecard](docs/agent-loop/2026-11-26-v24-wave-4-loop.md) is
+written by hand from the journals, without token totals, because neither run finished.
 
 **Before and after, read with care.** Warden waves 1 to 4 (loop 2.2–2.3): 75% first-pass (44/59), 316K to 565K
 tokens per task, four relaunches in wave 3 alone. v2.4 waves 1 to 3: 84% (62–94%), about 340K per task, one wave
