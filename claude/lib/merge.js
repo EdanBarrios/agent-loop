@@ -160,6 +160,16 @@ function parseJson(text) {
  *   nothing was merged.
  * Exit 5 (pending) happens only in verify mode.
  *
+ * outcome and mainCheck together, the only combinations this function returns:
+ *   merged    skipped:unchanged | deferred | green
+ *   reverted  red                                  (main was red; the revert PR merged and main is green again)
+ *   pending   pending                              (verify mode only)
+ *   error     null      nothing was merged
+ *             unknown   merged, but main could not be verified
+ *             red       merged, main red, and the revert failed or main is still red after it
+ *   refused | locked | dry-run   null              (nothing was merged)
+ * (merge-pr.js --state prints outcome 'state' from its own path, not from this function.)
+ *
  * @param {MergeOptions} opts
  * @param {MergeDeps} deps
  * @returns {Promise<Record<string, any>>} { outcome, exit, mergeSha, mainSha, ciState, failing, conflictFiles, revertPrUrl, message, logTail, ciWaitMs, mergeMs, mainCheckMs, revertMs, elapsedMs }
