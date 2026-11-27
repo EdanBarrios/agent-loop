@@ -2066,13 +2066,41 @@ async function reviewRound(t, w, tag, ph, approved) {
 }
 
 // ---- Merge: merge-pr.js through a relay (or the v2 merger agent when project.merger = 'agent'). ----
-let mergeBlocked = null // set when a merge relay is blocked; later merge relays then escalate without running
 // v2.5: at most this many merge relay runs while merge-pr.js reports the lock held (the first, and two more).
 const MERGE_LOCK_RUNS = 3
-// v2.5 (b): the deferred check on the default branch of the latest merge ({ task, done }), and the task after which a check
-// ended without a verdict (set once; no merge starts after it).
-let mainWatch = null
-let mainUnverified = null
+// The wave's merge gate, one state machine:
+//   open -> waiting (an earlier merge's deferred check on main is running: `watch`) -> open
+//   open -> blocked (a merge relay was refused: `blocked`), for the rest of the wave
+//   open -> unverified (a check on main ended without a verdict: `unverified`, with project.settleMain), for the rest of the wave
+// blocked and unverified never reopen. markUnverified runs before the watch is released, so the waiting merge sees it.
+const mergeGate = {
+  blocked: null, // { command, note }
+  watch: null, // { task, done }
+  unverified: null, // task id
+  block(command, note) {
+    this.blocked = { command, note }
+  },
+  markUnverified(taskId) {
+    if (SETTLE_MAIN) this.unverified = this.unverified || taskId
+  },
+  async settle() {
+    while (this.watch) {
+      const prior = this.watch
+      await prior.done
+      if (this.watch === prior) this.watch = null
+    }
+  },
+  // Registers this merge's deferred check; returns the function that releases it.
+  beginWatch(taskId) {
+    let done
+    const watch = { task: taskId, done: new Promise((resolve) => (done = resolve)) }
+    this.watch = watch
+    return () => {
+      if (this.watch === watch) this.watch = null
+      done()
+    }
+  },
+}
 
 function failedMerge(r, what, question, line) {
   r.merge = { outcome: 'failed', details: line && line.message ? line.message : question, script: line || null }
@@ -2103,19 +2131,15 @@ async function mergeStep(t, w, rr, ph, reopen) {
   // The whole merge attempt is one section under the merge lock: the settle-main wait, the relay (run again while the script
   // reports `locked`), the state check after a lost output, and the registration of the deferred check, so the next merge
   // sees that check before it can start.
-  let releaseMain = null // set when this merge's deferred check is registered in mainWatch
+  let releaseMain = null // set when this merge's deferred check is registered with mergeGate.beginWatch
   const attempt = await withMergeLock(async () => {
-    if (mergeBlocked) return { kind: 'skipped' }
+    if (mergeGate.blocked) return { kind: 'skipped' }
     if (SETTLE_MAIN) {
       // v2.5 (b): an earlier merge's deferred check on the default branch is still running; workers and critics go on.
-      while (mainWatch) {
-        const prior = mainWatch
-        await prior.done
-        if (mainWatch === prior) mainWatch = null
-      }
-      if (mainUnverified) {
+      await mergeGate.settle()
+      if (mergeGate.unverified) {
         if (pauseInfo) throw wavePausedError() // the watch died on the usage limit: this chain is paused with the wave
-        return { kind: 'unverified', after: mainUnverified }
+        return { kind: 'unverified', after: mergeGate.unverified }
       }
     }
     let x = null
@@ -2125,7 +2149,7 @@ async function mergeStep(t, w, rr, ph, reopen) {
     for (let n = 1; n <= MERGE_LOCK_RUNS; n++) {
       x = await relay(command, n === 1 ? label : `${label} locked${n}`, ph.merge)
       if (x.status === 'blocked') {
-        mergeBlocked = { command, note: x.note }
+        mergeGate.block(command, x.note)
         return { kind: 'relay', x }
       }
       line = x.status === 'none' ? null : parseJsonLine(x.stdout)
@@ -2140,19 +2164,11 @@ async function mergeStep(t, w, rr, ph, reopen) {
       if (!rec) return { kind: 'lost', x }
       line = rec
     }
-    if (SETTLE_MAIN && line.outcome === 'merged' && line.mainCheck === 'deferred') {
-      let done
-      const watch = { task: t.id, done: new Promise((resolve) => (done = resolve)) }
-      mainWatch = watch
-      releaseMain = () => {
-        if (mainWatch === watch) mainWatch = null
-        done()
-      }
-    }
+    if (SETTLE_MAIN && line.outcome === 'merged' && line.mainCheck === 'deferred') releaseMain = mergeGate.beginWatch(t.id)
     return { kind: 'ran', x, line }
   })
   if (attempt.kind === 'skipped') {
-    return failedMerge(r, 'merge not run: a merge relay was blocked earlier in this wave', `Not run: ${command}. The earlier block was for ${mergeBlocked.command}${mergeBlocked.note ? ` (${mergeBlocked.note})` : ''}. Allow it, then relaunch the wave.`)
+    return failedMerge(r, 'merge not run: a merge relay was blocked earlier in this wave', `Not run: ${command}. The earlier block was for ${mergeGate.blocked.command}${mergeGate.blocked.note ? ` (${mergeGate.blocked.note})` : ''}. Allow it, then relaunch the wave.`)
   }
   if (attempt.kind === 'unverified') {
     return failedMerge(r, `main not verified after ${attempt.after}`, `The check on the default branch after ${attempt.after}'s merge ended without a verdict, so no further merge started (project.settleMain). Check the default branch by hand (revert once if it is red), then relaunch the wave; it re-runs parked tasks. PR #${w.prNumber} was not merged.`)
@@ -2188,13 +2204,13 @@ async function mergeStep(t, w, rr, ph, reopen) {
       v = await verifyDeferred(t, w, line, ph, label)
     } catch (e) {
       // The watch itself died (a usage limit pauses the wave): main is unverified, so no later merge may start.
-      if (SETTLE_MAIN) mainUnverified = mainUnverified || t.id
+      mergeGate.markUnverified(t.id)
       if (releaseMain) releaseMain()
       throw e
     }
     // v2.5 (b): a check that ended without a verdict (pending after its watch calls, a blocked relay, no JSON) starts no
     // further merge. The flag is set before the waiting merge is released.
-    if (v.failed && SETTLE_MAIN) mainUnverified = mainUnverified || t.id
+    if (v.failed) mergeGate.markUnverified(t.id)
     if (releaseMain) releaseMain()
     if (v.failed) return failedMerge(r, v.what, v.question, v.line || line)
     line = v.line
@@ -2483,7 +2499,22 @@ if (!pauseInfo && !preflightPassed) {
 }
 
 phase('Build')
+// A task's state, one state machine; every change goes through setTaskState. A task not yet in `state` (the tail before it
+// starts) is pending. A reverted merge ends the task parked (results[id].merge.outcome says 'reverted'); its reopen round
+// runs inside runTask, so it is still running.
+const TASK_MOVES = {
+  pending: ['running', 'parked', 'paused'],
+  running: ['merged', 'parked', 'paused'],
+  parked: ['paused'], // only a task whose agent failed on the usage limit (settlePause)
+  paused: ['paused'],
+  merged: [],
+}
 const state = {}
+function setTaskState(id, to) {
+  const from = state[id] || 'pending'
+  if (!(TASK_MOVES[from] || []).includes(to)) log(`WARNING: task ${id} moved ${from} -> ${to}, which TASK_MOVES does not allow`)
+  state[id] = to
+}
 for (const t of TASKS) state[t.id] = 'pending'
 // v2.3.1: a relaunch passes only the parked tasks, so a dependency can name a task that is not in this run. Such a
 // dependency merged in an earlier run of the wave (it is not re-run), so it counts as satisfied; it is logged once per task.
@@ -2562,7 +2593,7 @@ if (!pauseInfo) {
 for (const t of TASKS) {
   if (!depParked.has(t.id)) continue
   const d = depParked.get(t.id)
-  state[t.id] = 'parked'
+  setTaskState(t.id, 'parked')
   results[t.id] = { task: t.id, title: t.title, pr: null, rounds: [], merge: null, reopened: false, merged: false }
   escalate(t.id, d.what, d.question)
 }
@@ -2580,28 +2611,28 @@ while (true) {
   for (const t of pending) {
     if (running.size >= MAX_CHAINS) break
     if (runDeps(t).some((d) => state[d] === 'parked')) {
-      state[t.id] = 'parked'
+      setTaskState(t.id, 'parked')
       results[t.id] = { task: t.id, title: t.title, pr: null, rounds: [], merge: null, reopened: false, merged: false }
       escalate(t.id, `dependency ${runDeps(t).filter((d) => state[d] === 'parked').join(',')} parked`, 'Resolve the dependency first; relaunch re-runs parked tasks.')
       continue
     }
     if (!runDeps(t).every((d) => state[d] === 'merged')) continue
-    state[t.id] = 'running'
+    setTaskState(t.id, 'running')
     log(`starting ${t.id} ${t.title} (${running.size + 1}/${MAX_CHAINS} chains; ${MAX_BUILDERS} check slots machine-wide)`)
     const p = runTask(t, PH).then(
       (r) => {
-        state[t.id] = r.merged ? 'merged' : 'parked'
+        setTaskState(t.id, r.merged ? 'merged' : 'parked')
         running.delete(t.id)
       },
       (err) => {
         running.delete(t.id)
         if (err && err.wavePaused) {
           // The chain stopped on the usage limit: it is paused (one escalation for the wave, below), not parked.
-          state[t.id] = 'paused'
+          setTaskState(t.id, 'paused')
           pauseInfo.failed.push(t.id)
           return
         }
-        state[t.id] = 'parked'
+        setTaskState(t.id, 'parked')
         escalate(t.id, 'task chain threw', 'See the workflow transcript.')
       },
     )
@@ -2610,7 +2641,7 @@ while (true) {
   if (running.size) await Promise.race(running.values())
   else if (pending.length) {
     for (const t of pending) {
-      state[t.id] = 'parked'
+      setTaskState(t.id, 'parked')
       escalate(t.id, 'unschedulable', 'dependency never merged')
     }
     break
@@ -2627,20 +2658,21 @@ if (TAIL) {
     log(`${TAIL.id}: not started, the wave is paused`)
   } else if (depParked.has(TAIL.id)) {
     results[TAIL.id] = { task: TAIL.id, title: TAIL.title, pr: null, rounds: [], merge: null, reopened: false, merged: false }
-    state[TAIL.id] = 'parked'
+    setTaskState(TAIL.id, 'parked')
     escalate(TAIL.id, depParked.get(TAIL.id).what, depParked.get(TAIL.id).question)
   } else if (TASKS.every((t) => state[t.id] === 'merged')) {
     try {
+      setTaskState(TAIL.id, 'running')
       tail = await runTask(TAIL, { build: 'Tail', review: 'Tail', merge: 'Tail' })
-      state[TAIL.id] = tail.merged ? 'merged' : 'parked'
+      setTaskState(TAIL.id, tail.merged ? 'merged' : 'parked')
     } catch (e) {
       if (!(e && e.wavePaused)) throw e
-      state[TAIL.id] = 'paused'
+      setTaskState(TAIL.id, 'paused')
       pauseInfo.failed.push(TAIL.id)
     }
   } else {
     results[TAIL.id] = { task: TAIL.id, title: TAIL.title, pr: null, rounds: [], merge: null, reopened: false, merged: false }
-    state[TAIL.id] = 'parked'
+    setTaskState(TAIL.id, 'parked')
     escalate(TAIL.id, 'tail not run', `parallel tasks not all merged: ${parallelOutcome}`)
   }
 }
@@ -2662,7 +2694,7 @@ function settlePause() {
   for (const t of TASKS) titles[t.id] = t.title
   if (TAIL) titles[TAIL.id] = TAIL.title
   for (const id of plan.paused) {
-    state[id] = 'paused'
+    setTaskState(id, 'paused')
     results[id] = { task: id, title: titles[id], pr: (results[id] && results[id].pr) || null, rounds: [], merge: null, reopened: false, merged: false }
   }
   escalate('wave', `wave paused: usage limit, resets ${pauseInfo.resetText || 'unknown'}`, `Wait for the limit to reset, then relaunch the wave with the paused tasks (${plan.paused.join(', ') || 'none'}), as for parked tasks. Tasks already merged are not re-run.`)
